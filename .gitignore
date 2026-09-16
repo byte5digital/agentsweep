@@ -1,0 +1,19 @@
+# planning working state (map, tickets); superseded by the spec
+.scratch/
+
+# Rust
+target/
+Cargo.lock.bak
+
+# Tauri / node
+node_modules/
+dist/
+apps/*/src-tauri/gen/
+
+# macOS
+.DS_Store
+
+# local secrets
+.env
+*.pem
+*.key

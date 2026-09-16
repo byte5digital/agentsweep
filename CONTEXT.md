@@ -1,8 +1,12 @@
-# AI Agent Antivirus
+# AgentSweep
 
 A scanner for the local configuration surfaces of coding agents (Claude Code, Codex) that finds and quarantines malicious skills, plugins, MCP servers, hooks and instruction files before the agent loads them.
 
 ## Language
+
+**AgentSweep**:
+The product. Written AgentSweep in prose and UI, `agentsweep` in every machine-readable name (CLI, crate, cask, bundle identifier suffix).
+_Avoid_: the antivirus, the scanner (as a proper name), AV
 
 **Agent**:
 A locally installed coding agent whose configuration this tool protects. v1: Claude Code, Codex.

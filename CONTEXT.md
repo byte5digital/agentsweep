@@ -24,6 +24,22 @@ _Avoid_: Git surface, repo config
 The per-Agent component that knows where that Agent's Surfaces live and how they are structured. Adding an Agent means adding one Surface Adapter.
 _Avoid_: Plugin, connector, integration
 
+**Item**:
+One thing an Agent would load from a Surface, as scanned by AgentSweep: a file, a directory tree, or one entry inside a config file. The unit of identity, Trust, Baseline and Quarantine.
+_Avoid_: Artifact, object, record, file (when an entry or tree is meant)
+
+**Scope**:
+Where an Item sits in the Agent's precedence: Managed, User or Project. Managed Items are read-only for AgentSweep.
+_Avoid_: Layer, level, tier (reserved for detection)
+
+**Provenance**:
+How an Item got onto the Surface: manually placed, installed from a Marketplace, shipped inside a Plugin, written by the Agent itself, or unknown. What the Allowlist anchors on.
+_Avoid_: Source, origin
+
+**Activation**:
+Whether the Agent would actually load an Item on its next launch: active, inactive with a reason (untrusted project, disabled, orphaned, stale hook hash), or unknown. Computed by the Surface Adapter, never by a Rule.
+_Avoid_: Enabled, live, trusted (reserved for the user's Trust)
+
 **Finding**:
 One suspicious observation about one file or config entry, with a category (Threat or Exposure), a severity and the detection tier that produced it.
 _Avoid_: Alert, detection, hit

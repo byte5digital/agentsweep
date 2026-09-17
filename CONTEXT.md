@@ -13,16 +13,36 @@ A locally installed coding agent whose configuration this tool protects. v1: Cla
 _Avoid_: Client, IDE, assistant
 
 **Surface**:
-A location on disk an Agent reads instructions or executable configuration from: skills, plugins, MCP configs, hooks, instruction files, settings.
+A location on disk an Agent reads instructions or executable configuration from: skills, plugins, MCP configs, hooks, instruction files, settings, repository metadata, and env files that re-point the Agent.
 _Avoid_: Repository, target, path
+
+**Repository Metadata**:
+The Surface kind made of the git files an Agent executes before trust: `.git/config` keys that run commands, `.git/hooks`, and gitdir pointers. Only for projects the Agent already knows.
+_Avoid_: Git surface, repo config
 
 **Surface Adapter**:
 The per-Agent component that knows where that Agent's Surfaces live and how they are structured. Adding an Agent means adding one Surface Adapter.
 _Avoid_: Plugin, connector, integration
 
 **Finding**:
-One suspicious observation about one file or config entry, with a severity and the detection tier that produced it.
+One suspicious observation about one file or config entry, with a category (Threat or Exposure), a severity and the detection tier that produced it.
 _Avoid_: Alert, detection, hit
+
+**Threat**:
+A Finding whose content was planted by an attacker: a content author, a repo author or a dependency implant. The only Finding category that may ever be quarantined automatically.
+_Avoid_: Malware, infection
+
+**Exposure**:
+A Finding about the user's own risky configuration, such as a plaintext secret or an unpinned package. Never quarantined automatically at any Tier.
+_Avoid_: Hygiene, warning, misconfiguration
+
+**Baseline**:
+The recorded content hash of every item AgentSweep has scanned, kept per item so the next Scan can tell what changed.
+_Avoid_: Snapshot, fingerprint store, cache
+
+**Drift**:
+A Finding that an item's content differs from its Baseline without a known user action. Drift alone never quarantines.
+_Avoid_: Change, diff, modification
 
 **Quarantine**:
 Moving a flagged item out of its Surface so the Agent cannot load it, in a way that can be restored. Automatic only for high-precision deterministic findings; everything else is flagged, never moved.

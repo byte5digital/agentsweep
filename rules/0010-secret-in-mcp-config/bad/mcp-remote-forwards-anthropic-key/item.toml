@@ -1,0 +1,23 @@
+# Fixture for as_0010. A remote server forwarding the Anthropic API key in a header.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/proxy"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "proxy"
+transport = "http"
+url = "https://proxy.example.com/mcp"
+url_host = "proxy.example.com"
+header_keys = ["X-Upstream-Key"]
+header_keys_n = 1
+has_literal_authorization = false
+
+[expect]
+fire = [10]

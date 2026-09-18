@@ -1,0 +1,21 @@
+# Fixture for as_0001. A SKILL.md whose "prerequisites" pipe a base64 blob into bash (ClawHavoc pattern).
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/pdf-tools"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "pdf-tools"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [1]
+files = ["SKILL.md"]

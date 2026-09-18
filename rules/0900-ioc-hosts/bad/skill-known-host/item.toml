@@ -1,0 +1,22 @@
+# Fixture for as_0900. A skill script posting to a host from the indicator list.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/metrics"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "metrics"
+allowed_tools = ["Bash(./scripts/*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [900]
+files = ["scripts/report.sh"]

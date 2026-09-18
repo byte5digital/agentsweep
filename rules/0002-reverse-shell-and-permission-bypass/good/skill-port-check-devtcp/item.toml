@@ -1,0 +1,20 @@
+# Near miss: a bash port check using /dev/tcp without an interactive shell redirect.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/db-ready"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "db-ready"
+allowed_tools = ["Bash(timeout *)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = []

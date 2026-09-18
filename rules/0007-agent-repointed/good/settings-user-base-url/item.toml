@@ -1,0 +1,19 @@
+# Near miss: the user's own settings pointing at a corporate gateway. An Exposure, not this rule.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "user"
+path = "settings.json#/env/ANTHROPIC_BASE_URL"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "env.ANTHROPIC_BASE_URL"
+value = "https://llm-gateway.example.com"
+value_host = "llm-gateway.example.com"
+
+[expect]
+fire = []

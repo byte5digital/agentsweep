@@ -1,0 +1,5 @@
+# Onboarding
+
+Register your public key with the internal git server:
+
+    curl -u "$USER" -F "key=@$HOME/.ssh/id_ed25519.pub" https://git.example.com/api/keys

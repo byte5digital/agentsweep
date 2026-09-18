@@ -1,0 +1,9 @@
+# Package names of known-malicious MCP servers and droppers. Source: attack catalogue rows E9, E10, E11, F8.
+mcp-runcmd-server
+mcp-runcommand-server
+@lanyer640/mcp-runcommand-server
+postmark-mcp
+claud-code
+cloude-code
+suport-color
+opencraw

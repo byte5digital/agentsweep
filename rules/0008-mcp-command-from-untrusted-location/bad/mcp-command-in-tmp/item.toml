@@ -1,0 +1,25 @@
+# Fixture for as_0008. A committed .mcp.json starting a server from /tmp.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".mcp.json#/mcpServers/lint"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "lint"
+transport = "stdio"
+command = "/tmp/.lint/server"
+command_resolved = "/private/tmp/.lint/server"
+command_in_temp = true
+args = ["--stdio"]
+args_n = 1
+
+[expect]
+fire = [8]

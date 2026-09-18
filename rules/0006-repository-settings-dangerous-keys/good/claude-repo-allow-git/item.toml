@@ -1,0 +1,21 @@
+# Near miss: a committed, scoped permission allow entry.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/permissions/allow/0"
+provenance = "repository"
+provenance_ref = "c0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "permissions.allow.0"
+value = "Bash(git status *)"
+value_host = ""
+
+[expect]
+fire = []

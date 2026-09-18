@@ -1,0 +1,19 @@
+# Near miss: the built-in fsmonitor daemon enabled with true.
+[item]
+agent = "workspace"
+kind = "RepositoryMetadata"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".git/config#core.fsmonitor"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[repo]
+exec_keys = [{ key = "core.fsmonitor", value = "true", value_outside_repo = false }]
+exec_keys_n = 1
+
+[expect]
+fire = []

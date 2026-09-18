@@ -1,0 +1,19 @@
+# Near miss: husky's hooksPath inside the repository.
+[item]
+agent = "workspace"
+kind = "RepositoryMetadata"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".git/config#core.hooksPath"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[repo]
+exec_keys = [{ key = "core.hooksPath", value = ".husky/_", value_outside_repo = false }]
+exec_keys_n = 1
+
+[expect]
+fire = []

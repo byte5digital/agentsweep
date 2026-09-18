@@ -1,0 +1,17 @@
+# Fixture for as_0003. AGENTS.md carrying an ASCII-smuggled instruction in Unicode Tag characters.
+[item]
+agent = "codex"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "AGENTS.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+has_rtl_script = false
+
+[expect]
+fire = [3]

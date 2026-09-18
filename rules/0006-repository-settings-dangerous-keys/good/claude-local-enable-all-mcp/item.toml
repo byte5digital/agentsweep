@@ -1,0 +1,20 @@
+# Near miss: the same key in the user's own gitignored settings.local.json.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.local.json#/enableAllProjectMcpServers"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "enableAllProjectMcpServers"
+value = "true"
+value_host = ""
+
+[expect]
+fire = []

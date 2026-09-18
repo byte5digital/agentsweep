@@ -1,0 +1,23 @@
+# Fixture for as_0003. SKILL.md with a payload bit-encoded as zero-width characters.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/formatter"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+has_rtl_script = false
+
+[skill]
+name = "formatter"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [3]
+files = ["SKILL.md"]

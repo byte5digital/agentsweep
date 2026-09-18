@@ -1,0 +1,24 @@
+# Near miss: unpinned mcp-remote. An Exposure (unpinned package), not a T1 threat.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/notes"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "notes"
+transport = "stdio"
+command = "npx"
+command_resolved = "/opt/homebrew/bin/npx"
+args = ["-y", "mcp-remote", "https://notes.example.com/mcp"]
+args_n = 3
+package = "mcp-remote"
+package_version = ""
+
+[expect]
+fire = []

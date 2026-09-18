@@ -1,0 +1,25 @@
+# Near miss: a local stdio server given the Anthropic key by reference. Local, so not forwarding.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/summariser"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "summariser"
+transport = "stdio"
+command = "uvx"
+command_resolved = "/opt/homebrew/bin/uvx"
+args = ["summariser-mcp"]
+args_n = 1
+package = "summariser-mcp"
+env_keys = ["ANTHROPIC_API_KEY"]
+env_keys_n = 1
+
+[expect]
+fire = []

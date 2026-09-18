@@ -1,0 +1,19 @@
+# Near miss: an untracked local .env pointing the project's own app at a local model server.
+[item]
+agent = "workspace"
+kind = "EnvFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".env"
+provenance = "manual"
+activation = "unknown"
+registered = true
+file_type = "text"
+
+[env]
+keys = ["OPENAI_BASE_URL", "OPENAI_API_KEY"]
+keys_n = 2
+
+[expect]
+fire = []

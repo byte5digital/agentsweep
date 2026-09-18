@@ -1,0 +1,5 @@
+# Command-and-control addresses. Source: attack catalogue item 22 and rows B13, E10.
+91.92.242.30
+2.26.75.16
+45.115.38.27
+207.90.194.2

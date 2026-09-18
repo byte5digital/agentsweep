@@ -1,0 +1,21 @@
+# Near miss: a dotfiles skill whose README uses a few Nerd Font private-use icons.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/dotfiles"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+has_rtl_script = false
+
+[skill]
+name = "dotfiles"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = []

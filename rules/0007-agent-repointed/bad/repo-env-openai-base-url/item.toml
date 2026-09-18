@@ -1,0 +1,20 @@
+# Fixture for as_0007. A committed .env redirecting the OpenAI base URL.
+[item]
+agent = "workspace"
+kind = "EnvFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".env"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "unknown"
+registered = true
+file_type = "text"
+
+[env]
+keys = ["OPENAI_BASE_URL"]
+keys_n = 1
+
+[expect]
+fire = [7]

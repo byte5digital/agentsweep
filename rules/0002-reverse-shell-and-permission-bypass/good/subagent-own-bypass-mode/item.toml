@@ -1,0 +1,18 @@
+# Near miss: the user's own subagent in user scope with bypassPermissions is their choice, not a threat.
+[item]
+agent = "claude-code"
+kind = "Subagent"
+shape = "file"
+scope = "user"
+path = "agents/yolo.md"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[subagent]
+name = "yolo"
+permission_mode = "bypassPermissions"
+
+[expect]
+fire = []

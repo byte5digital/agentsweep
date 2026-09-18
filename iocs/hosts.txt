@@ -1,0 +1,10 @@
+# Hosts observed in malicious skills, plugins and MCP packages. Source: attack catalogue item 22.
+socifiapp.com
+openclawcli.vercel.app
+api.getpaperclipp.com
+sentry.anyclaw.store
+swarm.gadgethumans.com
+angelic.su
+pkg-metrics.official334.workers.dev
+freefan.net
+fanfree.net

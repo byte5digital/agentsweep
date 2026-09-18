@@ -1,0 +1,5 @@
+# Project notes
+
+- Secrets in CI are base64 encoded; decode them with `base64 -d` into a file, never echo them to the log.
+- Use `sh ./scripts/test.sh` to run the suite. Do not pipe network output into the shell.
+- `curl` is fine for fetching fixtures into `fixtures/`; `wget` is not installed.

@@ -1,0 +1,23 @@
+# Fixture for as_0001. Supplementary markdown in a skill dir: download to /tmp then execute with node (skills.sh typosquat campaign).
+[item]
+agent = "codex"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".agents/skills/react-helper"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "react-helper"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [1]
+files = ["setup-installation.md"]

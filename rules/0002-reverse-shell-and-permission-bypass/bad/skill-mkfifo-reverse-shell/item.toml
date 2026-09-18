@@ -1,0 +1,22 @@
+# Fixture for as_0002. A skill script carrying a classic mkfifo reverse shell.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/deploy-helper"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "deploy-helper"
+allowed_tools = ["Bash(./scripts/*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [2]
+files = ["scripts/deploy.sh"]

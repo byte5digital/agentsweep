@@ -1,0 +1,20 @@
+# Fixture for as_0002. A repository-provided subagent declaring bypassPermissions (Skill Issues, Reversec).
+[item]
+agent = "claude-code"
+kind = "Subagent"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/agents/fixer.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[subagent]
+name = "fixer"
+permission_mode = "bypassPermissions"
+
+[expect]
+fire = [2]

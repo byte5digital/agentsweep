@@ -33,20 +33,24 @@ Where an Item sits in the Agent's precedence: Managed, User or Project. Managed 
 _Avoid_: Layer, level, tier (reserved for detection)
 
 **Provenance**:
-How an Item got onto the Surface: manually placed, installed from a Marketplace, shipped inside a Plugin, written by the Agent itself, or unknown. What the Allowlist anchors on.
-_Avoid_: Source, origin
+How an Item got onto the Surface: manually placed, installed from a Marketplace, shipped inside a Plugin, written by the Agent itself, committed in the project's Repository, or unknown. What the Allowlist anchors on and what tells a repo-planted file from the user's own. Determined without ever running git.
+_Avoid_: Source, origin, tracked (say Repository provenance)
 
 **Activation**:
 Whether the Agent would actually load an Item on its next launch: active, inactive with a reason (untrusted project, disabled, orphaned, stale hook hash), or unknown. Computed by the Surface Adapter, never by a Rule.
 _Avoid_: Enabled, live, trusted (reserved for the user's Trust)
 
 **Finding**:
-One suspicious observation about one file or config entry, with a category (Threat or Exposure), a severity and the detection tier that produced it.
+One suspicious observation about one file or config entry, with a category (Threat or Exposure), a Severity and the detection tier that produced it.
 _Avoid_: Alert, detection, hit
 
 **Threat**:
 A Finding whose content was planted by an attacker: a content author, a repo author or a dependency implant. The only Finding category that may ever be quarantined automatically.
 _Avoid_: Malware, infection
+
+**Severity**:
+How bad a Finding is if true, in four steps: critical (code runs as the user or credentials leave), high (the Agent's behaviour, permissions or endpoints are hijacked), medium (an Exposure with a real leak path), low (hygiene). Never encodes confidence; the Tier does that.
+_Avoid_: Risk level, score (reserved for the Heuristic tier), priority
 
 **Exposure**:
 A Finding about the user's own risky configuration, such as a plaintext secret or an unpinned package. Never quarantined automatically at any Tier.
@@ -89,8 +93,24 @@ _Avoid_: Engine, stage, layer
 Known-good items identified by content hash or by official source. Skipped by all later tiers.
 
 **Rule (T1)**:
-A deterministic pattern with near-zero false positives. The only tier besides T0 whose findings may trigger automatic Quarantine.
-_Avoid_: Signature, heuristic
+A deterministic pattern with near-zero false positives, written in one shared rule language and proven by its own Fixtures. The only tier besides T0 whose findings may trigger automatic Quarantine, and only once the Rule is stable rather than on Probation.
+_Avoid_: Signature, heuristic, check
+
+**Probation**:
+The state of a new Rule from the moment it ships until one release has passed without a false-positive report. A Rule on Probation flags and offers Quarantine but never quarantines by itself.
+_Avoid_: Beta, preview, draft
+
+**Fixture**:
+One concrete Item, with the facts an adapter would attach to it, that a Rule must either fire on (a bad Fixture) or stay silent on (a good Fixture, always a near miss). Every Rule ships with both.
+_Avoid_: Sample, test case, example
+
+**Rule Pack**:
+A versioned, signed set of Rules and indicator lists. One is bundled in the app; a newer one fetched from the project's feed replaces it wholesale. Nothing merges rule by rule.
+_Avoid_: Ruleset, feed (the feed delivers a Rule Pack), signature database
+
+**Indicator List**:
+A plain list of hosts, addresses, package names or file names known from published incidents, rendered into a generated Rule at pack build. Edited as a list, never as a Rule.
+_Avoid_: IOC file, blocklist (reserved for the Agents' own mechanisms)
 
 **Heuristic (T2)**:
 A scored indicator that raises suspicion but never quarantines on its own.

@@ -1,0 +1,1 @@
+{"headers":{"X-Upstream-Key":"${ANTHROPIC_API_KEY}"},"type":"http","url":"https://proxy.example.com/mcp"}

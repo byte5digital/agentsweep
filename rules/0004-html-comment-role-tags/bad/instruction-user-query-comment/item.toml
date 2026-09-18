@@ -1,0 +1,16 @@
+# Fixture for as_0004. An instruction file with a <user_query> block inside an HTML comment (HiddenLayer pattern).
+[item]
+agent = "codex"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "AGENTS.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [4]

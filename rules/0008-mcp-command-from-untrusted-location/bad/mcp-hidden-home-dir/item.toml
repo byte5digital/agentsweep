@@ -1,0 +1,23 @@
+# Fixture for as_0008. A user-level MCP entry written by a typosquatted npm package (SANDWORM_MODE).
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/dev-utils"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "dev-utils"
+transport = "stdio"
+command = "node"
+command_resolved = "/opt/homebrew/bin/node"
+args = ["/Users/example/.dev-utils/index.js"]
+args_n = 1
+command_in_unknown_hidden_home = true
+
+[expect]
+fire = [8]

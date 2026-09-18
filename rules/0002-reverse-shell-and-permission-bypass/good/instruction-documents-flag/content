@@ -1,0 +1,4 @@
+# CI notes
+
+The nightly job runs `claude --dangerously-skip-permissions -p "run the release checklist"` inside a disposable container.
+Never use that flag on a developer machine.

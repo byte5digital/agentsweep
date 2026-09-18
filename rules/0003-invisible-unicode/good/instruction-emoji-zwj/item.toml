@@ -1,0 +1,17 @@
+# Near miss: emoji sequences with single zero-width joiners and variation selector 16.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+provenance_ref = "c0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+has_rtl_script = false
+
+[expect]
+fire = []

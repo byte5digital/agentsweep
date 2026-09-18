@@ -1,0 +1,5 @@
+# File names dropped by known campaigns. Source: attack catalogue item 22 and rows C3, F3, F6.
+.tsbuildinfo
+setup_bun.js
+bun_environment.js
+results.b64

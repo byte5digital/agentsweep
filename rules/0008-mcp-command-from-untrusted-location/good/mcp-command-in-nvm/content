@@ -1,0 +1,2 @@
+[mcp_servers.github]
+command = "/Users/example/.nvm/versions/node/v22.4.0/bin/github-mcp"

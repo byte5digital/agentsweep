@@ -1,0 +1,21 @@
+# Near miss: curl downloads an archive to the working directory and tar unpacks it; nothing is piped into a shell.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/release-notes"
+provenance = "marketplace"
+provenance_ref = "claude-plugins-official"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "release-notes"
+allowed_tools = ["Bash(curl *)", "Bash(tar *)"]
+allowed_tools_n = 2
+has_dynamic_context = false
+
+[expect]
+fire = []

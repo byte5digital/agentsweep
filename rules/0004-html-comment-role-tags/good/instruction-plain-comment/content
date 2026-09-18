@@ -1,0 +1,5 @@
+# Style guide
+
+<!-- TODO: move the testing section into docs/testing.md once the migration lands -->
+
+Use two-space indentation. Prefer `const`.

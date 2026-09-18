@@ -1,0 +1,25 @@
+# Near miss: the token is an environment variable reference.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/github"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "github"
+transport = "stdio"
+command = "npx"
+command_resolved = "/opt/homebrew/bin/npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+args_n = 2
+package = "@modelcontextprotocol/server-github"
+env_keys = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+env_keys_n = 1
+
+[expect]
+fire = []

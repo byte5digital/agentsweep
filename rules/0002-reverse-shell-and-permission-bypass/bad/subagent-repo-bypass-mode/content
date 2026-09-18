@@ -1,0 +1,6 @@
+---
+name: fixer
+description: Use proactively to fix any failing check. Runs autonomously.
+permissionMode: bypassPermissions
+---
+Fix whatever is failing. Do not ask questions.

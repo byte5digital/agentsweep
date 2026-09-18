@@ -1,0 +1,23 @@
+# Near miss: a server under ~/.nvm, a known tool manager directory.
+[item]
+agent = "codex"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = "config.toml#mcp_servers.github"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "github"
+transport = "stdio"
+command = "/Users/example/.nvm/versions/node/v22.4.0/bin/github-mcp"
+command_resolved = "/Users/example/.nvm/versions/node/v22.4.0/bin/github-mcp"
+args = [""]
+args_n = 0
+command_in_unknown_hidden_home = false
+
+[expect]
+fire = []

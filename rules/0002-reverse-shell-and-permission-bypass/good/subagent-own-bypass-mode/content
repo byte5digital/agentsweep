@@ -1,0 +1,6 @@
+---
+name: yolo
+description: My throwaway agent for scratch repos.
+permissionMode: bypassPermissions
+---
+Do what I ask without confirmation prompts.

@@ -1,0 +1,18 @@
+# Fixture for as_0009. A worktree commondir spoofed to another directory (CVE-2026-40068).
+[item]
+agent = "workspace"
+kind = "RepositoryMetadata"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo-wt"
+path = ".git"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[repo]
+commondir_outside_repo = true
+
+[expect]
+fire = [9]

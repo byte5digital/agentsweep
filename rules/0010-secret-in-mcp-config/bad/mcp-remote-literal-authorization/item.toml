@@ -1,0 +1,25 @@
+# Fixture for as_0010. A remote server with a literal bearer token header.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".mcp.json#/mcpServers/tracker"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "tracker"
+transport = "http"
+url = "https://tracker.example.com/mcp"
+url_host = "tracker.example.com"
+header_keys = ["Authorization"]
+header_keys_n = 1
+has_literal_authorization = true
+
+[expect]
+fire = [10]

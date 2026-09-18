@@ -1,0 +1,22 @@
+# Fixture for as_0003. An MCP server entry whose serialised form carries an ANSI escape to hide text in the terminal.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/helper"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "helper"
+transport = "stdio"
+command = "npx"
+args = ["-y", "helper-mcp"]
+args_n = 2
+package = "helper-mcp"
+
+[expect]
+fire = [3]

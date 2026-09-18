@@ -1,0 +1,20 @@
+# Near miss: a skill that mentions the AWS credentials file and, far away in the same file, a curl download.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/aws-helper"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "aws-helper"
+allowed_tools = ["Bash(aws *)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = []

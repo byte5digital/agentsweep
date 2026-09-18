@@ -61,8 +61,20 @@ A Finding that an item's content differs from its Baseline without a known user 
 _Avoid_: Change, diff, modification
 
 **Quarantine**:
-Moving a flagged item out of its Surface so the Agent cannot load it, in a way that can be restored. Automatic only for high-precision deterministic findings; everything else is flagged, never moved.
-_Avoid_: Delete, block, isolate
+Taking a flagged Item out of its Surface so the Agent cannot load it, in a way that can be restored: a file or tree is moved into the quarantine store, an entry is removed from its config file, a never-auto kind is neutralised in place. Automatic only for Threat findings from the Allowlist or Rule tiers; everything else is flagged, and the user may quarantine a Threat by hand.
+_Avoid_: Delete, block, isolate, disable (that is the Agent's own switch, used only alongside a Quarantine)
+
+**Receipt**:
+The ordered record of what one Quarantine physically did to one Item, step by step, so that Restore can undo exactly those steps in reverse. One Quarantine, one Receipt.
+_Avoid_: Backup, undo log, transaction
+
+**Restore**:
+Putting a quarantined Item back by replaying its Receipt in reverse. Restoring an automatically quarantined Item always grants Trust to that content hash, otherwise the next Scan would quarantine it again.
+_Avoid_: Unquarantine, recover, whitelist
+
+**Event Log**:
+The single tamper-evident record of every Quarantine, Restore, Trust decision and purge. What is currently in quarantine and what is trusted are read from it, never stored separately.
+_Avoid_: Audit trail, manifest, history (as a proper name)
 
 **Scan**:
 One pass over one or more Surfaces producing Findings.
@@ -88,5 +100,5 @@ An opt-in model verdict on items T2 scored as ambiguous. Never quarantines. Runs
 _Avoid_: AI scan, LLM check
 
 **Trust**:
-A user decision that a specific content hash is safe. Trust is bound to the hash, so a changed file is re-scanned as new.
+A user decision that a specific content hash of a given kind is safe, wherever that content appears. Trust is bound to the hash, so a changed file is re-scanned as new; it never expires on its own.
 _Avoid_: Whitelist, ignore, exception

@@ -113,7 +113,20 @@ A plain list of hosts, addresses, package names or file names known from publish
 _Avoid_: IOC file, blocklist (reserved for the Agents' own mechanisms)
 
 **Heuristic (T2)**:
-A scored indicator that raises suspicion but never quarantines on its own.
+One rule of the Heuristic tier: a pattern that raises suspicion but has known legitimate uses, so it carries a Weight and never quarantines on its own. Written in the same rule language as a Rule.
+_Avoid_: Indicator (reserved for Indicator List), signal, check
+
+**Weight**:
+The declared strength of one Heuristic, in three steps: 1 (weak, common in benign content, only meaningful in company), 2 (moderate, unusual but with known legitimate uses), 3 (strong, rarely benign, kept out of the Rule tier only because near misses exist). Separate from Severity, which says how bad, not how sure.
+_Avoid_: Confidence, probability, points
+
+**Score**:
+The sum of the Weights of every Threat Heuristic that fired on one Item, each counted once. Never shown in the Simple posture. Exposure Heuristics do not contribute.
+_Avoid_: Risk score, rating, threat level
+
+**Band**:
+Where an Item's Score falls: Clear, Ambiguous or Suspicious. Suspicious is a Threat Finding the user may quarantine by hand. Ambiguous is what AI Judgement is asked about and is hidden from the Simple posture. Clear is nothing.
+_Avoid_: Level, bucket, verdict (reserved for AI Judgement)
 
 **AI Judgement (T3)**:
 An opt-in model verdict on items T2 scored as ambiguous. Never quarantines. Runs locally by default, Claude API by opt-in.

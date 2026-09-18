@@ -77,7 +77,7 @@ Putting a quarantined Item back by replaying its Receipt in reverse. Restoring a
 _Avoid_: Unquarantine, recover, whitelist
 
 **Event Log**:
-The single tamper-evident record of every Quarantine, Restore, Trust decision and purge. What is currently in quarantine and what is trusted are read from it, never stored separately.
+The single tamper-evident record of every Quarantine, Restore, Trust decision, purge and change of Judgement Engine. What is currently in quarantine and what is trusted are read from it, never stored separately.
 _Avoid_: Audit trail, manifest, history (as a proper name)
 
 **Scan**:
@@ -129,8 +129,20 @@ Where an Item's Score falls: Clear, Ambiguous or Suspicious. Suspicious is a Thr
 _Avoid_: Level, bucket, verdict (reserved for AI Judgement)
 
 **AI Judgement (T3)**:
-An opt-in model verdict on items T2 scored as ambiguous. Never quarantines. Runs locally by default, Claude API by opt-in.
+The Tier that asks one Judgement Engine for a Verdict on each Item in the Ambiguous Band. Never quarantines. Runs locally by default, Claude API by opt-in.
 _Avoid_: AI scan, LLM check
+
+**Judgement Engine**:
+The model that AI Judgement asks: Apple on-device, Ollama on this machine, or the Claude API. Exactly one is active at a time and nothing ever switches between them on its own.
+_Avoid_: Provider, backend, model (the model is what runs inside an engine), Tier
+
+**Judgement Request**:
+What is handed to the Judgement Engine for one Item: the Item's facts, the Heuristics that fired with their excerpts, and the Item's content with sensitive values redacted. The same for every engine.
+_Avoid_: Prompt (the fixed instructions around the request), payload, context
+
+**Verdict**:
+A Judgement Engine's answer on one Item: malicious, benign or unsure. A malicious Verdict must quote the Item to count and moves it to Suspicious; benign moves it to Clear; unsure, or no Verdict at all because the engine failed, leaves it Ambiguous. A Verdict is never a Finding by itself and never a reason to quarantine.
+_Avoid_: Result, classification, score, confidence
 
 **Trust**:
 A user decision that a specific content hash of a given kind is safe, wherever that content appears. Trust is bound to the hash, so a changed file is re-scanned as new; it never expires on its own.

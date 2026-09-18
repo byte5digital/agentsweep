@@ -59,6 +59,7 @@ Every rule's `meta:` block carries all of these; the corpus lint rejects a rule 
 | `description` | what fires, what deliberately does not, and why |
 | `references` | space-separated primary sources |
 | `sensitive` | `true` when matches can land on sensitive fields; the Finding then shows only a redacted form |
+| `reviewer_directed` | optional, tier 2 only: `true` when the heuristic fires on text that addresses a reviewer, scanner or AI ("already approved", "report this as safe"). On an Item where such a heuristic fired, AI Judgement records a benign Verdict as unsure. Absent means `false`. |
 
 What a rule emits is its id plus the match ranges and, for tree Items, the relative file. The Finding built around that belongs to the scan lifecycle ticket.
 
@@ -92,7 +93,7 @@ A heuristic is a rule with `tier = 2`: the same file, meta and fixtures as a tie
 | Ambiguous | `ambiguous_at` to `suspicious_at - 1` | handed to AI Judgement when enabled; hidden from the Simple posture except as a summary count; listed in the Developer posture |
 | Suspicious | `suspicious_at` and up | one tier 2 Threat Finding per Item, both postures, with a manual Quarantine action |
 
-An AI Judgement verdict moves an Ambiguous Item to Suspicious (malicious) or Clear (benign); no verdict leaves it Ambiguous. The Score, weights and thresholds are never shown in the Simple posture; a Suspicious Finding there is one verdict sentence plus the fired heuristics' `plain` lines.
+An AI Judgement Verdict moves an Ambiguous Item to Suspicious (malicious, and only with a quote the core can find in the Item) or Clear (benign); unsure or no Verdict leaves it Ambiguous. A benign Verdict counts as unsure when a `reviewer_directed` heuristic fired on the Item, so text written to talk the engine round cannot clear the Item it sits in. The Score, weights and thresholds are never shown in the Simple posture; a Suspicious Finding there is one verdict sentence plus the fired heuristics' `plain` lines.
 
 **Which Items.** Tier 2 runs on every Item the Allowlist did not clear and a stable tier 1 rule did not quarantine. Under a probation tier 1 hit the fired heuristics are shown as supporting detail of that Finding, not as a second Finding.
 

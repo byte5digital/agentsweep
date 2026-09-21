@@ -83,6 +83,18 @@ _Avoid_: Audit trail, manifest, history (as a proper name)
 **Scan**:
 One pass over one or more Surfaces producing Findings.
 
+**Protection**:
+AgentSweep working in the background: watching the Surfaces and running scheduled Scans. It belongs to the Mac, not to the open window, so quitting the app does not end it. It is either on or off, and "off" is always shown, never implied.
+_Avoid_: Real-time protection, shield, monitoring (runtime monitoring of an Agent is a different product)
+
+**Needs Permission**:
+The state of a project that the operating system will not let AgentSweep read until the user allows it. A project that Needs Permission has not been scanned and never counts towards an all-clear.
+_Avoid_: Skipped, unreadable, clean
+
+**Uninstall**:
+Removing AgentSweep with an explicit choice about what is in Quarantine: restore it all, keep it, or delete everything. Keeping is the default, so removing the app never silently loses a quarantined Item.
+_Avoid_: Remove, delete the app, reset
+
 **Posture**:
 How much the app shows, chosen at onboarding and changed in Settings: Simple (plain sentences, one clear action, technical details one click away per Finding) or Developer (ids, paths, hashes, Scores and matched text always visible). One UI, never two apps; a Posture changes wording and density, never what is detected or enforced.
 _Avoid_: Mode, profile, view, expert mode
@@ -111,6 +123,10 @@ _Avoid_: Sample, test case, example
 **Rule Pack**:
 A versioned, signed set of Rules and indicator lists. One is bundled in the app; a newer one fetched from the project's feed replaces it wholesale. Nothing merges rule by rule.
 _Avoid_: Ruleset, feed (the feed delivers a Rule Pack), signature database
+
+**Rule Feed**:
+The project's own channel that delivers newer Rule Packs between app releases. On by default, one switch turns it off, and then only the bundled Rule Pack is used. A Rule Pack from the Rule Feed is accepted only if it is signed by the project and newer than the one in use.
+_Avoid_: Update server, signature updates, cloud rules
 
 **Indicator List**:
 A plain list of hosts, addresses, package names or file names known from published incidents, rendered into a generated Rule at pack build. Edited as a list, never as a Rule.

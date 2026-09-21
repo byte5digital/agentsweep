@@ -113,7 +113,7 @@ The scan target is the Item's bytes: a file, each file of a tree in turn, or the
 item      agent, kind, shape (file|tree|entry), scope (managed|user|project), project_root, path,
           provenance (manual|marketplace|plugin|agent_written|repository|unknown), provenance_ref,
           activation (active|inactive|unknown), activation_reason, registered, size, is_symlink,
-          baseline (unchanged|changed|added|none; states defined by the Baseline ticket),
+          baseline (unchanged|changed|added|none, see below),
           provenance_official (true when provenance is an official marketplace),
           link_target, file_type (text|binary|archive|office|bytecode|unknown), has_rtl_script,
           file (relative path within a tree, set per file scanned)
@@ -131,6 +131,8 @@ repo      exec_keys[] {key, value, value_outside_repo}, exec_keys_n, gitdir_outs
 ```
 
 Plugin, Marketplace, ExecPolicy, Workflow, InstructionFile and Generic have no view yet: rules on them are byte rules. A field is added only together with the first rule that reads it.
+
+`item.baseline` compares the Item with the hash AgentSweep last accepted for it. `unchanged`: equal. `changed`: different. `added`: first seen on a Surface that was already covered, not yet accepted. `none`: first seen when its Surface was not covered yet (first Scan, a project new to the Agent's registry, a newly installed Agent), or scanned without the daemon (pre-open scan, standalone CLI); never Drift. Known actions (AgentSweep's own writes, content that carries Trust, an Acknowledge) are applied before rules run, so such content reads `unchanged`. The accepted hash advances only when a Scan leaves the Item without an open Finding, so `changed` and `added` persist while a Finding on the Item is open and a Score that includes them stays stable. Rules never raise the "was that you?" Drift Finding; the core does (ADR 0007).
 
 `command_in_unknown_hidden_home` is true when the resolved command sits under a dot-directory of the home that is not a known tool manager (`.nvm`, `.npm`, `.local`, `.cargo`, `.volta`, `.bun`, `.pyenv`, `.asdf`, `.mise`, `.rbenv`, `.deno`, `.claude`, `.codex`, `.agents`, ...). The list lives in the workspace adapter, not in rules.
 

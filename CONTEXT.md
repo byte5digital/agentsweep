@@ -83,6 +83,10 @@ _Avoid_: Audit trail, manifest, history (as a proper name)
 **Scan**:
 One pass over one or more Surfaces producing Findings.
 
+**Posture**:
+How much the app shows, chosen at onboarding and changed in Settings: Simple (plain sentences, one clear action, technical details one click away per Finding) or Developer (ids, paths, hashes, Scores and matched text always visible). One UI, never two apps; a Posture changes wording and density, never what is detected or enforced.
+_Avoid_: Mode, profile, view, expert mode
+
 ## Detection
 
 **Tier**:
@@ -129,7 +133,7 @@ Where an Item's Score falls: Clear, Ambiguous or Suspicious. Suspicious is a Thr
 _Avoid_: Level, bucket, verdict (reserved for AI Judgement)
 
 **AI Judgement (T3)**:
-The Tier that asks one Judgement Engine for a Verdict on each Item in the Ambiguous Band. Never quarantines. Runs locally by default, Claude API by opt-in.
+The Tier that asks one Judgement Engine for a Verdict on each Item in the Ambiguous Band. Never quarantines. Runs locally by default, Claude API by opt-in. Labelled "AI check" in the Simple Posture; the glossary term stays AI Judgement everywhere else.
 _Avoid_: AI scan, LLM check
 
 **Judgement Engine**:

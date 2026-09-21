@@ -57,12 +57,16 @@ A Finding about the user's own risky configuration, such as a plaintext secret o
 _Avoid_: Hygiene, warning, misconfiguration
 
 **Baseline**:
-The recorded content hash of every item AgentSweep has scanned, kept per item so the next Scan can tell what changed.
+The content hash AgentSweep last accepted for each Item it protects, kept per Item so the next Scan can tell what changed. It moves forward only when a Scan leaves the Item without an open Finding or a known action stands behind the change, never merely because time passed. An Item scanned before its Surface was covered has no Baseline yet and is never Drift.
 _Avoid_: Snapshot, fingerprint store, cache
 
 **Drift**:
-A Finding that an item's content differs from its Baseline without a known user action. Drift alone never quarantines.
+The condition of an Item whose content differs from its Baseline, or that newly appeared, without a known action behind it. A known action is one of AgentSweep's own writes, content that already carries Trust, or the user saying the change was theirs; AgentSweep never guesses who made a change. Drift is context on any Finding about the Item and raises a Finding of its own only on the user's own executable configuration. Drift alone never quarantines.
 _Avoid_: Change, diff, modification
+
+**Acknowledge**:
+The user's answer that a Drift was their own doing. It moves the Baseline to the content as it is now and nothing more: every Tier still scans that content, and a later Rule Pack may still flag it. Weaker than Trust, which says the content is safe.
+_Avoid_: Approve, accept, trust, dismiss
 
 **Quarantine**:
 Taking a flagged Item out of its Surface so the Agent cannot load it, in a way that can be restored: a file or tree is moved into the quarantine store, an entry is removed from its config file, a never-auto kind is neutralised in place. Automatic only for Threat findings from the Allowlist or Rule tiers; everything else is flagged, and the user may quarantine a Threat by hand.
@@ -77,7 +81,7 @@ Putting a quarantined Item back by replaying its Receipt in reverse. Restoring a
 _Avoid_: Unquarantine, recover, whitelist
 
 **Event Log**:
-The single tamper-evident record of every Quarantine, Restore, Trust decision, purge and change of Judgement Engine. What is currently in quarantine and what is trusted are read from it, never stored separately.
+The single tamper-evident record of every Quarantine, Restore, Trust decision, Acknowledge, purge and change of Judgement Engine. What is currently in quarantine and what is trusted are read from it, never stored separately.
 _Avoid_: Audit trail, manifest, history (as a proper name)
 
 **Scan**:

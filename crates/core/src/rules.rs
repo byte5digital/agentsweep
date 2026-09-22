@@ -269,9 +269,80 @@ fn read_index(sources: &[RuleSource]) -> Result<BTreeMap<String, RuleMeta>, Rule
             reviewer_directed: matches!(meta.get("reviewer_directed"), Some(MetaValue::Bool(true))),
             name: name.clone(),
         };
+        lint(&rule_meta, &meta)?;
         index.insert(name, rule_meta);
     }
     Ok(index)
+}
+
+/// The meta lint. Every required key is already enforced by [`read_index`],
+/// which cannot build a [`RuleMeta`] without one; what is left is the keys
+/// that belong to one tier and not the other, and the ranges the contract in
+/// `rules/README.md` fixes.
+fn lint(rule: &RuleMeta, meta: &BTreeMap<&str, MetaValue<'_>>) -> Result<(), RuleError> {
+    let reject = |problem: String| {
+        Err(RuleError::Meta {
+            rule: rule.name.clone(),
+            problem,
+        })
+    };
+
+    if !(1..=6).contains(&rule.class) {
+        return reject(format!(
+            "class {} is not one of the six ranked attack classes",
+            rule.class
+        ));
+    }
+
+    let declares_weight = meta.contains_key("weight");
+    match rule.tier {
+        Tier::Rules => {
+            if declares_weight {
+                return reject(
+                    "`weight` belongs to a tier 2 threat rule; a tier 1 rule carries none"
+                        .to_string(),
+                );
+            }
+            if meta.contains_key("reviewer_directed") {
+                return reject("`reviewer_directed` is a tier 2 key".to_string());
+            }
+            if rule.category == Category::Threat
+                && !matches!(rule.severity, Severity::Critical | Severity::High)
+            {
+                return reject(format!(
+                    "a tier 1 threat rule is critical or high, never {}",
+                    rule.severity
+                ));
+            }
+        }
+        Tier::Heuristics => match rule.category {
+            Category::Threat => match rule.weight {
+                Some(weight) if (1..=3).contains(&weight) => {}
+                Some(weight) => {
+                    return reject(format!("`weight` {weight} is not 1, 2 or 3"));
+                }
+                None if declares_weight => {
+                    return reject("`weight` is not an integer".to_string());
+                }
+                None => {
+                    return reject("a tier 2 threat rule declares a `weight`".to_string());
+                }
+            },
+            Category::Exposure => {
+                if declares_weight {
+                    return reject(
+                        "a tier 2 exposure rule carries no `weight`; it raises its own Finding"
+                            .to_string(),
+                    );
+                }
+            }
+        },
+        _ => {
+            return reject(format!("tier {} is neither 1 nor 2", rule.tier));
+        }
+    }
+
+    Ok(())
 }
 
 fn text<'m>(
@@ -401,6 +472,140 @@ mod tests {
         let names: Vec<&str> = repository.iter().map(|rule| rule.identifier()).collect();
         assert!(names.contains(&"as_0009_repository_metadata_execution"));
         assert!(!names.contains(&"as_0004_html_comment_role_tags"));
+    }
+
+    /// A rule source built from the full meta block, with the keys a test
+    /// wants changed replaced and the keys it wants gone removed. The lint is
+    /// what is under test, so every other key stays valid.
+    fn meta_variant(lines: &[(&str, Option<&str>)]) -> String {
+        let mut block: Vec<(&str, String)> = vec![
+            ("id", "21".to_string()),
+            ("title", "\"A rule under lint\"".to_string()),
+            ("tier", "1".to_string()),
+            ("category", "\"threat\"".to_string()),
+            ("severity", "\"critical\"".to_string()),
+            ("class", "1".to_string()),
+            ("kinds", "\"Generic\"".to_string()),
+            ("status", "\"probation\"".to_string()),
+            ("plain", "\"A rule under lint.\"".to_string()),
+            ("description", "\"A rule under lint.\"".to_string()),
+            ("references", "\"none\"".to_string()),
+            ("sensitive", "false".to_string()),
+        ];
+        for (key, value) in lines {
+            match (block.iter_mut().find(|(name, _)| name == key), value) {
+                (Some(entry), Some(value)) => entry.1 = (*value).to_string(),
+                (Some(_), None) => block.retain(|(name, _)| name != key),
+                (None, Some(value)) => block.push((key, (*value).to_string())),
+                (None, None) => {}
+            }
+        }
+        let meta: String = block
+            .iter()
+            .map(|(key, value)| format!("    {key} = {value}\n"))
+            .collect();
+        format!("rule as_0021_under_lint {{\n  meta:\n{meta}  condition:\n    false\n}}\n")
+    }
+
+    /// Compiles one rule source as a pack of its own and returns what the lint
+    /// said about it.
+    fn lint_of(source: String) -> Result<(), String> {
+        let leaked: &'static str = Box::leak(source.into_boxed_str());
+        let sources = vec![RuleSource {
+            origin: "0021-under-lint/rule.yar",
+            source: leaked,
+        }];
+        match RulePack::compile(&sources) {
+            Ok(_) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    #[test]
+    fn a_rule_missing_a_required_meta_key_is_rejected() {
+        for key in [
+            "id",
+            "title",
+            "tier",
+            "category",
+            "severity",
+            "class",
+            "kinds",
+            "status",
+            "plain",
+            "description",
+            "references",
+            "sensitive",
+        ] {
+            let problem = lint_of(meta_variant(&[(key, None)]))
+                .expect_err("a rule missing a required key does not load");
+            assert!(
+                problem.contains(key),
+                "the rejection of a missing `{key}` does not name it: {problem}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_weight_on_a_tier_1_rule_is_rejected() {
+        let problem = lint_of(meta_variant(&[("weight", Some("2"))]))
+            .expect_err("a tier 1 rule carries no weight");
+        assert!(problem.contains("weight"), "{problem}");
+        assert!(problem.contains("as_0021_under_lint"), "{problem}");
+    }
+
+    #[test]
+    fn a_reviewer_directed_flag_on_a_tier_1_rule_is_rejected() {
+        let problem = lint_of(meta_variant(&[("reviewer_directed", Some("true"))]))
+            .expect_err("reviewer_directed is a tier 2 key");
+        assert!(problem.contains("reviewer_directed"), "{problem}");
+    }
+
+    #[test]
+    fn a_tier_2_threat_rule_without_a_weight_is_rejected() {
+        let problem = lint_of(meta_variant(&[
+            ("tier", Some("2")),
+            ("severity", Some("\"high\"")),
+        ]))
+        .expect_err("a tier 2 threat rule declares a weight");
+        assert!(problem.contains("weight"), "{problem}");
+    }
+
+    #[test]
+    fn a_tier_2_exposure_rule_with_a_weight_is_rejected() {
+        let problem = lint_of(meta_variant(&[
+            ("tier", Some("2")),
+            ("category", Some("\"exposure\"")),
+            ("severity", Some("\"medium\"")),
+            ("weight", Some("2")),
+        ]))
+        .expect_err("an exposure heuristic carries no weight");
+        assert!(problem.contains("weight"), "{problem}");
+    }
+
+    #[test]
+    fn a_tier_2_threat_rule_with_its_weight_loads() {
+        lint_of(meta_variant(&[
+            ("tier", Some("2")),
+            ("severity", Some("\"medium\"")),
+            ("weight", Some("3")),
+            ("reviewer_directed", Some("true")),
+        ]))
+        .expect("a heuristic with a weight passes the lint");
+    }
+
+    #[test]
+    fn a_tier_1_threat_rule_below_high_is_rejected() {
+        let problem = lint_of(meta_variant(&[("severity", Some("\"medium\""))]))
+            .expect_err("a tier 1 threat rule is critical or high");
+        assert!(problem.contains("critical or high"), "{problem}");
+    }
+
+    #[test]
+    fn a_class_outside_the_threat_model_is_rejected() {
+        let problem = lint_of(meta_variant(&[("class", Some("7"))]))
+            .expect_err("the threat model ranks six classes");
+        assert!(problem.contains("class"), "{problem}");
     }
 
     #[test]

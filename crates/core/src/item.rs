@@ -482,6 +482,31 @@ impl Item {
         }
     }
 
+    /// Builds an entry Item from the canonical serialised form of the one
+    /// entry it is about.
+    ///
+    /// Those bytes are what a Rule scans, what Trust keys on and what the
+    /// Baseline hashes (spec section 4.6.2), so an adapter renders them with
+    /// [`canonical_entry`] rather than handing over the slice of the file the
+    /// entry happened to be written in.
+    #[allow(clippy::too_many_arguments)]
+    pub fn entry(
+        agent: &str,
+        scope: Scope,
+        kind: Kind,
+        locator: &str,
+        path: PathBuf,
+        provenance: Provenance,
+        activation: Activation,
+        content: Vec<u8>,
+    ) -> Item {
+        let mut item = Item::file(
+            agent, scope, kind, locator, path, provenance, activation, content,
+        );
+        item.shape = Shape::Entry;
+        item
+    }
+
     /// Attaches the normalised view the Surface Adapter parsed for this Item.
     pub fn with_view(mut self, view: crate::views::ParsedView) -> Item {
         self.view = view;
@@ -540,6 +565,52 @@ impl FileFacts {
             whitespace_percent: text.map_or(0, whitespace_percent),
             max_blank_run: text.map_or(0, max_blank_run),
         }
+    }
+}
+
+/// The canonical serialisation of one config entry: JSON with every object key
+/// in sorted order and no insignificant whitespace, whatever format the file
+/// it was read from is written in.
+///
+/// It is the form spec section 4.6.2 calls the canonical sorted-key entry: the
+/// bytes a Rule scans for an entry Item, the bytes Trust keys on and the bytes
+/// the Baseline hashes. Rendering it here rather than per adapter is what lets
+/// the same MCP Rule cover a JSON entry of Claude Code and a TOML entry of
+/// Codex, and what keeps an identity from moving when a file is reformatted.
+pub fn canonical_entry(value: &serde_json::Value) -> Vec<u8> {
+    let mut out = Vec::new();
+    write_canonical(value, &mut out);
+    out
+}
+
+fn write_canonical(value: &serde_json::Value, out: &mut Vec<u8>) {
+    use serde_json::Value;
+    match value {
+        Value::Object(fields) => {
+            let mut keys: Vec<&String> = fields.keys().collect();
+            keys.sort();
+            out.push(b'{');
+            for (index, key) in keys.into_iter().enumerate() {
+                if index > 0 {
+                    out.push(b',');
+                }
+                write_canonical(&Value::String(key.clone()), out);
+                out.push(b':');
+                write_canonical(&fields[key], out);
+            }
+            out.push(b'}');
+        }
+        Value::Array(items) => {
+            out.push(b'[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(b',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(b']');
+        }
+        scalar => out.extend_from_slice(scalar.to_string().as_bytes()),
     }
 }
 
@@ -665,6 +736,56 @@ mod tests {
     #[test]
     fn the_blank_run_is_the_longest_stretch_of_empty_lines() {
         assert_eq!(FileFacts::of(b"a\n\n\n\nb\n\nc").max_blank_run, 3);
+    }
+
+    /// The bytes an entry Item carries do not depend on how the file it came
+    /// from was written: keys are sorted and nothing but the entry is in them.
+    #[test]
+    fn the_canonical_form_of_an_entry_sorts_its_keys_and_holds_no_whitespace() {
+        let written = serde_json::json!({
+            "command": "npx",
+            "args": ["-y", "mcp-remote@0.1.12"],
+            "env": {"TOKEN": "${GITHUB_TOKEN}"},
+        });
+        assert_eq!(
+            String::from_utf8(canonical_entry(&written)).expect("utf-8"),
+            "{\"args\":[\"-y\",\"mcp-remote@0.1.12\"],\"command\":\"npx\",\
+             \"env\":{\"TOKEN\":\"${GITHUB_TOKEN}\"}}"
+        );
+    }
+
+    #[test]
+    fn the_same_entry_written_in_another_key_order_canonicalises_the_same_way() {
+        let one: serde_json::Value =
+            serde_json::from_str("{\"b\":1,\"a\":{\"d\":true,\"c\":null}}").expect("json");
+        let other: serde_json::Value =
+            serde_json::from_str("{\"a\": {\"c\": null, \"d\": true}, \"b\": 1}").expect("json");
+        assert_eq!(canonical_entry(&one), canonical_entry(&other));
+        assert_eq!(
+            String::from_utf8(canonical_entry(&one)).expect("utf-8"),
+            "{\"a\":{\"c\":null,\"d\":true},\"b\":1}"
+        );
+    }
+
+    #[test]
+    fn an_entry_item_is_entry_shaped_and_hashes_its_canonical_form() {
+        let content = canonical_entry(&serde_json::json!({"command": "npx"}));
+        let item = Item::entry(
+            "claude-code",
+            Scope::User,
+            Kind::McpServer,
+            "~/.claude.json#notes",
+            PathBuf::from("/home/u/.claude.json"),
+            Provenance::Manual,
+            Activation::Active,
+            content.clone(),
+        );
+        assert_eq!(item.shape, Shape::Entry);
+        assert_eq!(item.content_hash, sha256_hex(&content));
+        assert_eq!(
+            item.id.as_str(),
+            "claude-code/user/mcp-server/~/.claude.json#notes"
+        );
     }
 
     #[test]

@@ -15,7 +15,75 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::item::{Item, ScanUnit};
+use crate::item::{Item, ScanUnit, canonical_entry, sha256_hex};
+
+/// The host of a value that is written as a URL, empty when it is not one.
+///
+/// Both the `mcp` and the `settings` view carry a host, and a Rule never
+/// computes one: `settings.value_host` is how Rule 0006 tells a committed base
+/// URL that still points at the vendor from one that does not. Userinfo and
+/// the port are dropped, so a host is the same string however the URL that
+/// carries it is written.
+pub fn url_host(value: &str) -> String {
+    let Some((scheme, rest)) = value.split_once("://") else {
+        return String::new();
+    };
+    if scheme.is_empty()
+        || !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+')
+    {
+        return String::new();
+    }
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit('@')
+        .next()
+        .unwrap_or_default();
+    let host = match authority.strip_prefix('[') {
+        // An IPv6 literal keeps its brackets and may not be split on its own
+        // colons.
+        Some(inside) => match inside.split_once(']') {
+            Some((address, _)) => return format!("[{address}]").to_ascii_lowercase(),
+            None => authority,
+        },
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    host.to_ascii_lowercase()
+}
+
+/// The string form of one config value, as `settings.value` and the redaction
+/// of a Finding show it: a string as it is written, anything else as its
+/// canonical JSON.
+pub fn value_string(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => String::from_utf8_lossy(&canonical_entry(other)).to_string(),
+    }
+}
+
+/// The keys of an object field of an entry, in sorted order, empty when the
+/// field is absent or is not an object. The values never come with them: an
+/// `env` block and a `headers` block are sensitive (spec section 3.3).
+fn object_keys(entry: &Value, field: &str) -> Vec<String> {
+    let mut keys: Vec<String> = entry
+        .get(field)
+        .and_then(Value::as_object)
+        .map(|fields| fields.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+fn string_field(entry: &Value, field: &str) -> String {
+    entry
+        .get(field)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
 
 /// The names of the globals, in the order the core defines them.
 pub const GLOBAL_NAMES: [&str; 10] = [
@@ -202,7 +270,68 @@ pub struct McpView {
     pub has_literal_authorization: bool,
 }
 
+/// The launchers that run a package instead of a program on disk. What such a
+/// command really starts is the package named in its arguments, which is what
+/// `mcp.package` and `mcp.package_version` carry.
+const PACKAGE_RUNNERS: [&str; 8] = ["npx", "pnpx", "bunx", "uvx", "dlx", "pipx", "pnpm", "yarn"];
+
+/// The words a package runner takes before the package name.
+const RUNNER_SUBCOMMANDS: [&str; 4] = ["dlx", "exec", "run", "install"];
+
 impl McpView {
+    /// The view of one MCP server entry, whichever file and whichever Agent it
+    /// was read from.
+    ///
+    /// The entry arrives as the JSON shape both Agents share: `type`,
+    /// `command`, `args`, `env`, `url`, `headers`. A Codex adapter converts its
+    /// TOML table into that shape and gets the same view, which is what lets
+    /// one MCP Rule cover `~/.claude.json`, `.mcp.json`, a plugin's `.mcp.json`
+    /// and `[mcp_servers.*]` alike.
+    ///
+    /// The facts that need the machine rather than the entry (`command_resolved`
+    /// and the four location flags) stay at their defaults here; the Surface
+    /// Adapter fills them in, because only it knows the Host.
+    pub fn of(name: &str, entry: &Value) -> McpView {
+        let args: Vec<String> = entry
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().map(value_string).collect())
+            .unwrap_or_default();
+        let command = string_field(entry, "command");
+        let url = string_field(entry, "url");
+        let declared = string_field(entry, "type").to_ascii_lowercase();
+        let transport = if !declared.is_empty() {
+            declared
+        } else if !command.is_empty() {
+            "stdio".to_string()
+        } else {
+            // Claude Code skips a `url` entry that declares no `type`, so
+            // naming a transport it did not declare would be inventing one.
+            String::new()
+        };
+        let (package, package_version) = package_of(&command, &args);
+        let env_keys = object_keys(entry, "env");
+        let header_keys = object_keys(entry, "headers");
+
+        McpView {
+            name: name.to_string(),
+            transport,
+            command,
+            args_n: args.len() as i64,
+            args,
+            package,
+            package_version,
+            url_host: url_host(&url),
+            url,
+            env_keys_n: env_keys.len() as i64,
+            env_keys,
+            header_keys_n: header_keys.len() as i64,
+            header_keys,
+            has_literal_authorization: has_literal_authorization(entry),
+            ..McpView::default()
+        }
+    }
+
     fn to_value(&self) -> Value {
         json!({
             "name": self.name,
@@ -228,6 +357,96 @@ impl McpView {
     }
 }
 
+/// The package one command starts and the version it pins, empty when the
+/// command runs a program on disk rather than a package.
+fn package_of(command: &str, args: &[String]) -> (String, String) {
+    let program = command.rsplit('/').next().unwrap_or_default();
+    if !PACKAGE_RUNNERS.contains(&program) {
+        return (String::new(), String::new());
+    }
+    let Some(spec) = args
+        .iter()
+        .find(|argument| {
+            !argument.starts_with('-')
+                && !RUNNER_SUBCOMMANDS.contains(&argument.as_str())
+                && !argument.contains("://")
+                && !argument.starts_with('/')
+                && !argument.starts_with('.')
+                && !argument.starts_with('~')
+        })
+        .cloned()
+    else {
+        return (String::new(), String::new());
+    };
+    // A scoped package carries an `@` of its own, so the separator is the one
+    // after the scope: `@scope/name@1.2.3`.
+    let separator = match spec.strip_prefix('@') {
+        Some(scoped) => scoped.find('@').map(|at| at + 1),
+        None => spec.find('@'),
+    };
+    match separator {
+        Some(at) => (spec[..at].to_string(), spec[at + 1..].to_string()),
+        None => (spec, String::new()),
+    }
+}
+
+/// True when an Authorization header carries a credential of its own instead of
+/// pointing at one the environment holds.
+fn has_literal_authorization(entry: &Value) -> bool {
+    let Some(headers) = entry.get("headers").and_then(Value::as_object) else {
+        return false;
+    };
+    for (name, value) in headers {
+        if !name.eq_ignore_ascii_case("authorization") {
+            continue;
+        }
+        let written = value_string(value);
+        let remaining = without_variable_references(&written);
+        if remaining
+            .split_whitespace()
+            .any(|word| word.len() >= 8 && !is_authorization_scheme(word))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_authorization_scheme(word: &str) -> bool {
+    ["bearer", "basic", "token", "digest", "apikey", "api-key"]
+        .contains(&word.to_ascii_lowercase().as_str())
+}
+
+/// The text with every `${VAR}` and `$VAR` reference taken out, so what is left
+/// is what the entry itself spells out.
+fn without_variable_references(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('$') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let end = match after.strip_prefix('{') {
+            Some(braced) => braced.find('}').map(|close| start + 2 + close + 1),
+            None => Some(
+                start
+                    + 1
+                    + after
+                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .unwrap_or(after.len()),
+            ),
+        };
+        match end {
+            Some(end) => rest = &rest[end..],
+            None => {
+                out.push_str(&rest[start..]);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The `hook` view: one hook handler entry.
 #[derive(Clone, Debug, Default)]
 pub struct HookView {
@@ -248,6 +467,61 @@ pub struct HookView {
 }
 
 impl HookView {
+    /// The view of one hook handler, registered for one event under one
+    /// matcher.
+    ///
+    /// `command_resolved` and `command_file_type` stay at their defaults: only
+    /// the Surface Adapter, which holds the Host, can say where a command word
+    /// lands on this machine and what kind of file sits there.
+    pub fn of(event: &str, matcher: &str, handler: &Value) -> HookView {
+        let command = string_field(handler, "command");
+        let declared = string_field(handler, "type");
+        let handler_type = if !declared.is_empty() {
+            declared
+        } else if !command.is_empty() {
+            "command".to_string()
+        } else {
+            String::new()
+        };
+        HookView {
+            event: event.to_string(),
+            matcher: matcher.to_string(),
+            handler_type,
+            command,
+            url: string_field(handler, "url"),
+            ..HookView::default()
+        }
+    }
+
+    /// The normal form of one hook handler: `{event_name, matcher, hooks:
+    /// [handler]}`.
+    ///
+    /// It is the shape Codex hashes for its own hook trust, chosen so that a
+    /// hook written as JSON and the same hook written as TOML come out
+    /// identical (`docs/research/codex-surfaces.md`). AgentSweep serialises it
+    /// with [`canonical_entry`], which is what an entry Item of kind Hook
+    /// carries as its content, whichever Agent the hook belongs to.
+    pub fn normal_form(event: &str, matcher: &str, handler: &Value) -> Value {
+        json!({
+            "event_name": event,
+            "matcher": matcher,
+            "hooks": [handler.clone()],
+        })
+    }
+
+    /// The part of a hook's locator that comes after the file: the event, the
+    /// matcher and the first twelve hex characters of the normalised handler
+    /// hash (spec section 4.6.1).
+    ///
+    /// Reordering the handlers of one event is not Drift because nothing in
+    /// this identity is a position; an edited handler is a new Item, which is
+    /// what makes "replaced" a display decision rather than a guess.
+    pub fn locator(event: &str, matcher: &str, handler: &Value) -> String {
+        let form = HookView::normal_form(event, matcher, handler);
+        let hash = sha256_hex(&canonical_entry(&form));
+        format!("{event}/{matcher}/{}", &hash[..12])
+    }
+
     fn to_value(&self) -> Value {
         json!({
             "event": self.event,
@@ -276,6 +550,21 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
+    /// The view of one settings key: its dotted path, its value in string form
+    /// and, when the value is a URL, the host it points at.
+    ///
+    /// `trust_has_sessions` stays at its default; only a Surface Adapter that
+    /// has read the Agent's own session store can answer it.
+    pub fn of(key_path: &str, value: &Value) -> SettingsView {
+        let written = value_string(value);
+        SettingsView {
+            key_path: key_path.to_string(),
+            value_host: url_host(&written),
+            value: written,
+            trust_has_sessions: false,
+        }
+    }
+
     fn to_value(&self) -> Value {
         json!({
             "key_path": self.key_path,
@@ -819,5 +1108,139 @@ mod tests {
     #[test]
     fn the_defaults_of_every_view_validate() {
         assert!(Views::default().validate().is_empty());
+    }
+
+    #[test]
+    fn a_host_is_read_out_of_a_url_without_its_userinfo_or_its_port() {
+        assert_eq!(
+            url_host("https://api.anthropic.com/v1/messages"),
+            "api.anthropic.com"
+        );
+        assert_eq!(
+            url_host("http://user:pw@Proxy.Example.invalid:8080/"),
+            "proxy.example.invalid"
+        );
+        assert_eq!(url_host("http://[::1]:11434/v1"), "[::1]");
+        assert_eq!(url_host("Bash(git status *)"), "");
+        assert_eq!(url_host("~/.claude/statusline.sh"), "");
+    }
+
+    /// One MCP Rule has to cover every file an MCP server can be written in,
+    /// so the view is built from the shape both Agents share and never from
+    /// the file around it.
+    #[test]
+    fn an_mcp_entry_becomes_the_view_a_rule_reads() {
+        let entry = json!({
+            "command": "npx",
+            "args": ["-y", "mcp-remote@0.1.12", "https://notes.example.invalid/mcp"],
+            "env": {"NOTES_TOKEN": "${NOTES_TOKEN}", "A_DEBUG": "1"},
+        });
+        let view = McpView::of("notes", &entry);
+        assert_eq!(view.name, "notes");
+        assert_eq!(view.transport, "stdio");
+        assert_eq!(view.package, "mcp-remote");
+        assert_eq!(view.package_version, "0.1.12");
+        assert_eq!(view.args_n, 3);
+        assert_eq!(view.env_keys, ["A_DEBUG", "NOTES_TOKEN"]);
+        assert_eq!(view.env_keys_n, 2);
+        assert!(!view.has_literal_authorization);
+    }
+
+    #[test]
+    fn a_scoped_package_keeps_its_scope_and_an_unpinned_one_has_no_version() {
+        let entry =
+            json!({"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"]});
+        let view = McpView::of("gh", &entry);
+        assert_eq!(view.package, "@modelcontextprotocol/server-github");
+        assert_eq!(view.package_version, "");
+
+        let pinned = json!({"command": "npx", "args": ["@scope/thing@2.1.0"]});
+        assert_eq!(McpView::of("t", &pinned).package_version, "2.1.0");
+
+        let program = json!({"command": "/opt/tools/server", "args": ["--stdio"]});
+        assert_eq!(McpView::of("t", &program).package, "");
+    }
+
+    /// The `env` and `headers` values of an MCP entry are sensitive: the view
+    /// carries their key names and nothing else, so nothing stored or shown is
+    /// built from a credential.
+    #[test]
+    fn no_mcp_env_or_header_value_ever_reaches_the_view() {
+        let entry = json!({
+            "type": "http",
+            "url": "https://tracker.example.invalid/mcp",
+            "headers": {"Authorization": "Bearer hunter2hunter2hunter2"},
+            "env": {"SECRET": "hunter2hunter2"},
+        });
+        let view = McpView::of("tracker", &entry);
+        assert!(!format!("{view:?}").contains("hunter2"), "{view:?}");
+        assert_eq!(view.url_host, "tracker.example.invalid");
+        assert!(view.has_literal_authorization);
+    }
+
+    #[test]
+    fn an_authorization_header_that_only_names_a_variable_is_not_literal() {
+        for written in [
+            json!({"headers": {"Authorization": "${TRACKER_TOKEN}"}}),
+            json!({"headers": {"authorization": "Bearer ${TRACKER_TOKEN}"}}),
+            json!({"headers": {"Authorization": "Bearer $TRACKER_TOKEN"}}),
+        ] {
+            assert!(
+                !McpView::of("t", &written).has_literal_authorization,
+                "{written}"
+            );
+        }
+    }
+
+    /// Spec section 4.6.1: a hook is identified by its event, its matcher and
+    /// the first twelve hex characters of the normalised handler hash, so two
+    /// handlers under the same event never share an identity and reordering
+    /// them is not a change.
+    #[test]
+    fn a_hook_is_located_by_event_matcher_and_the_handler_hash() {
+        let one = json!({"type": "command", "command": "./a.sh"});
+        let other = json!({"type": "command", "command": "./b.sh"});
+        let first = HookView::locator("PreToolUse", "Bash", &one);
+        let second = HookView::locator("PreToolUse", "Bash", &other);
+
+        assert!(first.starts_with("PreToolUse/Bash/"), "{first}");
+        assert_eq!(first.len(), "PreToolUse/Bash/".len() + 12);
+        assert_ne!(first, second);
+        assert_eq!(first, HookView::locator("PreToolUse", "Bash", &one));
+        assert_ne!(first, HookView::locator("Stop", "Bash", &one));
+    }
+
+    /// The normal form is Codex's, so the same hook written as JSON by one
+    /// Agent and as TOML by the other hashes to one identity.
+    #[test]
+    fn the_normal_form_of_a_hook_is_the_shape_both_agents_share() {
+        let handler = json!({"type": "command", "command": "./a.sh"});
+        let form = HookView::normal_form("Stop", "", &handler);
+        assert_eq!(
+            String::from_utf8(canonical_entry(&form)).expect("utf-8"),
+            "{\"event_name\":\"Stop\",\"hooks\":[{\"command\":\"./a.sh\",\"type\":\"command\"}],\
+             \"matcher\":\"\"}"
+        );
+        let view = HookView::of("Stop", "", &handler);
+        assert_eq!(view.event, "Stop");
+        assert_eq!(view.handler_type, "command");
+        assert_eq!(view.command, "./a.sh");
+    }
+
+    #[test]
+    fn a_settings_value_is_a_string_as_written_and_anything_else_as_json() {
+        let url = SettingsView::of(
+            "env.ANTHROPIC_BASE_URL",
+            &json!("https://api.anthropic.com"),
+        );
+        assert_eq!(url.value, "https://api.anthropic.com");
+        assert_eq!(url.value_host, "api.anthropic.com");
+
+        let flag = SettingsView::of("enableAllProjectMcpServers", &json!(true));
+        assert_eq!(flag.value, "true");
+        assert_eq!(flag.value_host, "");
+
+        let block = SettingsView::of("statusLine", &json!({"b": 1, "a": "x"}));
+        assert_eq!(block.value, "{\"a\":\"x\",\"b\":1}");
     }
 }

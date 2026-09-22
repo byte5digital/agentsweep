@@ -193,7 +193,10 @@ fn a_heuristic_on_another_rules_fixture_is_counted_and_not_a_failure() {
         "an agent command line was spawned: {:?}",
         outcome.also_fired
     );
-    assert_eq!(corpus::heuristic_hits(&[outcome.clone()])[&501], 1);
+    assert_eq!(
+        corpus::heuristic_hits(std::slice::from_ref(outcome))[&501],
+        1
+    );
 }
 
 /// A tier 1 Rule firing where no Fixture named it is still a failure, whatever

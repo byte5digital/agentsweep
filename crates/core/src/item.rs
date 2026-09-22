@@ -380,6 +380,12 @@ impl ItemId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Takes an id back from the form [`ItemId::as_str`] renders, which is how
+    /// a record of the Event Log or the Baseline names the Item it is about.
+    pub fn from_recorded(text: &str) -> ItemId {
+        ItemId(text.to_string())
+    }
 }
 
 impl fmt::Display for ItemId {

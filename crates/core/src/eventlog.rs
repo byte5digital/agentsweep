@@ -1,0 +1,912 @@
+//! The Event Log: the single tamper-evident record of what AgentSweep did.
+//!
+//! `events.jsonl` is the source of truth (ADR 0003, spec section 5.5). Every
+//! Quarantine, Restore, Trust decision, Acknowledge, purge and change of
+//! Judgement Engine is one record in the chain of [`crate::chain`]. What is in
+//! quarantine and what is trusted are read back from it and never stored
+//! anywhere else; [`crate::derived`] rebuilds both. The Event Log is never
+//! compacted.
+//!
+//! Sensitive values never appear in a record. MCP environment variables,
+//! headers, tokens and the contents of an env file reach a record only through
+//! [`Redacted`], which has no constructor that takes a value without hashing
+//! it.
+
+use std::collections::BTreeMap;
+use std::fmt;
+use std::path::PathBuf;
+
+use serde_json::{Map, Value};
+
+use crate::chain::{Chain, ChainError, ChainState};
+use crate::envelope::{ChainId, RecordKind, Timestamp};
+use crate::finding::Tier;
+use crate::item::{ItemId, Kind, sha256_hex};
+use crate::keychain::KeySource;
+use crate::paths::DataDirectory;
+
+/// Who caused the event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Actor {
+    /// AgentSweep itself, on a stable Rule at T0 or T1.
+    Auto,
+    /// The person in front of the Mac.
+    User,
+    /// A step replayed in reverse by Restore.
+    Restore,
+}
+
+impl Actor {
+    /// The spelling a record carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Actor::Auto => "auto",
+            Actor::User => "user",
+            Actor::Restore => "restore",
+        }
+    }
+
+    /// Reads back the spelling a record carries.
+    pub fn parse(text: &str) -> Option<Actor> {
+        match text {
+            "auto" => Some(Actor::Auto),
+            "user" => Some(Actor::User),
+            "restore" => Some(Actor::Restore),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Actor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// What happened. The closed list of spec section 5.5.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Action {
+    /// An Item was taken out of its Surface.
+    Quarantine,
+    /// A Receipt was replayed in reverse.
+    Restore,
+    /// Only the native disable step of a plugin Quarantine was reversed.
+    ReEnable,
+    /// A content hash of a kind was declared safe.
+    Trust,
+    /// Trust on a content hash was withdrawn.
+    Untrust,
+    /// A quarantined Item was deleted permanently.
+    Purge,
+    /// A removed entry came back and was removed again.
+    ReEnforce,
+    /// The user said a Drift was their own doing.
+    Acknowledge,
+    /// The Judgement Engine was enabled, switched, disabled, or its key was
+    /// added or removed.
+    EngineChanged,
+    /// The Baseline chain was compacted, with the old and new head hashes.
+    BaselineCompacted,
+    /// The Gate was registered with an Agent.
+    GateRegistered,
+    /// The Gate was removed from an Agent.
+    GateRemoved,
+}
+
+impl Action {
+    /// Every action, in the order spec section 5.5 lists them.
+    pub const ALL: [Action; 12] = [
+        Action::Quarantine,
+        Action::Restore,
+        Action::ReEnable,
+        Action::Trust,
+        Action::Untrust,
+        Action::Purge,
+        Action::ReEnforce,
+        Action::Acknowledge,
+        Action::EngineChanged,
+        Action::BaselineCompacted,
+        Action::GateRegistered,
+        Action::GateRemoved,
+    ];
+
+    /// The spelling a record carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Action::Quarantine => "quarantine",
+            Action::Restore => "restore",
+            Action::ReEnable => "re-enable",
+            Action::Trust => "trust",
+            Action::Untrust => "untrust",
+            Action::Purge => "purge",
+            Action::ReEnforce => "re-enforce",
+            Action::Acknowledge => "acknowledge",
+            Action::EngineChanged => "engine-changed",
+            Action::BaselineCompacted => "baseline-compacted",
+            Action::GateRegistered => "gate-registered",
+            Action::GateRemoved => "gate-removed",
+        }
+    }
+
+    /// Reads back the spelling a record carries.
+    pub fn parse(text: &str) -> Option<Action> {
+        Action::ALL
+            .into_iter()
+            .find(|action| action.as_str() == text)
+    }
+}
+
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// What one step of a Receipt physically did. The primitive table of spec
+/// section 5.2.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Primitive {
+    /// A file or tree was moved into the quarantine store.
+    MoveOut,
+    /// An entry was dropped from its config file.
+    RemoveEntry,
+    /// The Agent's own switch was turned off, never on its own.
+    NativeDisable,
+    /// The content was commented out where it lies.
+    NeutraliseInPlace,
+}
+
+impl Primitive {
+    /// Every primitive.
+    pub const ALL: [Primitive; 4] = [
+        Primitive::MoveOut,
+        Primitive::RemoveEntry,
+        Primitive::NativeDisable,
+        Primitive::NeutraliseInPlace,
+    ];
+
+    /// The spelling a record carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Primitive::MoveOut => "move-out",
+            Primitive::RemoveEntry => "remove-entry",
+            Primitive::NativeDisable => "native-disable",
+            Primitive::NeutraliseInPlace => "neutralise-in-place",
+        }
+    }
+
+    /// Reads back the spelling a record carries.
+    pub fn parse(text: &str) -> Option<Primitive> {
+        Primitive::ALL
+            .into_iter()
+            .find(|primitive| primitive.as_str() == text)
+    }
+}
+
+impl fmt::Display for Primitive {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// How a step, or the action as a whole, came out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Outcome {
+    /// It did what it said.
+    Ok,
+    /// Its precondition was gone, so it did nothing.
+    Skipped,
+    /// It could not be done.
+    Failed,
+}
+
+impl Outcome {
+    /// Every outcome.
+    pub const ALL: [Outcome; 3] = [Outcome::Ok, Outcome::Skipped, Outcome::Failed];
+
+    /// The spelling a record carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Outcome::Ok => "ok",
+            Outcome::Skipped => "skipped",
+            Outcome::Failed => "failed",
+        }
+    }
+
+    /// Reads back the spelling a record carries.
+    pub fn parse(text: &str) -> Option<Outcome> {
+        Outcome::ALL.into_iter().find(|out| out.as_str() == text)
+    }
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Whether Agent sessions looked to be running when the action was taken.
+/// Detected read-only; AgentSweep never signals or kills a session.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SessionsRunning {
+    /// At least one session looked live.
+    Yes,
+    /// None looked live.
+    No,
+    /// Detection was not available for that Agent.
+    #[default]
+    Unknown,
+}
+
+impl SessionsRunning {
+    /// Every state.
+    pub const ALL: [SessionsRunning; 3] = [
+        SessionsRunning::Yes,
+        SessionsRunning::No,
+        SessionsRunning::Unknown,
+    ];
+
+    /// The spelling a record carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionsRunning::Yes => "yes",
+            SessionsRunning::No => "no",
+            SessionsRunning::Unknown => "unknown",
+        }
+    }
+
+    /// Reads back the spelling a record carries.
+    pub fn parse(text: &str) -> Option<SessionsRunning> {
+        SessionsRunning::ALL
+            .into_iter()
+            .find(|state| state.as_str() == text)
+    }
+}
+
+/// A sensitive value as a record may carry it: hashed, never in the clear.
+///
+/// There is no way to build one from a value without hashing it, which is what
+/// keeps MCP environment variables, headers, tokens and env file contents out
+/// of the Event Log and the Baseline.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Redacted(String);
+
+impl Redacted {
+    /// Hashes a sensitive value.
+    pub fn of(value: impl AsRef<[u8]>) -> Redacted {
+        Redacted(format!("sha256:{}", sha256_hex(value.as_ref())))
+    }
+
+    /// The hash, as the record carries it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Reads back what a record carries, refusing anything that is not a hash.
+    fn parse(text: &str) -> Option<Redacted> {
+        let digest = text.strip_prefix("sha256:")?;
+        let hex = digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        hex.then(|| Redacted(text.to_string()))
+    }
+}
+
+impl fmt::Display for Redacted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// One step of a Receipt, with what it did and how it came out. Restore
+/// replays the steps in reverse.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReceiptStep {
+    /// What the step did.
+    pub primitive: Primitive,
+    /// How it came out.
+    pub outcome: Outcome,
+    /// The path it acted on: the Item for a move, the config file for an
+    /// entry. Paths are not sensitive values; contents are.
+    pub path: String,
+    /// What inside the file the step addressed: a server name, a key path, a
+    /// hook event and matcher. Empty for a file or tree.
+    pub locator: String,
+    /// One line for the Activity, free of content and of sensitive values.
+    pub detail: String,
+}
+
+impl ReceiptStep {
+    /// A step that did what it said.
+    pub fn new(primitive: Primitive, path: impl Into<String>) -> ReceiptStep {
+        ReceiptStep {
+            primitive,
+            outcome: Outcome::Ok,
+            path: path.into(),
+            locator: String::new(),
+            detail: String::new(),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        let mut map = Map::new();
+        map.insert("detail".to_string(), Value::from(self.detail.as_str()));
+        map.insert("locator".to_string(), Value::from(self.locator.as_str()));
+        map.insert("outcome".to_string(), Value::from(self.outcome.as_str()));
+        map.insert("path".to_string(), Value::from(self.path.as_str()));
+        map.insert(
+            "primitive".to_string(),
+            Value::from(self.primitive.as_str()),
+        );
+        Value::Object(map)
+    }
+
+    fn parse(value: &Value) -> Option<ReceiptStep> {
+        Some(ReceiptStep {
+            primitive: Primitive::parse(value.get("primitive")?.as_str()?)?,
+            outcome: Outcome::parse(value.get("outcome")?.as_str()?)?,
+            path: value.get("path")?.as_str()?.to_string(),
+            locator: value.get("locator")?.as_str()?.to_string(),
+            detail: value.get("detail")?.as_str()?.to_string(),
+        })
+    }
+}
+
+/// One record of the Event Log, with the fields of spec section 5.5. The
+/// timestamp is the envelope's; everything else is here.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Event {
+    /// What happened.
+    pub action: Action,
+    /// Who caused it.
+    pub actor: Actor,
+    /// The Item it was about, absent for an event about no single Item.
+    pub item_id: Option<ItemId>,
+    /// The Surface kind of that Item.
+    pub kind: Option<Kind>,
+    /// The content hash the action was bound to, empty where none applies.
+    pub content_hash: String,
+    /// The Finding behind the action, empty where none applies.
+    pub finding_id: String,
+    /// The Tier that produced that Finding.
+    pub tier: Option<Tier>,
+    /// The Rule behind it, zero where no Rule applies.
+    pub rule_id: i64,
+    /// The Receipt this action belongs to, empty where none applies.
+    pub receipt_id: String,
+    /// The steps, in the order they were taken.
+    pub steps: Vec<ReceiptStep>,
+    /// How the action as a whole came out.
+    pub result: Outcome,
+    /// Whether Agent sessions looked to be running.
+    pub sessions_running: SessionsRunning,
+    /// Sensitive values, by name, as hashes. Never a value in the clear.
+    pub sensitive: BTreeMap<String, Redacted>,
+    /// Further facts that carry no content and nothing sensitive: an engine
+    /// name, the Baseline head hashes, an Agent name.
+    pub detail: BTreeMap<String, String>,
+}
+
+impl Event {
+    /// An event with nothing filled in but what happened and who caused it.
+    pub fn new(action: Action, actor: Actor) -> Event {
+        Event {
+            action,
+            actor,
+            item_id: None,
+            kind: None,
+            content_hash: String::new(),
+            finding_id: String::new(),
+            tier: None,
+            rule_id: 0,
+            receipt_id: String::new(),
+            steps: Vec::new(),
+            result: Outcome::Ok,
+            sessions_running: SessionsRunning::Unknown,
+            sensitive: BTreeMap::new(),
+            detail: BTreeMap::new(),
+        }
+    }
+
+    /// Names the Item and its kind.
+    pub fn about(mut self, item_id: &ItemId, kind: Kind, content_hash: &str) -> Event {
+        self.item_id = Some(item_id.clone());
+        self.kind = Some(kind);
+        self.content_hash = content_hash.to_string();
+        self
+    }
+
+    /// Names the Finding, the Tier and the Rule behind the action.
+    pub fn because_of(mut self, finding_id: &str, tier: Tier, rule_id: i64) -> Event {
+        self.finding_id = finding_id.to_string();
+        self.tier = Some(tier);
+        self.rule_id = rule_id;
+        self
+    }
+
+    /// Records a sensitive value as its hash and nothing else.
+    pub fn hiding(mut self, name: &str, value: impl AsRef<[u8]>) -> Event {
+        self.sensitive.insert(name.to_string(), Redacted::of(value));
+        self
+    }
+
+    /// Records a fact that carries no content and nothing sensitive.
+    pub fn noting(mut self, name: &str, fact: impl Into<String>) -> Event {
+        self.detail.insert(name.to_string(), fact.into());
+        self
+    }
+
+    /// The payload a record carries.
+    pub fn to_payload(&self) -> Value {
+        let mut map = Map::new();
+        map.insert("action".to_string(), Value::from(self.action.as_str()));
+        map.insert("actor".to_string(), Value::from(self.actor.as_str()));
+        map.insert(
+            "content_hash".to_string(),
+            Value::from(self.content_hash.as_str()),
+        );
+        map.insert(
+            "detail".to_string(),
+            Value::Object(
+                self.detail
+                    .iter()
+                    .map(|(name, fact)| (name.clone(), Value::from(fact.as_str())))
+                    .collect(),
+            ),
+        );
+        map.insert(
+            "finding_id".to_string(),
+            Value::from(self.finding_id.as_str()),
+        );
+        map.insert(
+            "item_id".to_string(),
+            Value::from(self.item_id.as_ref().map_or("", ItemId::as_str)),
+        );
+        map.insert(
+            "kind".to_string(),
+            Value::from(self.kind.map_or("", Kind::as_str)),
+        );
+        map.insert(
+            "receipt_id".to_string(),
+            Value::from(self.receipt_id.as_str()),
+        );
+        map.insert("result".to_string(), Value::from(self.result.as_str()));
+        map.insert("rule_id".to_string(), Value::from(self.rule_id));
+        map.insert(
+            "sensitive".to_string(),
+            Value::Object(
+                self.sensitive
+                    .iter()
+                    .map(|(name, hash)| (name.clone(), Value::from(hash.as_str())))
+                    .collect(),
+            ),
+        );
+        map.insert(
+            "sessions_running".to_string(),
+            Value::from(self.sessions_running.as_str()),
+        );
+        map.insert(
+            "steps".to_string(),
+            Value::Array(self.steps.iter().map(ReceiptStep::to_value).collect()),
+        );
+        map.insert(
+            "tier".to_string(),
+            Value::from(self.tier.map_or("", Tier::as_str)),
+        );
+        Value::Object(map)
+    }
+
+    /// Reads back the payload a record carries.
+    pub fn from_payload(payload: &Value) -> Option<Event> {
+        let text = |field: &str| payload.get(field).and_then(Value::as_str);
+        let item_id = text("item_id")?;
+        let kind = text("kind")?;
+        let tier = text("tier")?;
+        let mut event = Event::new(
+            Action::parse(text("action")?)?,
+            Actor::parse(text("actor")?)?,
+        );
+        event.item_id = (!item_id.is_empty()).then(|| ItemId::from_recorded(item_id));
+        event.kind = (!kind.is_empty()).then(|| Kind::parse(kind)).flatten();
+        event.tier = (!tier.is_empty()).then(|| tier_from_label(tier)).flatten();
+        event.content_hash = text("content_hash")?.to_string();
+        event.finding_id = text("finding_id")?.to_string();
+        event.receipt_id = text("receipt_id")?.to_string();
+        event.result = Outcome::parse(text("result")?)?;
+        event.sessions_running = SessionsRunning::parse(text("sessions_running")?)?;
+        event.rule_id = payload.get("rule_id")?.as_i64()?;
+        for step in payload.get("steps")?.as_array()? {
+            event.steps.push(ReceiptStep::parse(step)?);
+        }
+        for (name, value) in payload.get("sensitive")?.as_object()? {
+            event
+                .sensitive
+                .insert(name.clone(), Redacted::parse(value.as_str()?)?);
+        }
+        for (name, value) in payload.get("detail")?.as_object()? {
+            event
+                .detail
+                .insert(name.clone(), value.as_str()?.to_string());
+        }
+        Some(event)
+    }
+}
+
+/// Reads back the label [`Tier::as_str`] prints.
+fn tier_from_label(label: &str) -> Option<Tier> {
+    [
+        Tier::Allowlist,
+        Tier::Rules,
+        Tier::Heuristics,
+        Tier::AiJudgement,
+    ]
+    .into_iter()
+    .find(|tier| tier.as_str() == label)
+}
+
+/// One event as the Event Log holds it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordedEvent {
+    /// Where in the chain it sits.
+    pub sequence: u64,
+    /// Which key generation wrote it.
+    pub epoch: u64,
+    /// When it was written.
+    pub recorded_at: Timestamp,
+    /// False for a record no key in hand can verify, which is every record
+    /// written before the protection state was reset.
+    pub verified: bool,
+    /// What happened.
+    pub event: Event,
+}
+
+/// The Event Log, `events.jsonl`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EventLog {
+    chain: Chain,
+}
+
+impl EventLog {
+    /// The Event Log kept at this path.
+    pub fn at(path: impl Into<PathBuf>) -> EventLog {
+        EventLog {
+            chain: Chain::at(path, ChainId::Events),
+        }
+    }
+
+    /// The Event Log of a data directory.
+    pub fn in_data_directory(directory: &DataDirectory) -> EventLog {
+        EventLog::at(directory.event_log())
+    }
+
+    /// The chain underneath, for the verification routine both chains share.
+    pub fn chain(&self) -> &Chain {
+        &self.chain
+    }
+
+    /// Reads and verifies the whole log.
+    pub fn read(&self, keys: &dyn KeySource) -> Result<EventLogView, ChainError> {
+        let verification = self.chain.verify(keys)?;
+        let mut events = Vec::with_capacity(verification.records.len());
+        let mut restarts = 0usize;
+        let mut unreadable = 0usize;
+        for record in &verification.records {
+            if record.envelope.record == RecordKind::ChainRestart {
+                restarts += 1;
+                continue;
+            }
+            match Event::from_payload(&record.envelope.payload) {
+                Some(event) => events.push(RecordedEvent {
+                    sequence: record.envelope.sequence,
+                    epoch: record.envelope.epoch,
+                    recorded_at: record.envelope.recorded_at,
+                    verified: record.verified,
+                    event,
+                }),
+                None => unreadable += 1,
+            }
+        }
+        Ok(EventLogView {
+            state: verification.state,
+            head: verification.head,
+            unverified: verification.records.iter().filter(|r| !r.verified).count(),
+            events,
+            restarts,
+            unreadable,
+        })
+    }
+}
+
+/// The whole Event Log as one read left it.
+#[derive(Clone, Debug)]
+pub struct EventLogView {
+    /// What verification found.
+    pub state: ChainState,
+    /// Every event of the last verifiable prefix, in the order written.
+    pub events: Vec<RecordedEvent>,
+    /// The hash of the last record in the file.
+    pub head: String,
+    /// How many records no key in hand can verify.
+    pub unverified: usize,
+    /// How many times the chain was restarted because the key went missing.
+    pub restarts: usize,
+    /// How many records carried a payload that is not an event.
+    pub unreadable: usize,
+}
+
+impl EventLogView {
+    /// What is in the quarantine store, rebuilt from the log.
+    pub fn quarantine_manifest(&self) -> crate::derived::QuarantineManifest {
+        crate::derived::QuarantineManifest::rebuild(&self.events)
+    }
+
+    /// Which content hashes carry Trust, rebuilt from the log.
+    pub fn trust_table(&self) -> crate::derived::TrustTable {
+        crate::derived::TrustTable::rebuild(&self.events)
+    }
+}
+
+#[cfg(feature = "daemon")]
+pub use writer::EventLogWriter;
+
+#[cfg(feature = "daemon")]
+mod writer {
+    use super::{Event, EventLog};
+
+    use crate::chain::{ChainError, ChainState, ChainWriter};
+    use crate::envelope::Envelope;
+    use crate::keychain::KeySource;
+
+    /// The write side of the Event Log.
+    ///
+    /// The daemon is the only writer (spec section 6.2), which this type
+    /// carries: it exists only in a build with the `daemon` feature.
+    #[derive(Debug)]
+    pub struct EventLogWriter {
+        writer: ChainWriter,
+    }
+
+    impl EventLogWriter {
+        /// Verifies the log, then opens it for appending, returning the state
+        /// verification found along with the writer.
+        pub fn open(
+            log: &EventLog,
+            keys: &dyn KeySource,
+        ) -> Result<(EventLogWriter, ChainState), ChainError> {
+            let (writer, state) = ChainWriter::open(log.chain().clone(), keys)?;
+            Ok((EventLogWriter { writer }, state))
+        }
+
+        /// Appends one event and flushes it to the disk.
+        pub fn append(&mut self, event: &Event) -> Result<Envelope, ChainError> {
+            self.writer.append(event.to_payload())
+        }
+
+        /// The hash a record appended now would link to.
+        pub fn head(&self) -> &str {
+            self.writer.head()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::item::Scope;
+    use crate::keychain::MemoryKeySource;
+
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn item() -> ItemId {
+        ItemId::new(
+            "claude-code",
+            &Scope::Project(PathBuf::from("/src/demo")),
+            Kind::McpServer,
+            ".mcp.json#leak",
+        )
+    }
+
+    fn quarantine_event() -> Event {
+        let mut event = Event::new(Action::Quarantine, Actor::Auto)
+            .about(&item(), Kind::McpServer, &"a".repeat(64))
+            .because_of("finding-1", Tier::Rules, 14)
+            .hiding("env.API_TOKEN", "sk-live-not-a-real-token")
+            .noting("agent", "claude-code");
+        event.receipt_id = "r-0001".to_string();
+        event.sessions_running = SessionsRunning::Yes;
+        event.steps = vec![ReceiptStep {
+            primitive: Primitive::RemoveEntry,
+            outcome: Outcome::Ok,
+            path: "/src/demo/.mcp.json".to_string(),
+            locator: "mcpServers.leak".to_string(),
+            detail: "the entry was dropped".to_string(),
+        }];
+        event
+    }
+
+    #[test]
+    fn a_record_carries_every_field_of_the_specification() {
+        let payload = quarantine_event().to_payload();
+        for field in [
+            "action",
+            "actor",
+            "content_hash",
+            "detail",
+            "finding_id",
+            "item_id",
+            "kind",
+            "receipt_id",
+            "result",
+            "rule_id",
+            "sensitive",
+            "sessions_running",
+            "steps",
+            "tier",
+        ] {
+            assert!(payload.get(field).is_some(), "no {field}");
+        }
+        assert_eq!(payload["action"], Value::from("quarantine"));
+        assert_eq!(payload["actor"], Value::from("auto"));
+        assert_eq!(payload["kind"], Value::from("McpServer"));
+        assert_eq!(payload["tier"], Value::from("T1"));
+        assert_eq!(payload["rule_id"], Value::from(14));
+        assert_eq!(payload["sessions_running"], Value::from("yes"));
+        assert_eq!(
+            payload["steps"][0]["primitive"],
+            Value::from("remove-entry")
+        );
+    }
+
+    #[test]
+    fn an_event_round_trips_through_its_payload() {
+        let event = quarantine_event();
+        let read = Event::from_payload(&event.to_payload()).expect("a readable payload");
+        assert_eq!(read, event);
+    }
+
+    #[test]
+    fn an_event_about_no_single_item_round_trips_too() {
+        let event = Event::new(Action::EngineChanged, Actor::User)
+            .noting("engine", "ollama")
+            .noting("state", "enabled");
+        let read = Event::from_payload(&event.to_payload()).expect("a readable payload");
+        assert_eq!(read, event);
+        assert!(read.item_id.is_none());
+        assert!(read.kind.is_none());
+        assert!(read.tier.is_none());
+    }
+
+    #[test]
+    fn a_sensitive_value_reaches_the_record_only_as_a_hash() {
+        let event = quarantine_event();
+        let hash = event.sensitive.get("env.API_TOKEN").expect("the hash");
+        assert_eq!(
+            hash.as_str(),
+            format!("sha256:{}", sha256_hex(b"sk-live-not-a-real-token"))
+        );
+        let written = serde_json::to_string(&event.to_payload()).expect("a payload");
+        assert!(!written.contains("sk-live-not-a-real-token"), "{written}");
+    }
+
+    #[test]
+    fn the_secret_never_reaches_the_file_on_disk() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let log = EventLog::at(directory.path().join("events.jsonl"));
+        let keys = MemoryKeySource::empty();
+        let (mut writer, _) = EventLogWriter::open(&log, &keys).expect("an open log");
+        writer
+            .append(&quarantine_event())
+            .expect("an appended event");
+
+        let bytes = std::fs::read(log.chain().path()).expect("a readable log");
+        let text = String::from_utf8(bytes).expect("a text file");
+        assert!(!text.contains("sk-live-not-a-real-token"), "{text}");
+        assert!(text.contains(&sha256_hex(b"sk-live-not-a-real-token")));
+    }
+
+    #[test]
+    fn a_written_event_is_read_back_whole() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let log = EventLog::at(directory.path().join("events.jsonl"));
+        let keys = MemoryKeySource::empty();
+        let (mut writer, state) = EventLogWriter::open(&log, &keys).expect("an open log");
+        assert_eq!(state, ChainState::Intact);
+        writer
+            .append(&quarantine_event())
+            .expect("an appended event");
+        writer
+            .append(&Event::new(Action::Trust, Actor::User).about(
+                &item(),
+                Kind::McpServer,
+                &"a".repeat(64),
+            ))
+            .expect("an appended event");
+
+        let view = log.read(&keys).expect("a readable log");
+        assert_eq!(view.state, ChainState::Intact);
+        assert_eq!(view.events.len(), 2);
+        assert_eq!(view.events[0].event, quarantine_event());
+        assert_eq!(view.events[0].sequence, 0);
+        assert!(view.events.iter().all(|recorded| recorded.verified));
+        assert_eq!(view.unverified, 0);
+        assert_eq!(view.restarts, 0);
+        assert_eq!(view.unreadable, 0);
+    }
+
+    #[test]
+    fn a_reset_protection_state_leaves_the_old_events_readable_and_unverified() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let log = EventLog::at(directory.path().join("events.jsonl"));
+        let keys = MemoryKeySource::empty();
+        {
+            let (mut writer, _) = EventLogWriter::open(&log, &keys).expect("an open log");
+            writer
+                .append(&quarantine_event())
+                .expect("an appended event");
+        }
+        keys.forget().expect("the key goes away");
+        assert_eq!(
+            log.read(&keys).expect("a readable log").state,
+            ChainState::KeyMissing
+        );
+
+        let (mut writer, state) = EventLogWriter::open(&log, &keys).expect("an open log");
+        assert_eq!(state, ChainState::KeyMissing);
+        writer
+            .append(&Event::new(Action::Acknowledge, Actor::User))
+            .expect("an appended event");
+
+        let view = log.read(&keys).expect("a readable log");
+        assert_eq!(view.state, ChainState::Intact);
+        assert_eq!(view.restarts, 1);
+        assert_eq!(view.events.len(), 2);
+        assert!(!view.events[0].verified);
+        assert!(view.events[1].verified);
+        assert_eq!(view.unverified, 1);
+    }
+
+    #[test]
+    fn every_vocabulary_round_trips_through_the_spelling_a_record_carries() {
+        for action in Action::ALL {
+            assert_eq!(Action::parse(action.as_str()), Some(action));
+        }
+        for actor in [Actor::Auto, Actor::User, Actor::Restore] {
+            assert_eq!(Actor::parse(actor.as_str()), Some(actor));
+        }
+        for primitive in Primitive::ALL {
+            assert_eq!(Primitive::parse(primitive.as_str()), Some(primitive));
+        }
+        for outcome in Outcome::ALL {
+            assert_eq!(Outcome::parse(outcome.as_str()), Some(outcome));
+        }
+        for state in SessionsRunning::ALL {
+            assert_eq!(SessionsRunning::parse(state.as_str()), Some(state));
+        }
+        for tier in [
+            Tier::Allowlist,
+            Tier::Rules,
+            Tier::Heuristics,
+            Tier::AiJudgement,
+        ] {
+            assert_eq!(tier_from_label(tier.as_str()), Some(tier));
+        }
+    }
+
+    #[test]
+    fn a_hash_is_the_only_thing_a_redaction_reads_back() {
+        assert!(Redacted::parse("sha256:not-a-hash").is_none());
+        assert!(Redacted::parse("sk-live-not-a-real-token").is_none());
+        let hash = Redacted::of(b"value");
+        assert_eq!(Redacted::parse(hash.as_str()), Some(hash));
+    }
+
+    #[test]
+    fn the_event_log_is_the_events_chain_of_the_data_directory() {
+        let directory = DataDirectory::at("/tmp/agentsweep-test");
+        let log = EventLog::in_data_directory(&directory);
+        assert_eq!(log.chain().path(), directory.event_log());
+        assert_eq!(log.chain().id(), ChainId::Events);
+    }
+}

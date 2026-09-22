@@ -14,7 +14,9 @@
 
 pub mod adapter;
 pub mod chain;
+pub mod derived;
 pub mod envelope;
+pub mod eventlog;
 pub mod finding;
 pub mod host;
 pub mod item;

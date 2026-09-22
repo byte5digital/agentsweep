@@ -12,6 +12,26 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+getrandom = "0.4.3"
+hmac = "0.13.0"
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 yara-x = { version = "1.20.0", default-features = false, features = ["constant-folding", "exact-atoms", "fast-regexp", "math-module", "generate-proto-code", "pulley"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The login Keychain, reached through SecItem. Only the `daemon` feature pulls
+# it in, because the daemon is the one process that touches the Keychain.
+security-framework = { version = "3.7.0", default-features = false, optional = true }
+
+[features]
+# The write side of both chains and the Keychain-backed key source. The daemon
+# crate is the only crate that enables it, so neither the application nor the
+# CLI can compile a call that appends to the Event Log or the Baseline, or that
+# reads the login Keychain (spec section 6.2).
+daemon = ["dep:security-framework"]
+
+[dev-dependencies]
+# The core's own tests cover the write side, so a test build turns the daemon
+# feature on for the core itself. Nothing here reaches a shipped binary.
+agentsweep-core = { path = ".", features = ["daemon"] }
+tempfile = "3.27.0"

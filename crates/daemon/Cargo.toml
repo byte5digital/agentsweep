@@ -14,4 +14,10 @@ name = "agentsweepd"
 path = "src/main.rs"
 
 [dependencies]
-agentsweep-core.workspace = true
+# The daemon is the one crate that turns the core's `daemon` feature on, which
+# is what makes it the only writer of the chains and the only process that
+# touches the Keychain (spec section 6.2).
+agentsweep-core = { workspace = true, features = ["daemon"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -16,6 +16,8 @@ pub mod adapter;
 pub mod finding;
 pub mod host;
 pub mod item;
+pub mod keychain;
+pub mod paths;
 pub mod rules;
 pub mod scan;
 pub mod views;

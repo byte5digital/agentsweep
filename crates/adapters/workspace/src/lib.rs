@@ -910,4 +910,25 @@ mod tests {
         assert!(manifest.contains("gix-index"), "{manifest}");
         assert!(manifest.contains("gix-ref"), "{manifest}");
     }
+
+    /// Neither does anything it depends on. The gitoxide crates that run a
+    /// program, prompt for a credential or talk to a remote are the ones that
+    /// would put a subprocess in this bundle, and none of them is in the
+    /// dependency tree of the whole workspace.
+    #[test]
+    fn nothing_the_adapter_depends_on_can_run_a_program() {
+        let lock = include_str!("../../../../Cargo.lock");
+        for crate_name in [
+            "gix-command",
+            "gix-credentials",
+            "gix-prompt",
+            "gix-transport",
+            "gix-filter",
+        ] {
+            assert!(
+                !lock.contains(&format!("name = \"{crate_name}\"")),
+                "{crate_name} is in the dependency tree"
+            );
+        }
+    }
 }

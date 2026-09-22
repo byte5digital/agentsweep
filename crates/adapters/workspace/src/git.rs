@@ -285,7 +285,7 @@ pub fn layout(root: &Path, dot_git_is_dir: bool, pointer: Option<Vec<u8>>) -> Op
     } else {
         root.join(target)
     });
-    let outside = !git_dir.starts_with(normalise(root)) && !is_worktree_layout(&git_dir);
+    let outside = !git_dir.starts_with(normalise(root)) && !is_standard_git_dir(&git_dir);
     Some(Layout {
         root: root.to_path_buf(),
         dot_git,
@@ -305,13 +305,21 @@ fn gitdir_target(pointer: &str) -> Option<PathBuf> {
         .map(|target| PathBuf::from(target.trim()))
 }
 
-/// True when a path has the shape git gives a linked worktree's private
-/// directory, `<repository>/.git/worktrees/<name>`.
-fn is_worktree_layout(git_dir: &Path) -> bool {
-    let mut components = git_dir.components().rev();
-    components.next().is_some()
-        && components.next().map(|c| c.as_os_str()) == Some("worktrees".as_ref())
-        && components.next().map(|c| c.as_os_str()) == Some(".git".as_ref())
+/// True when a path has one of the two shapes git itself gives a git directory
+/// that sits outside the checkout it belongs to: a linked worktree's
+/// `<repository>/.git/worktrees/<name>`, and a submodule's
+/// `<superproject>/.git/modules/<path>`.
+///
+/// Both are legitimate and both leave the directory being scanned, so the
+/// layout is what tells them from a pointer at somewhere else entirely.
+fn is_standard_git_dir(git_dir: &Path) -> bool {
+    let components: Vec<String> = git_dir
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect();
+    components
+        .windows(3)
+        .any(|window| window[0] == ".git" && (window[1] == "worktrees" || window[1] == "modules"))
 }
 
 /// Where a `commondir` file has to point for the worktree it belongs to: the
@@ -450,6 +458,24 @@ mod tests {
         assert_eq!(
             layout.git_dir,
             PathBuf::from("/src/demo/.git/worktrees/demo-wt")
+        );
+    }
+
+    /// A submodule's `.git` always points into the superproject, which is not
+    /// the repository being scanned. The shape of the path is what says that
+    /// this is git's own doing.
+    #[test]
+    fn a_submodule_pointer_into_the_superproject_is_not_outside() {
+        let layout = layout(
+            Path::new("/src/demo/vendor/lib"),
+            false,
+            Some(b"gitdir: ../../.git/modules/vendor/lib\n".to_vec()),
+        )
+        .expect("a submodule");
+        assert!(!layout.gitdir_outside_repo);
+        assert_eq!(
+            layout.git_dir,
+            PathBuf::from("/src/demo/.git/modules/vendor/lib")
         );
     }
 

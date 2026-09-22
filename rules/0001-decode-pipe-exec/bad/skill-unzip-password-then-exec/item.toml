@@ -1,0 +1,22 @@
+# Fixture for as_0001. A password-protected archive unpacked and made executable in the same statement.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/pdf-toolkit"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "pdf-toolkit"
+allowed_tools = ["Bash(unzip:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [1]
+files = ["SKILL.md"]

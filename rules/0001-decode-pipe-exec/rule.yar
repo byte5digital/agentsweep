@@ -6,10 +6,10 @@ rule as_0001_decode_pipe_exec {
     category    = "threat"
     severity    = "critical"
     class       = 1
-    kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent"
+    kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Marketplace"
     status      = "probation"
     plain       = "This file contains a command that downloads or unpacks hidden code and runs it straight away."
-    description = "Shell text that pipes base64-decoded or downloaded content directly into a shell or interpreter, or downloads to /tmp and executes in the same statement. Seen in ClawHavoc, ToxicSkills, the skills.sh typosquat campaign and CurXecute. No legitimate skill, hook, MCP launch command or instruction file needs to execute content it has just decoded or fetched."
+    description = "Shell text that pipes base64-decoded or downloaded content directly into a shell or interpreter, downloads to /tmp and executes in the same statement, or unpacks a password-protected archive and makes the result executable or runs it in the same statement. Seen in ClawHavoc, ToxicSkills, the skills.sh typosquat campaign and CurXecute. No legitimate skill, hook, MCP launch command, marketplace entry or instruction file needs to execute content it has just decoded, fetched or unpacked; unpacking an archive and then reading a file out of it stays silent. Marketplace is one of the kinds, so a marketplace command source that pipes a fetch into a shell is caught here."
     references  = "https://www.antiy.net/p/clawhavoc-analysis-of-large-scale-poisoning-campaign-targeting-the-openclaw-skill-market-for-ai-agents/ https://snyk.io/blog/toxicskills-malicious-ai-agent-skills-clawhub/ https://labs.zenity.io/post/attackers-target-agents-via-the-skill-supply-chain https://www.tenable.com/blog/faq-cve-2025-54135-cve-2025-54136-vulnerabilities-in-cursor-curxecute-mcpoison"
     sensitive   = false
 
@@ -26,6 +26,8 @@ rule as_0001_decode_pipe_exec {
     $fetch_pipe_interp  = /\b(curl|wget)\s[^\n|]{0,300}\|\s*(sudo\s+)?(node|python3?|perl|ruby)\b/
     // curl ... > /tmp/x && node /tmp/x   (download to temp then execute in the same statement)
     $fetch_tmp_exec     = /\b(curl|wget)\s[^\n]{0,300}(>|-o|-O)\s*\/(tmp|var\/tmp)\/[^\s;&|]{1,100}[^\n]{0,100}(&&|;)\s*(sudo\s+)?(node|python3?|perl|ruby|sh|bash|zsh|chmod\s+\+x)\b/
+    // unzip -P <password> ... && chmod +x / sh / node   (password-protected extraction then execution)
+    $unzip_exec         = /\bunzip\s+-P\s[^\n]{0,200}(&&|;|\|)\s*(sudo\s+)?(chmod\s+\+x|(ba|z|da)?sh|node|python3?|perl|ruby)\b/
     // Invoke-WebRequest / iwr piped into Invoke-Expression
     $iwr_iex            = /\b(Invoke-WebRequest|iwr|Invoke-RestMethod|irm)\b[^\n|]{0,300}\|\s*(Invoke-Expression|iex)\b/ nocase
 

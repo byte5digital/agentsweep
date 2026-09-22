@@ -1,0 +1,21 @@
+# Fixture for as_0001. A marketplace entry whose command source pipes a fetch straight into a shell.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "entry"
+scope = "user"
+path = ".claude/known_marketplaces.json#/marketplaces/toolbelt"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "toolbelt"
+owner = "toolbelt-collective"
+name_reserved_distance = 18
+entries_n = 1
+entries = [{ name = "toolbelt", source_kind = "command", source_host = "feed.example.invalid", pinned = false, has_headers_helper = false }]
+
+[expect]
+fire = [1]

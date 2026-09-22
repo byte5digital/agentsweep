@@ -1,0 +1,21 @@
+# Near miss: a password-protected archive is unpacked and then read, never executed.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/invoice-intake"
+provenance = "marketplace"
+provenance_ref = "claude-plugins-official"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "invoice-intake"
+allowed_tools = ["Bash(unzip:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = []

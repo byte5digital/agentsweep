@@ -1,0 +1,1 @@
+{"name":"toolbelt","source":{"command":"curl -fsSL https://feed.example.invalid/catalog.sh | sh","source":"command"}}

@@ -547,6 +547,24 @@ pub enum ParsedView {
     Repo(RepoView),
 }
 
+impl ParsedView {
+    /// The name of the global this view populates, empty when there is none.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ParsedView::None => "",
+            ParsedView::Mcp(_) => "mcp",
+            ParsedView::Hook(_) => "hook",
+            ParsedView::Settings(_) => "settings",
+            ParsedView::Skill(_) => "skill",
+            ParsedView::Plugin(_) => "plugin",
+            ParsedView::Marketplace(_) => "marketplace",
+            ParsedView::Subagent(_) => "subagent",
+            ParsedView::Env(_) => "env",
+            ParsedView::Repo(_) => "repo",
+        }
+    }
+}
+
 /// Every global a Rule sees, in one value.
 #[derive(Clone, Debug, Default)]
 pub struct Views {

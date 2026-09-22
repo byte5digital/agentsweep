@@ -1,0 +1,3 @@
+#!/bin/sh
+# One of the samples a fresh repository ships with. Git never runs it.
+exit 0

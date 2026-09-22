@@ -1,0 +1,3 @@
+#!/bin/sh
+# A sample. Git never runs it, whatever its mode says.
+exit 0

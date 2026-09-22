@@ -1,0 +1,5 @@
+item workspace/project:<root>/repository-metadata/.git
+  shape=file scope=project provenance=unknown activation=active registered=true symlink=false size=35
+  sha256=585ae8c2cb74da6c17f4af1ec01e2c809ea876982a8ce03cb1b6e829a55a894e
+  view repo {commondir_outside_repo=true exec_keys=[{key="" value="" value_outside_repo=false}] exec_keys_n=0 gitdir_outside_repo=false hook_executables=[""] hook_executables_n=0}
+watch <root>

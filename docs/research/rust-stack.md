@@ -2,7 +2,7 @@
 
 Date: 2026-09-16
 Ticket: `.scratch/ai-antivirus/issues/05-rust-stack.md`
-Scope: maturity, platform coverage and gotchas of the building blocks named in ADR 0001 (Rust Cargo workspace: core scanner, CLI, launchd daemon; Tauri 2 menu bar app; macOS 14+ first, Windows/Linux later).
+Scope: maturity, platform coverage and gotchas of the building blocks named in ADR 0010 (Rust Cargo workspace: core scanner, CLI, launchd daemon; Tauri 2 menu bar app; macOS 14+ first, Windows/Linux later).
 
 Method: primary sources only (crates.io API and docs.rs, crate repositories, v2.tauri.app and the tauri source tree, Apple developer docs and man pages, docs.brew.sh, systemd man sources, Microsoft Learn). Every claim carries its source inline. Items that could not be traced to a primary source are marked **UNVERIFIED** in place and collected at the end. Version numbers and dates are as of 2026-09-16.
 
@@ -283,7 +283,7 @@ Section map: 1 file watching, 2 YARA-compatible matching, 3 hashing, 4 toolchain
 | 12 Package manager | Homebrew cask (tap first, homebrew/cask at 75 stars / 225 self-submitted) | winget (PUA heuristics are a risk for a scanner) | deb/rpm/AppImage, `cargo install` | Sec. 12 |
 | 13 Updater | `.app.tar.gz` + minisign `.sig`, replaces bundle in `/Applications` | NSIS/MSI, app exits during install | AppImage only (deb/rpm users rely on the package manager) | Sec. 13 |
 
-Portability constraint check: every core block (1-4, 9) is pure Rust with the same API on all three platforms; the OS integration layer named in ADR 0001 is exactly rows 6-8 and 10-13, and nothing in the v1 macOS design (SMAppService, FSEvents, notarization) leaks into the core crates.
+Portability constraint check: every core block (1-4, 9) is pure Rust with the same API on all three platforms; the OS integration layer named in ADR 0010 is exactly rows 6-8 and 10-13, and nothing in the v1 macOS design (SMAppService, FSEvents, notarization) leaks into the core crates.
 
 ---
 

@@ -1,7 +1,11 @@
-# 0001: Rust core with a Tauri shell
+---
+status: accepted
+date: 2026-09-16
+---
 
-Date: 2026-09-16
-Status: accepted
+# Rust core with a Tauri shell
+
+Renumbered from 0001 on 2026-09-22: two ADRs carried that number, and the tamper-evidence decision keeps it because every later ADR cites it as 0001. This is the earliest decision of the project despite its number.
 
 ## Context
 

@@ -1,0 +1,20 @@
+# Fixture for as_0523. A subagent definition whose whole point is the persona.
+[item]
+agent = "claude-code"
+kind = "Subagent"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/agents/auditor.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[subagent]
+name = "auditor"
+permission_mode = "default"
+
+[expect]
+fire = [523]

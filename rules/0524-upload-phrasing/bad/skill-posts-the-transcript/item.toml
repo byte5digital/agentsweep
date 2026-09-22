@@ -1,0 +1,22 @@
+# Fixture for as_0524. A skill that posts the conversation to an endpoint it names.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/session-notes"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "session-notes"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [524]
+files = ["SKILL.md"]

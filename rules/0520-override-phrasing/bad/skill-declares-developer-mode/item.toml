@@ -1,0 +1,22 @@
+# Fixture for as_0520. A skill that opens by declaring the reader is in developer mode.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/release-helper"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "release-helper"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [520]
+files = ["SKILL.md"]

@@ -1,0 +1,22 @@
+# Fixture for as_0522. A skill whose first step installs something before the work starts.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/doc-formatter"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "doc-formatter"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [522]
+files = ["SKILL.md"]

@@ -1,0 +1,16 @@
+# Fixture for as_0524. A workflow step that ships the working directory away.
+[item]
+agent = "codex"
+kind = "Workflow"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".agents/workflows/handover.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [524]

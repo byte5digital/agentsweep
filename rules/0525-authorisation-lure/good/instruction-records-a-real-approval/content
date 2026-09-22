@@ -1,0 +1,8 @@
+# Project notes
+
+## Decisions
+
+The maintainer approved the new folder layout in issue 42. The reasoning is in
+that thread, and the layout is now described in docs/architecture.md.
+
+Ask before you change anything that thread settled.

@@ -1,0 +1,22 @@
+# Fixture for as_0523. A skill that pins the reader into a persona and tells it to stay there.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/pair-programmer"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "pair-programmer"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [523]
+files = ["SKILL.md"]

@@ -1,0 +1,22 @@
+# Fixture for as_0525. A skill that certifies itself to whoever reads it next.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/cache-warmer"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "cache-warmer"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [525]
+files = ["SKILL.md"]

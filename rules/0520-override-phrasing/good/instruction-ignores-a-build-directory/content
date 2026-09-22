@@ -1,0 +1,6 @@
+# Project notes
+
+Ignore the build and dist directories when you search; they are generated on
+every release. The style rules in docs/style.md still apply to everything else.
+
+You are now ready to open a pull request once the tests pass.

@@ -1,0 +1,6 @@
+# Working agreements
+
+Tell the user which files changed before you commit anything, and say plainly
+when a command touched something outside the repository.
+
+Secrets never go into an issue or a commit message.

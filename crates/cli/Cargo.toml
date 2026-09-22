@@ -15,4 +15,5 @@ name = "agentsweep"
 path = "src/main.rs"
 
 [dependencies]
+agentsweep-adapter-claude-code.workspace = true
 agentsweep-core.workspace = true

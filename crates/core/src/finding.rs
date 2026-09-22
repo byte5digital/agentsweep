@@ -170,16 +170,48 @@ impl fmt::Display for RuleStatus {
 /// What produced a Finding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Source {
-    /// One Rule, by id.
+    /// One Rule, by id. An Exposure Heuristic names itself the same way,
+    /// because it raises its own Finding rather than a Score.
     Rule(i64),
+    /// The Score of the Threat Heuristics that fired on the Item, which put it
+    /// in the Suspicious Band. The Finding is about the Item, not about one
+    /// Rule, and the number is Developer Posture detail.
+    Score(i64),
 }
 
 impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Source::Rule(id) => write!(f, "rule {id:04}"),
+            Source::Score(score) => write!(f, "score {score}"),
         }
     }
+}
+
+/// One Threat Heuristic that fired on an Item, with the Weight it contributed
+/// to the Score. The same list is the evidence of a Suspicious Finding and the
+/// "Also noticed" detail under a Probation Rule Finding.
+#[derive(Clone, Debug)]
+pub struct FiredHeuristic {
+    /// The integer id of the Heuristic.
+    pub id: i64,
+    /// What it contributed to the Score: 1, 2 or 3.
+    pub weight: i64,
+    /// The developer-facing one line.
+    pub title: String,
+    /// The one sentence the Simple Posture shows.
+    pub plain: String,
+    /// How bad it is if true.
+    pub severity: Severity,
+    /// True when matches can land on sensitive fields.
+    pub sensitive: bool,
+    /// True when it fires on text addressing a reviewer, a scanner or an AI,
+    /// which keeps a benign Verdict from clearing the Item.
+    pub reviewer_directed: bool,
+    /// The file of a tree Item it fired on, empty otherwise.
+    pub file: String,
+    /// Where its patterns matched.
+    pub matches: Vec<MatchRange>,
 }
 
 /// Where in the scanned bytes a pattern matched.
@@ -218,6 +250,10 @@ pub struct Finding {
     pub file: String,
     /// Where the patterns matched.
     pub matches: Vec<MatchRange>,
+    /// The Threat Heuristics that fired on the Item: the evidence of a
+    /// Suspicious Finding, and the supporting detail under a Probation Rule
+    /// Finding. Empty on everything else.
+    pub heuristics: Vec<FiredHeuristic>,
 }
 
 impl Finding {
@@ -225,6 +261,16 @@ impl Finding {
     /// what keeps it from quarantining by itself.
     pub fn on_probation(&self) -> bool {
         self.status == RuleStatus::Probation
+    }
+
+    /// The Heuristics that fired on the same Item and are shown under this
+    /// Finding as "Also noticed" rather than as a second Finding. Empty unless
+    /// a Rule produced the Finding.
+    pub fn also_noticed(&self) -> &[FiredHeuristic] {
+        match self.tier {
+            Tier::Rules => &self.heuristics,
+            _ => &[],
+        }
     }
 }
 
@@ -261,6 +307,11 @@ mod tests {
     fn a_rule_source_prints_the_four_digit_id() {
         assert_eq!(Source::Rule(1).to_string(), "rule 0001");
         assert_eq!(Source::Rule(900).to_string(), "rule 0900");
+    }
+
+    #[test]
+    fn a_score_source_prints_the_score_behind_the_band() {
+        assert_eq!(Source::Score(4).to_string(), "score 4");
     }
 
     #[test]

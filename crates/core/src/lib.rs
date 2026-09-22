@@ -7,8 +7,9 @@
 //!
 //! What is here so far is the first end-to-end path: the Item, the Host, the
 //! read side of the Surface Adapter contract, the view globals of the rule
-//! contract, the bundled Rule Pack and the Rule tier that runs it. The stores,
-//! the Baseline and the later Tiers arrive with their milestones.
+//! contract, the bundled Rule Pack, the Rule tier that runs it and the
+//! Heuristic tier that scores what it left undecided. The stores,
+//! the Baseline and AI Judgement arrive with their milestones.
 
 #![warn(missing_docs)]
 
@@ -18,6 +19,7 @@ pub mod derived;
 pub mod envelope;
 pub mod eventlog;
 pub mod finding;
+pub mod heuristics;
 pub mod host;
 pub mod item;
 pub mod keychain;

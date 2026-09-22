@@ -1,4 +1,4 @@
-//! Running the Rule tier over Items.
+//! Running the detection ladder over Items.
 //!
 //! [`Scanners`] holds one YARA-X scanner per Surface kind and is meant to be
 //! built once per worker thread: a scanner owns a WebAssembly store, so it is
@@ -8,7 +8,9 @@
 //! entitlement under the hardened runtime (ADR 0004).
 //!
 //! Before every scan the core defines every view global of the rule contract,
-//! with the full schema and the documented defaults.
+//! with the full schema and the documented defaults. Scoring what the
+//! Heuristic tier finds is `crate::heuristics`; what is here is the pass over
+//! the bytes and the Scan-level report around it.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -18,10 +20,11 @@ use serde_json::Value;
 use yara_x::Scanner;
 
 use crate::adapter::{Enumeration, Problem};
-use crate::finding::{Finding, MatchRange, Source};
+use crate::finding::{Finding, MatchRange};
+use crate::heuristics::{Assessment, Band};
 use crate::item::{Item, Kind, ScanUnit};
+use crate::pack::{Bands, Manifest};
 use crate::rules::RulePack;
-use crate::views::Views;
 
 /// What went wrong while scanning.
 #[derive(Debug)]
@@ -71,6 +74,7 @@ pub struct RuleHit {
 /// One worker thread's scanners, one per Surface kind, created on first use.
 pub struct Scanners<'p> {
     pack: &'p RulePack,
+    bands: Bands,
     by_kind: BTreeMap<Kind, Scanner<'p>>,
 }
 
@@ -83,12 +87,30 @@ impl fmt::Debug for Scanners<'_> {
 }
 
 impl<'p> Scanners<'p> {
-    /// The scanners of one worker thread over one Rule Pack.
+    /// The scanners of one worker thread over the bundled Rule Pack's Bands.
     pub fn new(pack: &'p RulePack) -> Scanners<'p> {
+        Scanners::with_bands(pack, Manifest::bundled().bands)
+    }
+
+    /// The scanners of one worker thread over one Rule Pack and the Band
+    /// thresholds that pack's manifest states. A fetched pack brings its own,
+    /// which is why they are given rather than read from the code.
+    pub fn with_bands(pack: &'p RulePack, bands: Bands) -> Scanners<'p> {
         Scanners {
             pack,
+            bands,
             by_kind: BTreeMap::new(),
         }
+    }
+
+    /// The Rule Pack these scanners run.
+    pub fn pack(&self) -> &'p RulePack {
+        self.pack
+    }
+
+    /// The Band thresholds they score against.
+    pub fn bands(&self) -> Bands {
+        self.bands
     }
 
     /// How many scanner instances this worker thread has created so far.
@@ -96,40 +118,11 @@ impl<'p> Scanners<'p> {
         self.by_kind.len()
     }
 
-    /// Runs every Rule that applies to the Item's kind over every unit of the
-    /// Item and turns each hit into a Finding.
+    /// Runs the detection ladder over one Item and reports what the user is
+    /// shown. [`Scanners::assess`] is the same pass with the Score and the
+    /// Band beside it.
     pub fn scan(&mut self, item: &Item) -> Result<Vec<Finding>, ScanFailure> {
-        let pack = self.pack;
-        let mut hits = Vec::new();
-        for unit in item.scan_units() {
-            let globals = Views::of(item, &unit).globals();
-            hits.extend(self.run(item.kind, &globals, &unit)?);
-        }
-
-        let mut findings = Vec::new();
-        for hit in hits {
-            let Some(meta) = pack.meta(&hit.rule) else {
-                continue;
-            };
-            findings.push(Finding {
-                item_id: item.id.clone(),
-                source: Source::Rule(meta.id),
-                content_hash: item.content_hash.clone(),
-                category: meta.category,
-                severity: meta.severity,
-                tier: meta.tier,
-                status: meta.status,
-                title: meta.title.clone(),
-                plain: meta.plain.clone(),
-                sensitive: meta.sensitive,
-                file: hit.file,
-                matches: hit.matches,
-            });
-        }
-        findings.sort_by_key(|finding| match finding.source {
-            Source::Rule(id) => id,
-        });
-        Ok(findings)
+        Ok(self.assess(item)?.findings)
     }
 
     /// Runs every Rule that applies to one kind over one unit of bytes with
@@ -187,21 +180,35 @@ pub struct ScanReport {
     pub items_scanned: usize,
     /// The Findings, in the order the Items were enumerated.
     pub findings: Vec<Finding>,
+    /// What the Heuristic tier made of each Item, in the same order. An
+    /// Ambiguous Item raises no Finding and is only here.
+    pub assessments: Vec<Assessment>,
     /// The paths that could not be read, parsed or supported.
     pub problems: Vec<Problem>,
 }
 
 impl ScanReport {
     /// True when nothing was found, which for a Folder Scan is the answer
-    /// "safe to open".
+    /// "safe to open". The Ambiguous Band is not a Finding and does not
+    /// change the answer.
     pub fn is_clear(&self) -> bool {
         self.findings.is_empty()
     }
+
+    /// How many Items fell in the Ambiguous Band: the ones with minor
+    /// oddities and nothing to do about them.
+    pub fn ambiguous(&self) -> usize {
+        self.assessments
+            .iter()
+            .filter(|assessment| assessment.band == Band::Ambiguous)
+            .count()
+    }
 }
 
-/// Runs the Rule tier over one enumeration on the calling thread. The daemon
-/// builds one [`Scanners`] per worker thread and calls [`Scanners::scan`]
-/// directly; this is the single-threaded path a Folder Scan takes.
+/// Runs the detection ladder over one enumeration on the calling thread. The
+/// daemon builds one [`Scanners`] per worker thread and calls
+/// [`Scanners::assess`] directly; this is the single-threaded path a Folder
+/// Scan takes.
 pub fn scan_enumeration(
     pack: &RulePack,
     enumeration: &Enumeration,
@@ -213,7 +220,9 @@ pub fn scan_enumeration(
         ..ScanReport::default()
     };
     for item in &enumeration.items {
-        report.findings.extend(scanners.scan(item)?);
+        let assessment = scanners.assess(item)?;
+        report.findings.extend(assessment.findings.iter().cloned());
+        report.assessments.push(assessment);
     }
     Ok(report)
 }
@@ -223,6 +232,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::finding::Source;
     use crate::item::{Activation, Item, Kind, Provenance, Scope};
 
     fn instruction_file(content: &str) -> Item {

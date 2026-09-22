@@ -88,8 +88,9 @@ fn every_planted_instruction_file_fires_its_rule() {
         let findings = scanners.scan(&item).expect("the scan runs");
         let fired: Vec<i64> = findings
             .iter()
-            .map(|finding| match finding.source {
-                Source::Rule(id) => id,
+            .filter_map(|finding| match finding.source {
+                Source::Rule(id) => Some(id),
+                Source::Score(_) => None,
             })
             .collect();
         assert!(
@@ -143,8 +144,9 @@ fn a_rule_that_does_not_declare_the_kind_never_reaches_the_item() {
     let findings = scanners.scan(&item).expect("the scan runs");
     let fired: Vec<i64> = findings
         .iter()
-        .map(|finding| match finding.source {
-            Source::Rule(id) => id,
+        .filter_map(|finding| match finding.source {
+            Source::Rule(id) => Some(id),
+            Source::Score(_) => None,
         })
         .collect();
     assert!(

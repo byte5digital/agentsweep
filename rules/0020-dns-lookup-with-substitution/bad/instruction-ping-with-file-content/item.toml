@@ -1,0 +1,16 @@
+# Fixture for as_0020. Instruction text that pings a name built from the contents of a local file.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [20]

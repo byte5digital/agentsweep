@@ -1,0 +1,21 @@
+# Near miss: a lookup of the machine's own name, the substitution the rule list names as legitimate.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/network-checkup"
+provenance = "marketplace"
+provenance_ref = "claude-plugins-official"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "network-checkup"
+allowed_tools = ["Bash(dig:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = []

@@ -1,0 +1,1 @@
+{"command":"nslookup registry.example.invalid","matcher":"startup","type":"command"}

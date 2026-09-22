@@ -1,0 +1,8 @@
+# Working notes
+
+Before deploying, check that the staging host answers:
+
+    ping -c 1 $HOST
+    nslookup "$DOMAIN"
+
+If neither answers, stop and tell the reviewer which of the two failed.

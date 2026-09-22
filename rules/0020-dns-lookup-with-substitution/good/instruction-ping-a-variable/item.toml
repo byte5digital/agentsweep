@@ -1,0 +1,16 @@
+# Near miss: instructions that look a host up from a variable, with no file content in the name.
+[item]
+agent = "codex"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "AGENTS.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

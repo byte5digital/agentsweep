@@ -1,0 +1,19 @@
+# Fixture for as_0020. A subagent told to look a name up that it reads straight out of a file.
+[item]
+agent = "claude-code"
+kind = "Subagent"
+shape = "file"
+scope = "user"
+path = "agents/release-scout.md"
+provenance = "plugin"
+provenance_ref = "scout@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[subagent]
+name = "release-scout"
+permission_mode = "default"
+
+[expect]
+fire = [20]

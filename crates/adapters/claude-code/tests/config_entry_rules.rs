@@ -35,23 +35,19 @@ fn scanned(repository: &TemporaryRepository) -> Enumeration {
     enumeration
 }
 
-/// The Rule ids that fired on one Item. A Finding from another source is not
-/// what this test is about and is left out rather than matched on, so a later
-/// Tier adding one of its own does not turn this into a compile error. That is
-/// also why the pattern is allowed to be the only one there currently is.
-#[allow(irrefutable_let_patterns)]
+/// The tier 1 Rule ids that fired on one Item. A Heuristic noticing the same
+/// Item is counted elsewhere and is not what these tests are about, so it is
+/// left out rather than matched on.
 fn fired(pack: &RulePack, item: &Item) -> Vec<i64> {
     let mut scanners = Scanners::new(pack);
     scanners
         .scan(item)
         .expect("the Rule tier runs")
         .into_iter()
-        .filter_map(|finding| {
-            if let Source::Rule(id) = finding.source {
-                Some(id)
-            } else {
-                None
-            }
+        .filter(|finding| finding.tier == Tier::Rules)
+        .filter_map(|finding| match finding.source {
+            Source::Rule(id) => Some(id),
+            _ => None,
         })
         .collect()
 }

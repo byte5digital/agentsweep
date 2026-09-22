@@ -17,3 +17,6 @@ apps/*/src-tauri/gen/
 .env
 *.pem
 *.key
+
+# agent worktrees
+.claude/worktrees/

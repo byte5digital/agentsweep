@@ -408,7 +408,12 @@ mod tests {
         own.write(".claude/settings.json", planted);
 
         let (_, untracked) = folder_scan(own.root()).expect("the Folder Scan runs");
-        assert!(untracked.is_clear(), "{:?}", rules(&untracked));
+        let fired = rules(&untracked);
+        assert!(!fired.contains(&6), "{fired:?}");
+        assert!(
+            fired.iter().all(|id| *id >= 500),
+            "only a Heuristic may notice the user's own settings: {fired:?}"
+        );
     }
 
     /// A plaintext token in a project MCP file is an Exposure, and what the

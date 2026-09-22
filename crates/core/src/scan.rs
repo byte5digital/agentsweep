@@ -21,7 +21,7 @@ use yara_x::Scanner;
 
 use crate::adapter::{Enumeration, Problem};
 use crate::finding::{Finding, MatchRange};
-use crate::heuristics::{Assessment, Band};
+use crate::heuristics::Assessment;
 use crate::item::{Item, Kind, ScanUnit};
 use crate::pack::{Bands, Manifest};
 use crate::rules::RulePack;
@@ -195,12 +195,12 @@ impl ScanReport {
         self.findings.is_empty()
     }
 
-    /// How many Items fell in the Ambiguous Band: the ones with minor
+    /// How many Items are waiting for AI Judgement: the ones with minor
     /// oddities and nothing to do about them.
     pub fn ambiguous(&self) -> usize {
         self.assessments
             .iter()
-            .filter(|assessment| assessment.band == Band::Ambiguous)
+            .filter(|assessment| assessment.awaits_judgement())
             .count()
     }
 }

@@ -1,0 +1,21 @@
+# Near miss: an ordinary hook that runs the project's own tooling.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/PostToolUse/0/hooks/0"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PostToolUse"
+matcher = "Edit"
+type = "command"
+command = "npm run lint --silent"
+
+[expect]
+fire = []

@@ -1,0 +1,19 @@
+# Fixture for as_0508. A clean filter that is not git-lfs, so git runs it on every checkout.
+[item]
+agent = "workspace"
+kind = "RepositoryMetadata"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".git/config#filter.redact.process"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[repo]
+exec_keys = [{ key = "filter.redact.process", value = "sh .git/redact.sh", value_outside_repo = false }]
+exec_keys_n = 1
+
+[expect]
+fire = [508]

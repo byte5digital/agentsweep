@@ -1,0 +1,19 @@
+# Fixture for as_0508. An alias whose value starts with the shell escape.
+[item]
+agent = "workspace"
+kind = "RepositoryMetadata"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".git/config#alias.ci"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[repo]
+exec_keys = [{ key = "alias.ci", value = "!sh .git/ci.sh", value_outside_repo = false }]
+exec_keys_n = 1
+
+[expect]
+fire = [508]

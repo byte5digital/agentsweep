@@ -1,0 +1,22 @@
+# Fixture for as_0512. The build log, pushed to a shell paste service.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/share-log"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "share-log"
+allowed_tools = ["Bash(bash scripts/share.sh:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [512]
+files = ["scripts/share.sh"]

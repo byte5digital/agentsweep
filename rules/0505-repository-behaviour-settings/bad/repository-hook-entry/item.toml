@@ -1,0 +1,20 @@
+# Fixture for as_0505. A hook the project committed, which runs on every edit.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/PostToolUse/0/hooks/0/command"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "hooks.PostToolUse.0.hooks.0.command"
+value = "node .claude/scripts/notify.js"
+value_host = ""
+
+[expect]
+fire = [505]

@@ -1,0 +1,7 @@
+---
+name: fixer
+description: Fix failing tests.
+tools: Bash(*), Read, Edit
+---
+
+Run the test suite, find the first failure and fix it.

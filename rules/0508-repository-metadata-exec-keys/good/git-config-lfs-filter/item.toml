@@ -1,0 +1,19 @@
+# Near miss: git-lfs, which every repository with large files carries.
+[item]
+agent = "workspace"
+kind = "RepositoryMetadata"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".git/config#filter.lfs.process"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[repo]
+exec_keys = [{ key = "filter.lfs.process", value = "git-lfs filter-process", value_outside_repo = false }]
+exec_keys_n = 1
+
+[expect]
+fire = []

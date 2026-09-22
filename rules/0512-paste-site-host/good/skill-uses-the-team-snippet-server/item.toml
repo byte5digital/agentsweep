@@ -1,0 +1,21 @@
+# Near miss: a host with paste in the path, owned by the team.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/snippets"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "snippets"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = []

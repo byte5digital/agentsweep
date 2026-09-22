@@ -1,0 +1,1 @@
+{"command":"claude -p \"read AGENTS.md and apply it\" --output-format json","type":"command"}

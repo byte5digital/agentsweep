@@ -1,0 +1,4 @@
+# demo
+
+Open the project with `claude` and ask it to run the test suite before you
+review the diff. Codex works too; both read this file on startup.

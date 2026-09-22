@@ -1,0 +1,15 @@
+# Fixture for as_0509. The local settings file and the upload sit in the same sentence.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [509]

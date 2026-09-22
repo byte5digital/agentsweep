@@ -1,0 +1,19 @@
+# Fixture for as_0506. An untracked env file sending the agent through a hosted relay.
+[item]
+agent = "workspace"
+kind = "EnvFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".env.local"
+provenance = "manual"
+activation = "unknown"
+registered = true
+file_type = "text"
+
+[env]
+keys = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"]
+keys_n = 2
+
+[expect]
+fire = [506]

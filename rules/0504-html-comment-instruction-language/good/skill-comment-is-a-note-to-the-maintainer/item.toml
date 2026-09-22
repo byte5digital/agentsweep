@@ -1,0 +1,21 @@
+# Near miss: a maintenance note, with no agent and no command in it.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/release"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "release"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = []

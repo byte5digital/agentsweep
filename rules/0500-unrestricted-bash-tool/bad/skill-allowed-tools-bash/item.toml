@@ -1,0 +1,22 @@
+# Fixture for as_0500. A skill that grants the whole shell and nothing narrower.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/release-notes"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "release-notes"
+allowed_tools = ["Bash", "Read"]
+allowed_tools_n = 2
+has_dynamic_context = false
+
+[expect]
+fire = [500]
+files = ["SKILL.md"]

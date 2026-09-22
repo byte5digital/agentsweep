@@ -1,0 +1,4 @@
+# demo
+
+When a test fails, paste the last twenty lines of the output into the pull
+request description so the reviewer sees it without running anything.

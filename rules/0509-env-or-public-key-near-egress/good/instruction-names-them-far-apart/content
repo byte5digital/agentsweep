@@ -1,0 +1,22 @@
+# Setup
+
+Copy .env.example to .env and fill in the two values the team shares.
+
+The first value names the database the tests run against. Use the local one
+unless you are reproducing a failure from the shared environment, in which
+case ask before you point anything at it, because the shared database is
+also what the nightly reports read and a long-running query there is
+noticed quickly. The second value is the feature flag bundle; it changes
+about once a month and the default in the example file is usually right.
+
+If a dependency will not install, the registry may be slow. Check the status
+page in the browser first, and only then reach for a command line tool; the
+usual advice is to wait a minute and try again rather than to work around it,
+because a half-installed tree costs more time than the wait does.
+
+Once both values are in place, run the test suite. It takes about four
+minutes on a laptop and rather less in the pipeline, where it also runs
+against the older runtime we still support.
+
+When everything passes, fetch the sample data with `curl -fsSL
+https://data.example.com/sample.json -o fixtures/sample.json` and commit it.

@@ -1,0 +1,25 @@
+# Fixture for as_0556. Plain http to a host across the network.
+[item]
+agent = "codex"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = "config.toml#/mcp_servers/search"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "search"
+transport = "http"
+command = ""
+args = [""]
+args_n = 0
+package = ""
+package_version = ""
+url = "http://search.example.invalid/mcp"
+url_host = "search.example.invalid"
+
+[expect]
+fire = [556]

@@ -1,0 +1,18 @@
+# Near miss: a tool list with no shell in it at all.
+[item]
+agent = "claude-code"
+kind = "Subagent"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/agents/reviewer.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[subagent]
+name = "reviewer"
+
+[expect]
+fire = []

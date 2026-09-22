@@ -1,0 +1,15 @@
+# Near miss: the agent is named, but nothing starts it without a person.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

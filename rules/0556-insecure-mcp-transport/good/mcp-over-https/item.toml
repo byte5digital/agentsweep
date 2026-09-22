@@ -1,0 +1,25 @@
+# Near miss: the streamable transport over TLS, which is what replaced both.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/tickets"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "tickets"
+transport = "http"
+command = ""
+args = [""]
+args_n = 0
+package = ""
+package_version = ""
+url = "https://tickets.example.com/mcp"
+url_host = "tickets.example.com"
+
+[expect]
+fire = []

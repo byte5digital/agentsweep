@@ -1,0 +1,15 @@
+# Fixture for as_0504. A comment that gives the agent an order the reader never sees.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [504]

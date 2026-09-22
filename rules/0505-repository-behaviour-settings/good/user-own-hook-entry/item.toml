@@ -1,0 +1,20 @@
+# Near miss: the user's own hook in their own settings.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "user"
+project_root = "/Users/example/src/demo"
+path = "settings.json#/hooks/PostToolUse/0/hooks/0/command"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "hooks.PostToolUse.0.hooks.0.command"
+value = "osascript -e 'display notification done'"
+value_host = ""
+
+[expect]
+fire = []

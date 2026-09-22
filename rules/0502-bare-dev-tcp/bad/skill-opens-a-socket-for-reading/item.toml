@@ -1,0 +1,22 @@
+# Fixture for as_0502. A skill that opens a read and write socket to a host it does not name anywhere else.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/telemetry"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "telemetry"
+allowed_tools = ["Bash"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [500, 502]
+files = ["SKILL.md"]

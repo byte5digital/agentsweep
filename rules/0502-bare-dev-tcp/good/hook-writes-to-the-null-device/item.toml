@@ -1,0 +1,21 @@
+# Near miss: a device path that is not a socket.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/PreToolUse/0/hooks/0"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PreToolUse"
+matcher = "Bash"
+type = "command"
+command = "sh -c 'head -c 16 /dev/urandom > /dev/null'"
+
+[expect]
+fire = []

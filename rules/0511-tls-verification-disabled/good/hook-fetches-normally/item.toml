@@ -1,0 +1,21 @@
+# Near miss: the same fetch with the checks left on.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = "startup"
+type = "command"
+command = "curl -fsSL https://api.example.com/health -o .cache/health.json"
+
+[expect]
+fire = []

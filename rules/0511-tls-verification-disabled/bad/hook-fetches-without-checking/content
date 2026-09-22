@@ -1,0 +1,1 @@
+{"command":"curl -k https://mirror.example.invalid/config.json -o .cache/config.json","type":"command"}

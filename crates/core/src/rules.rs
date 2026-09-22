@@ -488,6 +488,20 @@ fn boolean(rule: &str, meta: &BTreeMap<&str, MetaValue<'_>>, key: &str) -> Resul
 mod tests {
     use super::*;
 
+    /// The kinds rule 0900 scans, which the v1 list calls "text".
+    const TEXT_KINDS: &[Kind] = &[
+        Kind::Skill,
+        Kind::InstructionFile,
+        Kind::Hook,
+        Kind::McpServer,
+        Kind::Plugin,
+        Kind::Subagent,
+        Kind::Marketplace,
+        Kind::Workflow,
+        Kind::ExecPolicy,
+        Kind::Generic,
+    ];
+
     #[test]
     fn the_bundled_pack_carries_every_rule_of_the_corpus() {
         assert!(
@@ -530,18 +544,90 @@ mod tests {
         }
     }
 
+    /// A Rule earns the right to quarantine by surviving a release, so every
+    /// Rule of the v1 pack ships on Probation. A Heuristic cannot quarantine
+    /// whatever its status says, so there is no Probation for one and every
+    /// Heuristic ships stable.
     #[test]
-    fn every_rule_of_the_v1_pack_ships_on_probation_and_every_heuristic_stable() {
+    fn every_rule_ships_on_probation_and_every_heuristic_ships_stable() {
         let pack = RulePack::bundled().expect("the bundled pack compiles");
         for meta in pack.metas() {
             let expected = match meta.tier {
                 Tier::Heuristics => RuleStatus::Stable,
                 _ => RuleStatus::Probation,
             };
+            assert_eq!(meta.status, expected, "{} ships {}", meta.name, meta.status);
+        }
+    }
+
+    /// The Heuristics of the v1 pack, with the Weight and the kinds the spec
+    /// allocates to each. A Weight changes what the user is shown, so it
+    /// changes only with a pack release that means to change it.
+    #[test]
+    fn the_first_heuristics_carry_the_weights_and_kinds_they_were_allocated() {
+        let pack = RulePack::bundled().expect("the bundled pack compiles");
+        let expected: [(i64, Option<i64>, &[Kind]); 13] = [
+            (500, Some(1), &[Kind::Skill, Kind::Subagent]),
+            (
+                501,
+                Some(2),
+                &[
+                    Kind::Skill,
+                    Kind::Hook,
+                    Kind::Plugin,
+                    Kind::Subagent,
+                    Kind::InstructionFile,
+                ],
+            ),
+            (
+                502,
+                Some(2),
+                &[Kind::Skill, Kind::Hook, Kind::Plugin, Kind::McpServer],
+            ),
+            (503, Some(1), TEXT_KINDS),
+            (
+                504,
+                Some(2),
+                &[
+                    Kind::InstructionFile,
+                    Kind::Skill,
+                    Kind::Subagent,
+                    Kind::Plugin,
+                ],
+            ),
+            (505, Some(2), &[Kind::SettingsEntry]),
+            (506, None, &[Kind::EnvFile, Kind::SettingsEntry]),
+            (507, None, &[Kind::McpServer]),
+            (508, Some(2), &[Kind::RepositoryMetadata]),
+            (
+                509,
+                Some(2),
+                &[
+                    Kind::InstructionFile,
+                    Kind::Skill,
+                    Kind::Hook,
+                    Kind::Subagent,
+                    Kind::Plugin,
+                ],
+            ),
+            (511, Some(1), TEXT_KINDS),
+            (512, Some(2), TEXT_KINDS),
+            (556, None, &[Kind::McpServer]),
+        ];
+
+        for (id, weight, kinds) in expected {
+            let meta = pack
+                .metas()
+                .find(|meta| meta.id == id)
+                .unwrap_or_else(|| panic!("heuristic {id:04} is in the pack"));
+            assert_eq!(meta.tier, Tier::Heuristics, "{id:04}");
+            assert_eq!(meta.status, RuleStatus::Stable, "{id:04}");
+            assert_eq!(meta.weight, weight, "{id:04}");
+            assert_eq!(meta.kinds, kinds, "{id:04}");
             assert_eq!(
-                meta.status, expected,
-                "{} does not ship as {expected}",
-                meta.name
+                meta.category == Category::Exposure,
+                weight.is_none(),
+                "{id:04}: only an Exposure Heuristic carries no Weight"
             );
         }
     }

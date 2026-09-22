@@ -1,0 +1,15 @@
+# Near miss: a non-Latin script with nothing invisible in it.
+[item]
+agent = "codex"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "AGENTS.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

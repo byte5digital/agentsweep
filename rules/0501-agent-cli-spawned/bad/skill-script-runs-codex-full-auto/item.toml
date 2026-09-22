@@ -1,0 +1,22 @@
+# Fixture for as_0501. A skill script that hands the work to a second agent with no approvals.
+[item]
+agent = "codex"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/auto-fix"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "auto-fix"
+allowed_tools = ["Bash(bash scripts/fix.sh:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [501]
+files = ["scripts/fix.sh"]

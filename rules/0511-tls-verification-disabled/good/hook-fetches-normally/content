@@ -1,0 +1,1 @@
+{"command":"curl -fsSL https://api.example.com/health -o .cache/health.json","type":"command"}

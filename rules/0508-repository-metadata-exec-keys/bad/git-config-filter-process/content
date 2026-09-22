@@ -1,0 +1,2 @@
+[filter "redact"]
+	process = sh .git/redact.sh

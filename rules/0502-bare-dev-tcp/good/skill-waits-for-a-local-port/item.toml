@@ -1,0 +1,21 @@
+# Near miss: waiting for a service on this machine to accept connections.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/wait-for-db"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "wait-for-db"
+allowed_tools = ["Bash(bash:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = []

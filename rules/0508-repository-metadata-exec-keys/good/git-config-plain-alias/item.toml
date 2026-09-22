@@ -1,0 +1,19 @@
+# Near miss: an alias that expands to git's own subcommand and runs no shell.
+[item]
+agent = "workspace"
+kind = "RepositoryMetadata"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".git/config#alias.lg"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[repo]
+exec_keys = [{ key = "alias.lg", value = "log --oneline --graph", value_outside_repo = false }]
+exec_keys_n = 1
+
+[expect]
+fire = []

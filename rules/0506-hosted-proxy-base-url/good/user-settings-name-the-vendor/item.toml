@@ -1,0 +1,19 @@
+# Near miss: the vendor's own host, written out in full.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "user"
+path = "settings.json#/env/ANTHROPIC_BASE_URL"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "env.ANTHROPIC_BASE_URL"
+value = "https://api.anthropic.com"
+value_host = "api.anthropic.com"
+
+[expect]
+fire = []

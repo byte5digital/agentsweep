@@ -103,9 +103,17 @@ pub struct Assessment {
 }
 
 impl Assessment {
-    /// True when the Item belongs in the AI Judgement queue.
+    /// True when the Score fell between the thresholds.
     pub fn is_ambiguous(&self) -> bool {
         self.band == Band::Ambiguous
+    }
+
+    /// True when the Item belongs in the AI Judgement queue: its Score is
+    /// Ambiguous and nothing else has anything to say about it. An Item whose
+    /// Heuristics folded into a Rule Finding is already flagged, so asking an
+    /// engine about it would change nothing.
+    pub fn awaits_judgement(&self) -> bool {
+        self.band == Band::Ambiguous && self.findings.is_empty()
     }
 }
 

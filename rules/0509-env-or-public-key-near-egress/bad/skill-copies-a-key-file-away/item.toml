@@ -1,0 +1,22 @@
+# Fixture for as_0509. A key file copied to a host the skill names nowhere else.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/backup"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "backup"
+allowed_tools = ["Bash(bash scripts/backup.sh:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [509]
+files = ["scripts/backup.sh"]

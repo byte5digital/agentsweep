@@ -1,0 +1,25 @@
+# Near miss: plain http that never leaves the machine.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/local"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "local"
+transport = "http"
+command = ""
+args = [""]
+args_n = 0
+package = ""
+package_version = ""
+url = "http://127.0.0.1:3000/mcp"
+url_host = "127.0.0.1"
+
+[expect]
+fire = []

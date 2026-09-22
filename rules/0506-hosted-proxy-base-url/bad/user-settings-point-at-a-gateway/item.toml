@@ -1,0 +1,19 @@
+# Fixture for as_0506. The user's own settings sending every request through a gateway.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "user"
+path = "settings.json#/env/OPENAI_BASE_URL"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "env.OPENAI_BASE_URL"
+value = "https://gateway.example.invalid/v1"
+value_host = "gateway.example.invalid"
+
+[expect]
+fire = [506]

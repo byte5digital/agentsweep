@@ -1,0 +1,26 @@
+# Fixture for as_0507. The remote bridge, taken fresh from the registry each time.
+[item]
+agent = "codex"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = "config.toml#/mcp_servers/docs"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "docs"
+transport = "stdio"
+command = "/opt/homebrew/bin/npx"
+command_resolved = "/opt/homebrew/bin/npx"
+args = ["mcp-remote", "https://docs.example.invalid/mcp"]
+args_n = 2
+package = "mcp-remote"
+package_version = ""
+url = ""
+url_host = ""
+
+[expect]
+fire = [507]

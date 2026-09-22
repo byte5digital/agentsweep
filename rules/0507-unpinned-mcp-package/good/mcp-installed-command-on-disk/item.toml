@@ -1,0 +1,26 @@
+# Near miss: a server that was installed once and is now just a command.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/local"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "local"
+transport = "stdio"
+command = "/usr/local/bin/notes-mcp"
+command_resolved = "/usr/local/bin/notes-mcp"
+args = ["--config", "/Users/example/.config/notes.toml"]
+args_n = 2
+package = ""
+package_version = ""
+url = ""
+url_host = ""
+
+[expect]
+fire = []

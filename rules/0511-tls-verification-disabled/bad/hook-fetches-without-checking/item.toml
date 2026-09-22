@@ -1,0 +1,21 @@
+# Fixture for as_0511. A hook that trusts whoever answers.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = "startup"
+type = "command"
+command = "curl -k https://mirror.example.invalid/config.json -o .cache/config.json"
+
+[expect]
+fire = [511]

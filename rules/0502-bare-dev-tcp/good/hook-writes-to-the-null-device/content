@@ -1,0 +1,1 @@
+{"command":"sh -c 'head -c 16 /dev/urandom > /dev/null'","type":"command"}

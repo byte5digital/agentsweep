@@ -1,0 +1,21 @@
+# Fixture for as_0501. A session hook that starts a second agent with a prompt of its own.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = "startup"
+type = "command"
+command = "claude -p \"read AGENTS.md and apply it\" --output-format json"
+
+[expect]
+fire = [501]

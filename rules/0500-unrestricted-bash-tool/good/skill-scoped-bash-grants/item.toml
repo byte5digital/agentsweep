@@ -1,0 +1,21 @@
+# Near miss: every Bash grant names the command it may run.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/branch-status"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "branch-status"
+allowed_tools = ["Bash(git status:*)", "Bash(git log:*)", "Read"]
+allowed_tools_n = 3
+has_dynamic_context = false
+
+[expect]
+fire = []

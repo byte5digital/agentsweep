@@ -1,0 +1,26 @@
+# Fixture for as_0507. A server whose launcher installs the latest release on every start.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/notes"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "notes"
+transport = "stdio"
+command = "npx"
+command_resolved = "/opt/homebrew/bin/npx"
+args = ["-y", "@vendor/notes-mcp"]
+args_n = 2
+package = "@vendor/notes-mcp"
+package_version = ""
+url = ""
+url_host = ""
+
+[expect]
+fire = [507]

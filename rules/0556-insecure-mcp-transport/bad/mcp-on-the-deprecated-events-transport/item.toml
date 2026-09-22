@@ -1,0 +1,25 @@
+# Fixture for as_0556. The transport the specification replaced.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/tickets"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "tickets"
+transport = "sse"
+command = ""
+args = [""]
+args_n = 0
+package = ""
+package_version = ""
+url = "https://tickets.example.invalid/sse"
+url_host = "tickets.example.invalid"
+
+[expect]
+fire = [556]

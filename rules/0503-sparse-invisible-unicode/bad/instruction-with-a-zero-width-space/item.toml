@@ -1,0 +1,15 @@
+# Fixture for as_0503. One zero width space inside a word, where nothing joins anything.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [503]

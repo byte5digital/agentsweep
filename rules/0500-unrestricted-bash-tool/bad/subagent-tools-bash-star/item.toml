@@ -1,0 +1,18 @@
+# Fixture for as_0500. A subagent whose tool list grants Bash with a wildcard argument.
+[item]
+agent = "claude-code"
+kind = "Subagent"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/agents/fixer.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[subagent]
+name = "fixer"
+
+[expect]
+fire = [500]

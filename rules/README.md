@@ -152,9 +152,9 @@ ExecPolicy, Workflow, InstructionFile and Generic have no view: rules on them ar
 
 ## Packs
 
-A Rule Pack is this tree plus `manifest.json` (pack version, minimum engine version, per-file sha256) and a detached signature. The bundled pack is the same artifact embedded at build time. A fetched pack with a higher version replaces the bundled one wholesale; a pack whose minimum engine version exceeds the running app is ignored with a visible notice. Packs are released from this repository on their own tag series `rules-v<N>`, independent of app releases. Key handling is the distribution ticket's.
+A Rule Pack is this tree plus `manifest.json` (pack version, minimum engine version, the two band thresholds, per-file sha256) and a detached signature. What the pack says about itself, thresholds included, is committed at the pack root as `pack.json`; the pack build reads it, adds the hashes and writes the manifest, and the core embeds the same file so the running process reads its thresholds from a manifest rather than from a number in the code. The bundled pack is the same artifact embedded at build time, with no hashes because the code signature stands behind its bytes. A fetched pack with a higher version replaces the bundled one wholesale; a pack whose minimum engine version exceeds the running app is ignored with a visible notice. Packs are released from this repository on their own tag series `rules-v<N>`, independent of app releases. Key handling is the distribution ticket's.
 
-Developers may drop their own rules into the app's `rules.d/` directory. They load as an unsigned pack forced to tier 2: they can flag, never quarantine (weight handling under "Heuristics").
+Developers may drop their own rules into the app's `rules.d/` directory, one or more `.yar` files named however they like. They load as an unsigned pack forced to tier 2 before the meta lint sees them: whatever `tier` a rule declares it becomes a heuristic, so it can flag and never quarantine, and a threat rule carries the weight it declares, capped at 3 and defaulting to 2 (weight handling under "Heuristics").
 
 ## Writing a rule
 

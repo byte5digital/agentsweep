@@ -13,6 +13,8 @@
 #![warn(missing_docs)]
 
 pub mod adapter;
+pub mod chain;
+pub mod envelope;
 pub mod finding;
 pub mod host;
 pub mod item;

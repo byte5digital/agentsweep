@@ -1,0 +1,51 @@
+# Dependency policy for AgentSweep, enforced by `cargo deny` in CI.
+#
+# AgentSweep is a security utility that ships as a notarized macOS bundle, so a
+# dependency reaches a user's machine with the same privileges the user has.
+# Three questions decide whether it may: is it free of known advisories, is its
+# licence compatible with Apache-2.0, and does it come from crates.io.
+
+[graph]
+# macOS 14 and later, universal binary. The core is portable, so the other
+# targets return with the integration layer for Windows and Linux.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+# A known advisory fails the build. Every exception is an entry below with a
+# reason, never a relaxed default.
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Apache-2.0 for AgentSweep itself, including the rule corpus. The permissive
+# licences below are the ones a dependency may carry. Anything else needs an
+# entry under `exceptions` and a look at what it obliges us to ship.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# Everything comes from crates.io. A git dependency would put code in the bundle
+# that no registry ever saw, so it needs a deliberate entry here.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

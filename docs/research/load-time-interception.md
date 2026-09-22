@@ -41,7 +41,7 @@ Of the 33 documented events, these are the ones that sit between "session exists
 | `CwdChanged`, `DirectoryAdded`, `FileChanged` | `cd` in the main conversation; `/add-dir` or SDK `register_repo_root`; a watched file changed on disk | No | nothing; `DirectoryAdded` runs after the directory is already added and Claude Code does not wait for it | 600 s | — | `hooks#cwdchanged-output`, `hooks#directoryadded`, `hooks#filechanged-output` |
 | `SubagentStart` | A subagent is spawned | No; context injection only | nothing | 600 s | — | `hooks#subagentstart` |
 
-The universal `continue: false` field ("Claude stops processing entirely after the hook runs") is accepted on every event but the reference lists the events that discard it; `SessionStart` is not listed among them and is also not documented as honouring it. See section 7.
+The universal `continue: false` field ("Claude stops processing entirely after the hook runs") is accepted on every event but the reference lists the events that discard it; `SessionStart` is not listed among them. The decision-control table nevertheless classifies `SessionStart` as "Context only" with "No blocking or decision control" (`hooks#decision-control`), and the per-event exit-code table says exit 2 only shows stderr to the user, so even if `continue: false` were honoured it would stop Claude after the session's Surfaces have loaded, not before. See section 7.
 
 Async hooks (`async: true`) never block: "response fields like `decision`, `permissionDecision`, and `continue` have no effect" (`hooks#run-hooks-in-the-background`).
 
@@ -137,7 +137,7 @@ Feasible in v1 as a Settings toggle, but as a **use-time gate**, not load-time i
 
 ## 7. Unverified points
 
-- Claude Code `SessionStart` and the universal `continue: false`: the reference says every event accepts the field and lists the events that discard it; `SessionStart` is on neither list. Verify by running a `SessionStart` hook that prints `{"continue": false, "stopReason": "x"}` and observing whether the first prompt is processed. Even if honoured, it would end processing after loading, not before.
+- Claude Code `SessionStart` and the universal `continue: false`: the reference says every event accepts the field and lists the events that discard it; `SessionStart` is on neither list, and the decision-control table's "No blocking or decision control" row for it does not name the universal fields. Verify by running a `SessionStart` hook that prints `{"continue": false, "stopReason": "x"}` and observing whether the first prompt is processed. Even if honoured, it would end processing after loading, not before.
 - Claude Code `Skill` tool `tool_input` keys (`skill`, `args`) are taken from the tool schema of the running binary (2.1.273), not from the hooks reference, which lists no schema for `Skill`. Verify with a `PreToolUse` hook matching `Skill` that logs stdin.
 - Whether `UserPromptExpansion` blocking runs before or after a skill's `` !`cmd` `` inline commands execute. The skills doc says those run "before content is sent"; the ordering against the hook is not documented. Verify with a skill whose inline command touches a file and a hook that blocks its expansion.
 - Whether Claude Code fires `SessionStart` before or after the interactive workspace-trust dialog in a never-trusted folder (the docs say hooks are held back until acceptance, not where in the startup sequence the dialog sits).

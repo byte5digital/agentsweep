@@ -32,7 +32,7 @@ A fixture directory holds `item.toml` and exactly one of:
 
 ```toml
 [item]            # common fields, see below
-[mcp] / [hook] / [settings] / [skill] / [subagent] / [env] / [repo]   # the view for the kind, if any
+[mcp] / [hook] / [settings] / [skill] / [plugin] / [marketplace] / [subagent] / [env] / [repo]   # the view for the kind, if any
 [expect]
 fire = [1]        # rule ids that must fire; [] for a near miss
 files = ["scripts/deploy.sh"]   # optional, which files in a tree carry the match
@@ -115,22 +115,30 @@ item      agent, kind, shape (file|tree|entry), scope (managed|user|project), pr
           activation (active|inactive|unknown), activation_reason, registered, size, is_symlink,
           baseline (unchanged|changed|added|none, see below),
           provenance_official (true when provenance is an official marketplace),
-          link_target, file_type (text|binary|archive|office|bytecode|unknown), has_rtl_script,
+          link_target, file_type (text|executable|binary|archive|office|bytecode|image|unknown), has_rtl_script,
+          whitespace_percent, max_blank_run (rule 0011),
           file (relative path within a tree, set per file scanned)
 mcp       name, transport (stdio|http|sse), command, command_resolved, command_in_temp,
           command_in_downloads, command_in_unknown_hidden_home, command_world_writable,
           args[], args_n, package, package_version, url, url_host, env_keys[], env_keys_n,
           header_keys[], header_keys_n, has_literal_authorization
-hook      event, matcher, type, command, command_resolved, url
-settings  key_path (dotted, array index as .N), value (string form), value_host
+hook      event, matcher, type, command, command_resolved, command_file_type (rule 0014), url
+settings  key_path (dotted, array index as .N), value (string form), value_host,
+          trust_has_sessions (heuristic 0589)
 skill     name, allowed_tools[], allowed_tools_n, has_dynamic_context
+plugin    name, name_reserved_distance, bin_names[], bin_names_n, has_monitors        (rules 0016, 0017)
+marketplace  name, owner, name_reserved_distance,
+          entries[] {name, source_kind (github|git|url|command|local), source_host, pinned, has_headers_helper},
+          entries_n                                                                   (rules 0017, 0586, 0587)
 subagent  name, permission_mode
 env       keys[], keys_n            (values are sensitive and reach rules only as bytes)
 repo      exec_keys[] {key, value, value_outside_repo}, exec_keys_n, gitdir_outside_repo,
           commondir_outside_repo, hook_executables[], hook_executables_n
 ```
 
-Plugin, Marketplace, ExecPolicy, Workflow, InstructionFile and Generic have no view yet: rules on them are byte rules. A field is added only together with the first rule that reads it.
+ExecPolicy, Workflow, InstructionFile and Generic have no view: rules on them are byte rules. A field is added only together with the first rule that reads it; fields tagged with a rule id above were decided with the v1 rule list (wayfinder ticket "Initial rule corpus: the v1 list") and land with that rule.
+
+`file_type` `executable` means a native executable (Mach-O, PE, ELF, a `.node` addon); `binary` is any other non-text file that is not an archive, office document, bytecode or image. `name_reserved_distance` is the edit distance from the name to the nearest reserved marketplace name (`claude-code-marketplace`, `claude-plugins-official`, `anthropic-plugins`, `agent-skills`). `trust_has_sessions` is true when the Agent holds session history for the project a trust entry names.
 
 `item.baseline` compares the Item with the hash AgentSweep last accepted for it. `unchanged`: equal. `changed`: different. `added`: first seen on a Surface that was already covered, not yet accepted. `none`: first seen when its Surface was not covered yet (first Scan, a project new to the Agent's registry, a newly installed Agent), or scanned without the daemon (pre-open scan, standalone CLI); never Drift. Known actions (AgentSweep's own writes, content that carries Trust, an Acknowledge) are applied before rules run, so such content reads `unchanged`. The accepted hash advances only when a Scan leaves the Item without an open Finding, so `changed` and `added` persist while a Finding on the Item is open and a Score that includes them stays stable. Rules never raise the "was that you?" Drift Finding; the core does (ADR 0007).
 

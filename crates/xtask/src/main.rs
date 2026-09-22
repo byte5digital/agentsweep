@@ -1,0 +1,118 @@
+//! The build tool for the Rule corpus and the Rule Pack.
+//!
+//! Everything here also runs from `cargo test`; the commands exist so a rule
+//! author can do one job at a time and see the whole report, and so a release
+//! workflow can build a pack without a test harness around it.
+
+use std::fs;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use agentsweep_core::VERSION;
+use agentsweep_core::pack::{Bands, Manifest};
+use agentsweep_core::rules::RulePack;
+use agentsweep_xtask::{corpus, repo_root};
+
+const USAGE: &str = "\
+agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
+
+    corpus                      run every Fixture of every Rule
+    pack [options]              write a Rule Pack manifest
+        --pack-version <n>      the pack version, a monotonic integer (default 1)
+        --minimum-engine <v>    the lowest engine version that may load it
+        --out <dir>             where the manifest lands
+                                (default target/agentsweep-pack)
+";
+
+fn main() -> ExitCode {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let Some(command) = arguments.first() else {
+        eprint!("{USAGE}");
+        return ExitCode::from(2);
+    };
+
+    let result = match command.as_str() {
+        "corpus" => run_corpus(),
+        "pack" => build_pack(&arguments[1..]),
+        other => Err(format!("`{other}` is not a command\n\n{USAGE}")),
+    };
+
+    match result {
+        Ok(report) => {
+            print!("{report}");
+            ExitCode::SUCCESS
+        }
+        Err(problem) => {
+            eprint!("{problem}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Runs every Fixture and reports what did not hold.
+fn run_corpus() -> Result<String, String> {
+    let root = repo_root();
+    let pack = RulePack::bundled().map_err(|error| format!("{error}\n"))?;
+    let fixtures = corpus::fixtures(&root.join("rules")).map_err(|error| format!("{error}\n"))?;
+    let outcomes = corpus::run(&pack, &fixtures).map_err(|error| format!("{error}\n"))?;
+
+    let failed: Vec<String> = outcomes
+        .iter()
+        .filter(|outcome| !outcome.passed())
+        .map(|outcome| outcome.report())
+        .collect();
+    if failed.is_empty() {
+        return Ok(format!(
+            "{} fixtures over {} rules, all as expected\n",
+            fixtures.len(),
+            pack.len()
+        ));
+    }
+    Err(format!(
+        "{}\n{} of {} fixtures did not hold\n",
+        failed.join(""),
+        failed.len(),
+        fixtures.len()
+    ))
+}
+
+/// Writes a Rule Pack manifest for the corpus as it stands.
+fn build_pack(arguments: &[String]) -> Result<String, String> {
+    let root = repo_root();
+    let mut pack_version = 1u64;
+    let mut minimum_engine = VERSION.to_string();
+    let mut out = root.join("target").join("agentsweep-pack");
+
+    let mut rest = arguments.iter();
+    while let Some(argument) = rest.next() {
+        let mut value = || {
+            rest.next()
+                .cloned()
+                .ok_or_else(|| format!("{argument} takes a value\n\n{USAGE}"))
+        };
+        match argument.as_str() {
+            "--pack-version" => {
+                pack_version = value()?
+                    .parse()
+                    .map_err(|_| "the pack version is a monotonic integer\n".to_string())?;
+            }
+            "--minimum-engine" => minimum_engine = value()?,
+            "--out" => out = PathBuf::from(value()?),
+            other => return Err(format!("`{other}` is not an option of pack\n\n{USAGE}")),
+        }
+    }
+
+    let manifest = Manifest::of_pack(&root, pack_version, &minimum_engine, Bands::V1)
+        .map_err(|error| format!("{error}\n"))?;
+    fs::create_dir_all(&out).map_err(|error| format!("{}: {error}\n", out.display()))?;
+    let path = manifest.write(&out).map_err(|error| format!("{error}\n"))?;
+    Ok(format!(
+        "pack {} for engine {} and up, {} files, bands {} and {}\n{}\n",
+        manifest.pack_version,
+        manifest.minimum_engine_version,
+        manifest.files.len(),
+        manifest.bands.ambiguous_at,
+        manifest.bands.suspicious_at,
+        path.display()
+    ))
+}

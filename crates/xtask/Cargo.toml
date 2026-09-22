@@ -1,0 +1,24 @@
+[package]
+name = "agentsweep-xtask"
+description = "Build work for the AgentSweep Rule corpus and Rule Pack: the corpus runner, the Indicator List rendering and the pack build."
+# Nothing ships this: it is the build side of the corpus and of a pack release.
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "agentsweep-xtask"
+path = "src/main.rs"
+
+[dependencies]
+agentsweep-core.workspace = true
+serde_json = "1.0.151"
+# Only the parser: the corpus runner reads an `item.toml` and writes nothing.
+toml = { version = "1.1.6", default-features = false, features = ["parse", "serde", "std"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -8,6 +8,7 @@ members = [
     "crates/adapters/codex",
     "crates/adapters/workspace",
     "crates/adapter-conformance",
+    "crates/xtask",
 ]
 
 # Inherited by every crate in the workspace. The stable toolchain is pinned here

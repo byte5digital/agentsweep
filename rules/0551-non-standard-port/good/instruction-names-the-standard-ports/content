@@ -1,0 +1,5 @@
+# demo
+
+The public API answers at https://api.example.invalid:443/v1 and the plain
+redirect at http://api.example.invalid:80/v1. The documentation site is
+https://docs.example.invalid/guide with no port at all.

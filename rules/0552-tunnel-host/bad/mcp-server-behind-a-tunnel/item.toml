@@ -1,0 +1,21 @@
+# Fixture for as_0552. A server the agent talks to through somebody's tunnel.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".mcp.json#/mcpServers/inventory"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "inventory"
+transport = "http"
+url = "https://a3f1b20c4d91.ngrok-free.app/mcp"
+url_host = "a3f1b20c4d91.ngrok-free.app"
+
+[expect]
+fire = [552]

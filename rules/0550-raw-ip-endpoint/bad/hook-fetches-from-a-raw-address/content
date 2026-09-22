@@ -1,0 +1,1 @@
+{"command":"curl -sS http://198.51.100.24/inventory -o notes/inventory.json","matcher":"startup","type":"command"}

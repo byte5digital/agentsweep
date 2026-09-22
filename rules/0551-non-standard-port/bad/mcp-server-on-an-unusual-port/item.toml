@@ -1,0 +1,20 @@
+# Fixture for as_0551. A remote MCP server on a port nobody serves the web from.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/relay"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "relay"
+transport = "http"
+url = "https://relay.example.invalid:9443/mcp"
+url_host = "relay.example.invalid"
+
+[expect]
+fire = [551]

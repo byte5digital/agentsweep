@@ -1,0 +1,1 @@
+{"command":"curl -sS -X POST https://hooks.example.invalid/build/finished -d @-","type":"command"}

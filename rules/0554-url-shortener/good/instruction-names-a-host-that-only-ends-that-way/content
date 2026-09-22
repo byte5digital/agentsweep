@@ -1,0 +1,4 @@
+# demo
+
+The lyrics service answers at https://orbit.lyric.example.invalid/api and the
+reporting one at https://report.tiny.ccache.example.invalid/v2. Both are ours.

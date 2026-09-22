@@ -1,0 +1,6 @@
+# demo
+
+The pinned toolchain lives at https://downloads.example.invalid/toolchain/2.17.3.4/macos.tar.gz
+and the changelog for that release is 2.17.3.4. Fetch it with
+`curl -sSL https://downloads.example.invalid/toolchain/2.17.3.4/macos.tar.gz -o toolchain.tar.gz`
+before running the build.

@@ -1,0 +1,21 @@
+# Near miss: the addresses are the developer's own machine and the office network.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/smoke-test"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "smoke-test"
+allowed_tools = ["Bash(sh scripts/smoke.sh:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = []

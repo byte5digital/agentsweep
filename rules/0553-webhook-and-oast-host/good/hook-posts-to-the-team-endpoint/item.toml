@@ -1,0 +1,22 @@
+# Near miss: the same shape of hook, posting to the team's own endpoint.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/Stop/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "Stop"
+matcher = ""
+type = "command"
+command = "curl -sS -X POST https://hooks.example.invalid/build/finished -d @-"
+command_resolved = "/usr/bin/curl"
+command_file_type = "executable"
+
+[expect]
+fire = []

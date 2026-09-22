@@ -1,0 +1,22 @@
+# Near miss: the same fetch, from a host the company pays for.
+[item]
+agent = "codex"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".codex/hooks.json#/hooks/SessionStart/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = ""
+type = "command"
+command = "curl -sS https://build-cache.example.invalid/list -o .codex/cache-list.json"
+command_resolved = "/usr/bin/curl"
+command_file_type = "executable"
+
+[expect]
+fire = []

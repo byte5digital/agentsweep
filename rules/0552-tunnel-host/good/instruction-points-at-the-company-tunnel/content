@@ -1,0 +1,5 @@
+# demo
+
+We used to demo with ngrok; the account page is https://dashboard.ngrok.com.
+Since last quarter the shared tunnel is https://tunnel.example.invalid, run on
+our own Cloudflare account (https://cloudflare.com). Use that one.

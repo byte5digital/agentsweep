@@ -1,0 +1,21 @@
+# Fixture for as_0555. The prerequisite tool comes from a free app host.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/pdf-tools"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "pdf-tools"
+allowed_tools = ["Bash(sh scripts/install.sh:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [555]
+files = ["scripts/install.sh"]

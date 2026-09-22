@@ -1,0 +1,22 @@
+# Fixture for as_0550. A skill that hands its report to a numbered host over a socket.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/skills/collect-report"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "collect-report"
+allowed_tools = ["Bash(sh scripts/send.sh:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [550]
+files = ["scripts/send.sh"]

@@ -1,0 +1,14 @@
+# Near miss: the subject is link shorteners, and not one host is named.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "user"
+path = ".claude/CLAUDE.md"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

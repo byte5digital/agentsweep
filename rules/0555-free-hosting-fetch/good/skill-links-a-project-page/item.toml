@@ -1,0 +1,20 @@
+# Near miss: the free host is a documentation link, and nothing fetches from it.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/chart-helper"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "chart-helper"
+allowed_tools = ["Bash(sh scripts/render.sh:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = []

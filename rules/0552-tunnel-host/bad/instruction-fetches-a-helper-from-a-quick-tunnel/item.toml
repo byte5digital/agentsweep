@@ -1,0 +1,15 @@
+# Fixture for as_0552. The helper comes from a tunnel that will not exist tomorrow.
+[item]
+agent = "codex"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "AGENTS.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [552]

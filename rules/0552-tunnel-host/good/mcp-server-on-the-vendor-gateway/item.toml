@@ -1,0 +1,20 @@
+# Near miss: the vendor's own gateway, not one of its throwaway tunnels.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/gateway"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "gateway"
+transport = "http"
+url = "https://gateway.cloudflare.com/mcp"
+url_host = "gateway.cloudflare.com"
+
+[expect]
+fire = []

@@ -1,0 +1,4 @@
+# house rules
+
+Never use a link shortener in a pull request or a commit message. Write the
+full address out, even when it is long, so a reviewer can see where it goes.

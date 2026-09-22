@@ -1,0 +1,16 @@
+# Near miss: the tool is named, the vendor's own site is linked, and the tunnel
+# in use belongs to the company.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

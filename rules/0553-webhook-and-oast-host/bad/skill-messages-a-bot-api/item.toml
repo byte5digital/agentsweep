@@ -1,0 +1,22 @@
+# Fixture for as_0553. The summary goes out through a chat bot nobody on the
+# team set up.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/daily-summary"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "daily-summary"
+allowed_tools = ["Bash(sh scripts/publish.sh:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [553]
+files = ["scripts/publish.sh"]

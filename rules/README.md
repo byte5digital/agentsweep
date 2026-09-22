@@ -159,5 +159,5 @@ Developers may drop their own rules into the app's `rules.d/` directory. They lo
 1. Take the next free id. Create `rules/<nnnn>-<slug>/rule.yar` with the full `meta:` block.
 2. Prefer byte patterns on the Item's bytes; reach for a view field only when bytes cannot express the check. If the field does not exist, add it to the adapter and to the table above in the same pull request.
 3. Write the near misses first. A rule that cannot name three legitimate look-alikes it stays silent on is not a tier 1 rule.
-4. Run the corpus runner. Every fixture must produce exactly the ids in `expect.fire`.
+4. Run the corpus runner: `cargo test` runs every fixture of every rule, and `cargo run -p agentsweep-xtask -- corpus` prints the whole report at once. Every fixture must produce exactly the ids in `expect.fire`, and for a tree the match must land on the files in `expect.files`.
 5. Ship on probation.

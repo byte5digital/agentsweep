@@ -85,7 +85,24 @@ The single tamper-evident record of every Quarantine, Restore, Trust decision, A
 _Avoid_: Audit trail, manifest, history (as a proper name)
 
 **Scan**:
-One pass over one or more Surfaces producing Findings.
+One pass over one or more Surfaces producing Findings. Comes in three kinds: Full Scan, Change Scan and Folder Scan.
+_Avoid_: Check (UI wording only), sweep
+
+**Full Scan**:
+A Scan of everything AgentSweep protects: every Agent found again, every project root pooled again, every Item enumerated and hashed again. The only Scan kind that can be trusted to have seen it all, which is why one runs whenever the daemon starts, once a day, on request, and whenever the watcher admits it may have missed something.
+_Avoid_: Deep scan, complete scan, rescan
+
+**Change Scan**:
+A Scan of only the Items behind a batch of changed paths reported by the watcher. Cheap and continuous; it never claims to have seen anything it was not told about.
+_Avoid_: Incremental scan, quick scan, delta
+
+**Folder Scan**:
+A Scan of one folder the user points at before an Agent opens it. It reads and judges but records nothing: no Baseline, no Trust, no Quarantine. Its answer is "safe to open" or "do not open yet".
+_Avoid_: Pre-open scan (the situation, not the kind), directory scan, ad-hoc scan
+
+**Inventory**:
+Counting what AgentSweep would protect, without scanning it: which Agents are installed and which projects they list. Read from the Agents' own registries only, so it can run before Protection exists and never touches a project folder. What onboarding shows before the first Full Scan.
+_Avoid_: Scan, discovery, preview scan
 
 **Protection**:
 AgentSweep working in the background: watching the Surfaces and running scheduled Scans. It belongs to the Mac, not to the open window, so quitting the app does not end it. It is either on or off, and "off" is always shown, never implied.

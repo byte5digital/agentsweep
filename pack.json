@@ -1,0 +1,9 @@
+{
+  "pack_version": 1,
+  "minimum_engine_version": "0.1.0",
+  "heuristics": {
+    "ambiguous_at": 2,
+    "suspicious_at": 4
+  },
+  "files": {}
+}

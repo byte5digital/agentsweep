@@ -8,8 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use agentsweep_core::VERSION;
-use agentsweep_core::pack::{Bands, Manifest};
+use agentsweep_core::pack::Manifest;
 use agentsweep_core::rules::RulePack;
 use agentsweep_xtask::{corpus, iocs, repo_root};
 
@@ -20,7 +19,7 @@ agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
     render-iocs [--check]       render the Indicator Lists into rules 0900 to 0903,
                                 or with --check only report a stale rendering
     pack [options]              write a Rule Pack manifest
-        --pack-version <n>      the pack version, a monotonic integer (default 1)
+        --pack-version <n>      the pack version, a monotonic integer
         --minimum-engine <v>    the lowest engine version that may load it
         --out <dir>             where the manifest lands
                                 (default target/agentsweep-pack)
@@ -117,11 +116,14 @@ fn render_iocs(check: bool) -> Result<String, String> {
     Ok(format!("rendered {}\n", written.join(", ")))
 }
 
-/// Writes a Rule Pack manifest for the corpus as it stands.
+/// Writes a Rule Pack manifest for the corpus as it stands. What the pack says
+/// about itself, thresholds included, comes from the committed `pack.json`;
+/// the options below override it for a release that needs something else.
 fn build_pack(arguments: &[String]) -> Result<String, String> {
     let root = repo_root();
-    let mut pack_version = 1u64;
-    let mut minimum_engine = VERSION.to_string();
+    let stated = Manifest::bundled();
+    let mut pack_version = stated.pack_version;
+    let mut minimum_engine = stated.minimum_engine_version.clone();
     let mut out = root.join("target").join("agentsweep-pack");
 
     let mut rest = arguments.iter();
@@ -143,7 +145,7 @@ fn build_pack(arguments: &[String]) -> Result<String, String> {
         }
     }
 
-    let manifest = Manifest::of_pack(&root, pack_version, &minimum_engine, Bands::V1)
+    let manifest = Manifest::of_pack(&root, pack_version, &minimum_engine, stated.bands)
         .map_err(|error| format!("{error}\n"))?;
     fs::create_dir_all(&out).map_err(|error| format!("{}: {error}\n", out.display()))?;
     let path = manifest.write(&out).map_err(|error| format!("{error}\n"))?;

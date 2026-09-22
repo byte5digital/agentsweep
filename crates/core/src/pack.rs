@@ -28,6 +28,20 @@ pub const PACK_TREES: [&str; 2] = ["iocs", "rules"];
 /// The name the manifest carries inside the pack.
 pub const MANIFEST_FILE: &str = "manifest.json";
 
+/// The name of the pack's own statement at the pack root.
+pub const STATEMENT_FILE: &str = "pack.json";
+
+/// What the bundled Rule Pack states about itself: its version, the lowest
+/// engine version that may load it and the two Band thresholds. It is a
+/// manifest with an empty `files` map, because the bundled pack travels inside
+/// the binary and the code signature is what stands behind its bytes; the pack
+/// build fills the map in for a pack that leaves the machine.
+///
+/// Embedding it here is what puts the thresholds in the binary. Nothing in the
+/// core reads a threshold from code: the Heuristic tier takes its [`Bands`]
+/// from a [`Manifest`], and a fetched pack brings its own.
+pub const BUNDLED_STATEMENT: &str = include_str!("../../../pack.json");
+
 /// The one file name a pack never carries: macOS writes it into any directory
 /// the Finder has looked at, and it is not pack content.
 const NEVER_PACKED: &str = ".DS_Store";
@@ -109,6 +123,17 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    /// The manifest of the Rule Pack bundled in this binary, read back from
+    /// [`BUNDLED_STATEMENT`]. This is where the running process gets its Band
+    /// thresholds from until a newer pack arrives from the Rule Feed.
+    ///
+    /// Panics when the embedded statement is not a manifest, which a test in
+    /// this module catches long before a binary is built.
+    pub fn bundled() -> Manifest {
+        Manifest::parse(BUNDLED_STATEMENT)
+            .expect("the bundled pack statement is a manifest; see pack.json")
+    }
+
     /// Reads a pack root and states what is in it. The manifest itself and any
     /// detached signature beside it are not pack content and are left out.
     pub fn of_pack(
@@ -277,6 +302,38 @@ mod tests {
         assert_eq!(json["pack_version"], json!(7));
         assert_eq!(json["minimum_engine_version"], json!("0.1.0"));
         assert!(json["files"]["iocs/hosts.txt"].is_string());
+    }
+
+    #[test]
+    fn the_bundled_statement_is_a_manifest_and_carries_the_v1_bands() {
+        let bundled = Manifest::bundled();
+        assert_eq!(bundled.bands, Bands::V1);
+        assert_eq!(bundled.pack_version, 1);
+        assert!(!bundled.minimum_engine_version.is_empty());
+        assert!(
+            bundled.files.is_empty(),
+            "the bundled pack travels inside the binary, so it lists no hashes"
+        );
+    }
+
+    /// The thresholds reach the running process through the manifest, never
+    /// through a number in the code. A pack that says something else says it
+    /// here, and the Heuristic tier follows.
+    #[test]
+    fn a_manifest_may_state_thresholds_other_than_the_v1_pair() {
+        let retuned = Manifest::parse(
+            r#"{"pack_version":9,"minimum_engine_version":"0.1.0",
+                "heuristics":{"ambiguous_at":3,"suspicious_at":6},"files":{}}"#,
+        )
+        .expect("a retuned manifest reads back");
+        assert_eq!(
+            retuned.bands,
+            Bands {
+                ambiguous_at: 3,
+                suspicious_at: 6
+            }
+        );
+        assert_ne!(retuned.bands, Bands::V1);
     }
 
     #[test]

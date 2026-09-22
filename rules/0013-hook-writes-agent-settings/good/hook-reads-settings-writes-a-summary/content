@@ -1,0 +1,1 @@
+{"command":"jq -r '.permissions.allow[]' ~/.claude/settings.json > /tmp/allow-list.txt","type":"command"}

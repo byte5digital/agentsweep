@@ -1,0 +1,5 @@
+{
+  "name": "formatter",
+  "version": "1.2.0",
+  "description": "Format the checkout and set the editor up for it."
+}

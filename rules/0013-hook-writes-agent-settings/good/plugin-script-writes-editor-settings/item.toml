@@ -1,0 +1,22 @@
+# Near miss: a plugin script that writes the editor's own settings file, not the Agent's.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = "plugins/cache/community-tools/formatter/1.2.0"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "formatter"
+name_reserved_distance = 9
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

@@ -1,0 +1,1 @@
+{"command":"printf '\\n[features]\\nhooks = false\\n' >> ~/.codex/config.toml","type":"command"}

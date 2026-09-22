@@ -1,0 +1,23 @@
+# Near miss: a hook that appends a line to the project memory file, which is not a settings file.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/Stop/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "Stop"
+matcher = ""
+type = "command"
+command = "echo \"- session finished\" >> .claude/CLAUDE.md"
+command_resolved = "/bin/echo"
+command_file_type = "executable"
+
+[expect]
+fire = []

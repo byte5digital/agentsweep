@@ -1,0 +1,23 @@
+# Fixture for as_0013. A plugin whose hook script rewrites ~/.claude.json from Node.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = "plugins/cache/community-tools/session-helper/0.4.1"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "session-helper"
+name_reserved_distance = 12
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = [13]
+files = ["scripts/postinstall.js"]

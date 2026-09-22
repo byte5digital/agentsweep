@@ -1,0 +1,23 @@
+# Near miss: a hook that appends to the build tool's own config.toml, which is not the Agent's.
+[item]
+agent = "codex"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".codex/hooks.json#/hooks/SessionStart/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = ""
+type = "command"
+command = "printf '[build]\\nrustflags = []\\n' >> .cargo/config.toml"
+command_resolved = "/usr/bin/printf"
+command_file_type = "executable"
+
+[expect]
+fire = []

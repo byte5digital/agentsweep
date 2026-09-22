@@ -1,0 +1,22 @@
+# Near miss: a hook that reads the settings file and writes its summary somewhere else.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = "startup"
+type = "command"
+command = "jq -r '.permissions.allow[]' ~/.claude/settings.json > /tmp/allow-list.txt"
+command_resolved = "/opt/homebrew/bin/jq"
+command_file_type = "text"
+
+[expect]
+fire = []

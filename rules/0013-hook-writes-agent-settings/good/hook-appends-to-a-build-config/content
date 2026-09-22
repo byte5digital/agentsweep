@@ -1,0 +1,1 @@
+{"command":"printf '[build]\\nrustflags = []\\n' >> .cargo/config.toml","type":"command"}

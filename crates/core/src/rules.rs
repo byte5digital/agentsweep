@@ -20,14 +20,34 @@ use crate::finding::{Category, RuleStatus, Severity, Tier};
 use crate::item::Kind;
 use crate::views::Views;
 
-/// One rule source of a Rule Pack.
+/// One rule source of a Rule Pack. The bundled pack's sources are embedded
+/// and live for the run; a user rules directory is read at run time and its
+/// sources live as long as the [`crate::user_rules::UserRules`] that read it.
 #[derive(Clone, Copy, Debug)]
-pub struct RuleSource {
+pub struct RuleSource<'a> {
     /// Where the source sits in the pack, such as `0001-decode-pipe-exec/rule.yar`.
-    pub origin: &'static str,
+    pub origin: &'a str,
     /// The rule text.
-    pub source: &'static str,
+    pub source: &'a str,
 }
+
+/// What stands behind a Rule Pack, and therefore what its rules are allowed to
+/// claim about themselves.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PackTrust {
+    /// The bundled pack, or one the project signed and the Rule Feed
+    /// delivered. Every rule carries the tier it declares.
+    Signed,
+    /// A user rules directory. Nothing signed it, so every rule is forced to
+    /// the Heuristic tier, whatever it declares, and can only ever flag.
+    Unsigned,
+}
+
+/// The Weight an unsigned rule carries when it declares none.
+pub const USER_RULE_DEFAULT_WEIGHT: i64 = 2;
+
+/// The highest Weight an unsigned rule may carry, whatever it declares.
+pub const USER_RULE_MAXIMUM_WEIGHT: i64 = 3;
 
 include!(concat!(env!("OUT_DIR"), "/bundled_rules.rs"));
 
@@ -114,6 +134,7 @@ pub struct RuleMeta {
 pub struct RulePack {
     index: BTreeMap<String, RuleMeta>,
     by_kind: BTreeMap<Kind, Rules>,
+    trust: PackTrust,
 }
 
 impl fmt::Debug for RulePack {
@@ -131,9 +152,19 @@ impl RulePack {
         RulePack::compile(BUNDLED_RULES)
     }
 
-    /// Compiles a pack from its rule sources.
-    pub fn compile(sources: &[RuleSource]) -> Result<RulePack, RuleError> {
-        let index = read_index(sources)?;
+    /// Compiles a signed pack from its rule sources.
+    pub fn compile(sources: &[RuleSource<'_>]) -> Result<RulePack, RuleError> {
+        RulePack::compile_with(sources, PackTrust::Signed)
+    }
+
+    /// Compiles a pack from its rule sources under the authority it carries.
+    /// An unsigned pack has every rule forced to the Heuristic tier with a
+    /// capped Weight before the lint sees it.
+    pub fn compile_with(
+        sources: &[RuleSource<'_>],
+        trust: PackTrust,
+    ) -> Result<RulePack, RuleError> {
+        let index = read_index(sources, trust)?;
 
         let mut by_kind = BTreeMap::new();
         for kind in Kind::ALL {
@@ -154,7 +185,17 @@ impl RulePack {
             by_kind.insert(kind, compile_sources(&applicable)?);
         }
 
-        Ok(RulePack { index, by_kind })
+        Ok(RulePack {
+            index,
+            by_kind,
+            trust,
+        })
+    }
+
+    /// What stands behind the pack. An unsigned pack never quarantines,
+    /// because every rule in it is a Heuristic.
+    pub fn trust(&self) -> PackTrust {
+        self.trust
     }
 
     /// The meta of one rule, by its YARA name.
@@ -185,7 +226,7 @@ impl RulePack {
 }
 
 /// Compiles rule sources against the full view-global schema.
-fn compile_sources(sources: &[RuleSource]) -> Result<Rules, RuleError> {
+fn compile_sources(sources: &[RuleSource<'_>]) -> Result<Rules, RuleError> {
     let mut compiler = Compiler::new();
     for (name, schema) in Views::schema() {
         compiler.define_global(name, schema)?;
@@ -200,23 +241,17 @@ fn compile_sources(sources: &[RuleSource]) -> Result<Rules, RuleError> {
 /// rule to the source its id points at. A rule whose id does not match its
 /// directory prefix is rejected here, which is the contract in
 /// `rules/README.md`.
-fn read_index(sources: &[RuleSource]) -> Result<BTreeMap<String, RuleMeta>, RuleError> {
+fn read_index(
+    sources: &[RuleSource<'_>],
+    trust: PackTrust,
+) -> Result<BTreeMap<String, RuleMeta>, RuleError> {
     let compiled = compile_sources(sources)?;
     let mut index = BTreeMap::new();
     for rule in compiled.iter() {
         let name = rule.identifier().to_string();
         let meta: BTreeMap<&str, MetaValue<'_>> = rule.metadata().collect();
         let id = integer(&name, &meta, "id")?;
-        let prefix = format!("{id:04}-");
-        let origin = sources
-            .iter()
-            .find(|source| source.origin.starts_with(&prefix))
-            .ok_or_else(|| RuleError::Meta {
-                rule: name.clone(),
-                problem: format!("id {id} matches no rule directory named `{prefix}...`"),
-            })?
-            .origin
-            .to_string();
+        let origin = origin_of(sources, trust, &name, id)?;
 
         let tier =
             Tier::from_meta(integer(&name, &meta, "tier")?).ok_or_else(|| RuleError::Meta {
@@ -248,7 +283,7 @@ fn read_index(sources: &[RuleSource]) -> Result<BTreeMap<String, RuleMeta>, Rule
             kinds.push(kind);
         }
 
-        let rule_meta = RuleMeta {
+        let mut rule_meta = RuleMeta {
             origin,
             id,
             title: text(&name, &meta, "title")?.to_string(),
@@ -269,17 +304,73 @@ fn read_index(sources: &[RuleSource]) -> Result<BTreeMap<String, RuleMeta>, Rule
             reviewer_directed: matches!(meta.get("reviewer_directed"), Some(MetaValue::Bool(true))),
             name: name.clone(),
         };
-        lint(&rule_meta, &meta)?;
+        if trust == PackTrust::Unsigned {
+            force_to_heuristic(&mut rule_meta);
+        }
+        lint(&rule_meta, &meta, trust)?;
         index.insert(name, rule_meta);
     }
     Ok(index)
+}
+
+/// Where one rule's source sits in the pack. A signed pack keeps one directory
+/// per rule, named after the id, and a rule whose id does not match its
+/// directory is rejected here, which is the contract in `rules/README.md`. A
+/// user rules directory has no such layout, so the source is the file the rule
+/// was written in.
+fn origin_of(
+    sources: &[RuleSource<'_>],
+    trust: PackTrust,
+    name: &str,
+    id: i64,
+) -> Result<String, RuleError> {
+    if trust == PackTrust::Unsigned {
+        return sources
+            .iter()
+            .find(|source| source.source.contains(name))
+            .map(|source| source.origin.to_string())
+            .ok_or_else(|| RuleError::Meta {
+                rule: name.to_string(),
+                problem: "no rule file of the directory declares it".to_string(),
+            });
+    }
+    let prefix = format!("{id:04}-");
+    sources
+        .iter()
+        .find(|source| source.origin.starts_with(&prefix))
+        .map(|source| source.origin.to_string())
+        .ok_or_else(|| RuleError::Meta {
+            rule: name.to_string(),
+            problem: format!("id {id} matches no rule directory named `{prefix}...`"),
+        })
+}
+
+/// Forces one rule of an unsigned pack down to the Heuristic tier: whatever it
+/// declared, it becomes a Heuristic, and a threat Heuristic carries the Weight
+/// it asked for, capped at [`USER_RULE_MAXIMUM_WEIGHT`] and defaulting to
+/// [`USER_RULE_DEFAULT_WEIGHT`]. Nothing outside the project's own pack may
+/// claim the Rule tier, so nothing outside it can quarantine.
+fn force_to_heuristic(rule: &mut RuleMeta) {
+    rule.tier = Tier::Heuristics;
+    rule.weight = match rule.category {
+        Category::Threat => Some(
+            rule.weight
+                .unwrap_or(USER_RULE_DEFAULT_WEIGHT)
+                .clamp(1, USER_RULE_MAXIMUM_WEIGHT),
+        ),
+        Category::Exposure => None,
+    };
 }
 
 /// The meta lint. Every required key is already enforced by [`read_index`],
 /// which cannot build a [`RuleMeta`] without one; what is left is the keys
 /// that belong to one tier and not the other, and the ranges the contract in
 /// `rules/README.md` fixes.
-fn lint(rule: &RuleMeta, meta: &BTreeMap<&str, MetaValue<'_>>) -> Result<(), RuleError> {
+fn lint(
+    rule: &RuleMeta,
+    meta: &BTreeMap<&str, MetaValue<'_>>,
+    trust: PackTrust,
+) -> Result<(), RuleError> {
     let reject = |problem: String| {
         Err(RuleError::Meta {
             rule: rule.name.clone(),
@@ -294,7 +385,9 @@ fn lint(rule: &RuleMeta, meta: &BTreeMap<&str, MetaValue<'_>>) -> Result<(), Rul
         ));
     }
 
-    let declares_weight = meta.contains_key("weight");
+    // An unsigned rule has already been forced to the Heuristic tier with a
+    // capped Weight, so what it declared about either is no longer its own.
+    let declares_weight = meta.contains_key("weight") && trust == PackTrust::Signed;
     match rule.tier {
         Tier::Rules => {
             if declares_weight {

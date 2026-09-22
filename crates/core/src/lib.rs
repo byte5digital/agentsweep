@@ -21,6 +21,7 @@ pub mod finding;
 pub mod host;
 pub mod item;
 pub mod keychain;
+pub mod pack;
 pub mod paths;
 pub mod rules;
 pub mod scan;

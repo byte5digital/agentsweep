@@ -23,6 +23,7 @@ pub mod item;
 pub mod keychain;
 pub mod pack;
 pub mod paths;
+pub mod provenance;
 pub mod rules;
 pub mod scan;
 pub mod views;

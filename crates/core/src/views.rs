@@ -425,6 +425,17 @@ pub struct EnvView {
 }
 
 impl EnvView {
+    /// The view of an env file that sets these keys. The count travels with
+    /// the list so the two can never drift apart. The values are never here:
+    /// marking them sensitive means the parsed view holds the key names only,
+    /// and the bytes a Rule matches on stay local.
+    pub fn of(keys: Vec<String>) -> EnvView {
+        EnvView {
+            keys_n: keys.len() as i64,
+            keys,
+        }
+    }
+
     fn to_value(&self) -> Value {
         json!({
             "keys": strings(&self.keys),
@@ -472,6 +483,26 @@ pub struct RepoView {
 }
 
 impl RepoView {
+    /// The view of one exec-capable git configuration key.
+    pub fn of_exec_key(key: RepoExecKey) -> RepoView {
+        RepoView {
+            exec_keys: vec![key],
+            exec_keys_n: 1,
+            ..RepoView::default()
+        }
+    }
+
+    /// The view of the non-sample executables in a repository's hooks
+    /// directory. Every hook Item of one repository names them all, so a Rule
+    /// can see what company a hook keeps.
+    pub fn of_hook_executables(names: Vec<String>) -> RepoView {
+        RepoView {
+            hook_executables_n: names.len() as i64,
+            hook_executables: names,
+            ..RepoView::default()
+        }
+    }
+
     fn to_value(&self) -> Value {
         let exec_keys = self.exec_keys.iter().map(RepoExecKey::to_value).collect();
         json!({
@@ -483,6 +514,37 @@ impl RepoView {
             "hook_executables_n": self.hook_executables_n,
         })
     }
+}
+
+/// The parsed view a Surface Adapter attached to one Item.
+///
+/// The kind decides which one: Repository Metadata carries `repo`, an env file
+/// carries `env`, and Execution Policies, Workflows, instruction files and
+/// Generic Items carry none, because Rules on them are byte Rules. A view is
+/// computed by the adapter and never by a Rule.
+#[derive(Clone, Debug, Default)]
+pub enum ParsedView {
+    /// The Item's kind has no view, or its adapter has not parsed it yet.
+    #[default]
+    None,
+    /// One MCP server entry.
+    Mcp(McpView),
+    /// One hook handler entry.
+    Hook(HookView),
+    /// One settings key.
+    Settings(SettingsView),
+    /// One skill directory.
+    Skill(SkillView),
+    /// One installed plugin version.
+    Plugin(PluginView),
+    /// One marketplace clone.
+    Marketplace(MarketplaceView),
+    /// One subagent definition.
+    Subagent(SubagentView),
+    /// One env file.
+    Env(EnvView),
+    /// The git files an Agent executes before trust.
+    Repo(RepoView),
 }
 
 /// Every global a Rule sees, in one value.
@@ -511,14 +573,69 @@ pub struct Views {
 }
 
 impl Views {
-    /// The views for one unit of one Item. Only the `item` global is populated
-    /// in this slice; the parsed views arrive with milestone 1 of the build
-    /// plan.
+    /// The views for one unit of one Item: the common `item` global, plus the
+    /// parsed view the Surface Adapter attached when the Item's kind has one.
+    /// Every other global keeps its documented defaults.
     pub fn of(item: &Item, unit: &ScanUnit<'_>) -> Views {
-        Views {
+        let mut views = Views {
             item: ItemView::of(item, unit),
             ..Views::default()
+        };
+        match &item.view {
+            ParsedView::None => {}
+            ParsedView::Mcp(view) => views.mcp = view.clone(),
+            ParsedView::Hook(view) => views.hook = view.clone(),
+            ParsedView::Settings(view) => views.settings = view.clone(),
+            ParsedView::Skill(view) => views.skill = view.clone(),
+            ParsedView::Plugin(view) => views.plugin = view.clone(),
+            ParsedView::Marketplace(view) => views.marketplace = view.clone(),
+            ParsedView::Subagent(view) => views.subagent = view.clone(),
+            ParsedView::Env(view) => views.env = view.clone(),
+            ParsedView::Repo(view) => views.repo = view.clone(),
         }
+        views
+    }
+
+    /// What is wrong with these views, empty when nothing is.
+    ///
+    /// Two invariants hold whatever an adapter attached: the shape of every
+    /// global is the schema's, because YARA-X fixes a global's type when it
+    /// compiles the pack, and every `<name>_n` carries the real count of its
+    /// list, because the rendered list is padded to one element when the real
+    /// count is zero. The conformance suite runs this over every Item of every
+    /// adapter.
+    pub fn validate(&self) -> Vec<String> {
+        let mut violations = Vec::new();
+        for ((name, schema), (_, value)) in Views::schema().iter().zip(self.globals()) {
+            if shape_of(schema) != shape_of(&value) {
+                violations.push(format!(
+                    "the shape of `{name}` is not the schema's: {} instead of {}",
+                    shape_of(&value),
+                    shape_of(schema)
+                ));
+                continue;
+            }
+            let Some(fields) = value.as_object() else {
+                continue;
+            };
+            for (field, value) in fields {
+                let Some(rendered) = value.as_array() else {
+                    continue;
+                };
+                let count = fields
+                    .get(&format!("{field}_n"))
+                    .and_then(Value::as_i64)
+                    .unwrap_or(-1);
+                let real = if count == 0 { 1 } else { count };
+                if real != rendered.len() as i64 {
+                    violations.push(format!(
+                        "`{name}.{field}` holds {} elements and `{field}_n` says {count}",
+                        rendered.len()
+                    ));
+                }
+            }
+        }
+        violations
     }
 
     /// Every global with its name, ready to be handed to YARA-X.
@@ -551,6 +668,27 @@ pub fn field<'v>(view: &'v Value, name: &str) -> Option<&'v Value> {
         .and_then(|object: &Map<String, Value>| object.get(name))
 }
 
+/// The type shape of a rendered value, ignoring the values themselves. YARA-X
+/// fixes a global's type when it compiles the pack, so this is what may not
+/// change between the schema and a populated view.
+pub fn shape_of(value: &Value) -> String {
+    match value {
+        Value::String(_) => "string".to_string(),
+        Value::Bool(_) => "bool".to_string(),
+        Value::Number(_) => "integer".to_string(),
+        Value::Array(items) => format!("[{}]", shape_of(&items[0])),
+        Value::Object(fields) => {
+            let mut parts: Vec<String> = fields
+                .iter()
+                .map(|(name, value)| format!("{name}:{}", shape_of(value)))
+                .collect();
+            parts.sort();
+            format!("{{{}}}", parts.join(","))
+        }
+        Value::Null => "null".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,8 +716,8 @@ mod tests {
         for ((schema_name, schema), (name, value)) in Views::schema().iter().zip(populated.iter()) {
             assert_eq!(schema_name, name);
             assert_eq!(
-                shape(schema),
-                shape(value),
+                shape_of(schema),
+                shape_of(value),
                 "the shape of `{name}` drifted from the schema"
             );
         }
@@ -622,23 +760,46 @@ mod tests {
         assert_eq!(strings(&["a".to_string()]), json!(["a"]));
     }
 
-    /// The type shape of a value, ignoring the values themselves. YARA-X fixes
-    /// a global's type at compile time, so this is what may not change.
-    fn shape(value: &Value) -> String {
-        match value {
-            Value::String(_) => "string".to_string(),
-            Value::Bool(_) => "bool".to_string(),
-            Value::Number(_) => "integer".to_string(),
-            Value::Array(items) => format!("[{}]", shape(&items[0])),
-            Value::Object(fields) => {
-                let mut parts: Vec<String> = fields
-                    .iter()
-                    .map(|(name, value)| format!("{name}:{}", shape(value)))
-                    .collect();
-                parts.sort();
-                format!("{{{}}}", parts.join(","))
-            }
-            Value::Null => "null".to_string(),
-        }
+    /// A view an adapter attached reaches the Rule that reads it, and the
+    /// count of a list it carries is the list's real length.
+    #[test]
+    fn an_attached_view_reaches_its_global_and_validates() {
+        let mut item = crate::item::Item::file(
+            "workspace",
+            crate::item::Scope::Project(std::path::PathBuf::from("/src/demo")),
+            crate::item::Kind::EnvFile,
+            ".env",
+            std::path::PathBuf::from("/src/demo/.env"),
+            crate::item::Provenance::Unknown,
+            crate::item::Activation::Unknown,
+            b"CODEX_HOME=./.codex\n".to_vec(),
+        );
+        item.view = ParsedView::Env(EnvView::of(vec!["CODEX_HOME".to_string()]));
+
+        let units = item.scan_units();
+        let views = Views::of(&item, &units[0]);
+
+        assert_eq!(views.env.keys, ["CODEX_HOME"]);
+        assert_eq!(views.env.keys_n, 1);
+        assert!(views.validate().is_empty(), "{:?}", views.validate());
+    }
+
+    #[test]
+    fn a_count_that_does_not_match_its_list_is_a_violation() {
+        let views = Views {
+            env: EnvView {
+                keys: vec!["A".to_string(), "B".to_string()],
+                keys_n: 1,
+            },
+            ..Views::default()
+        };
+        let violations = views.validate();
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].contains("env.keys"), "{violations:?}");
+    }
+
+    #[test]
+    fn the_defaults_of_every_view_validate() {
+        assert!(Views::default().validate().is_empty());
     }
 }

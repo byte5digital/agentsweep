@@ -6,15 +6,16 @@
 //! Rule.
 //!
 //! This slice carries the read path of the trait in spec section 3.2:
-//! `descriptor`, `detect`, `projects` and `enumerate`. The watch roots, the
-//! path-to-Item mapping and the enforcement pair arrive with the milestones
-//! that need them (1, 4 and 6); their signatures are in the spec and are not
-//! anticipated here.
+//! `descriptor`, `detect`, `projects`, `enumerate`, `watch_roots` and
+//! `items_for_path`. The enforcement pair arrives with milestone 4; its
+//! signature is in the spec and is not anticipated here. What the core would
+//! do with an Item a Tier decided against is already fixed as data: the
+//! [`ELIGIBILITY`] table of spec section 5.2.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::host::Host;
-use crate::item::{Item, Kind};
+use crate::item::{Item, ItemId, Kind, Scope, Shape};
 
 /// What one enforcement step may do to an Item.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,6 +54,89 @@ pub struct Descriptor {
     pub surfaces: &'static [Surface],
     /// The enforcement primitives the adapter declares per kind.
     pub capabilities: &'static [(Kind, &'static [Primitive])],
+}
+
+impl Descriptor {
+    /// The primitives this adapter declares for one kind, empty when it
+    /// declares none. Managed Items declare none.
+    pub fn capabilities_for(&self, kind: Kind) -> &'static [Primitive] {
+        self.capabilities
+            .iter()
+            .find(|(declared, _)| *declared == kind)
+            .map(|(_, primitives)| *primitives)
+            .unwrap_or(&[])
+    }
+}
+
+/// What the core does with an Item of one kind once a Tier decided against it
+/// (spec section 5.2). Eligibility is per kind, never per Rule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Eligibility {
+    /// The kind the row describes.
+    pub kind: Kind,
+    /// The primitives one Quarantine applies, in order. More than one is a
+    /// composite, such as a plugin's native disable followed by a move out.
+    pub primitives: &'static [Primitive],
+    /// True when a stable T0 or T1 Threat Finding may act on this kind by
+    /// itself. False means the Finding is raised and a person clicks.
+    pub automatic: bool,
+}
+
+/// The primitive per kind and what may happen automatically, spec section 5.2.
+/// Repository Metadata and env files are neutralised in place and never
+/// quarantined automatically, whatever a Rule says about them.
+pub static ELIGIBILITY: &[Eligibility] = &[
+    row(Kind::InstructionFile, &[Primitive::MoveOut], true),
+    row(Kind::Skill, &[Primitive::MoveOut], true),
+    row(
+        Kind::Plugin,
+        &[Primitive::NativeDisable, Primitive::MoveOut],
+        true,
+    ),
+    row(
+        Kind::Marketplace,
+        &[Primitive::RemoveEntry, Primitive::MoveOut],
+        true,
+    ),
+    row(Kind::McpServer, &[Primitive::RemoveEntry], true),
+    row(Kind::Hook, &[Primitive::RemoveEntry], true),
+    row(Kind::SettingsEntry, &[Primitive::RemoveEntry], true),
+    row(Kind::ExecPolicy, &[Primitive::MoveOut], true),
+    row(Kind::Subagent, &[Primitive::MoveOut], true),
+    row(Kind::Workflow, &[Primitive::MoveOut], true),
+    row(
+        Kind::RepositoryMetadata,
+        &[Primitive::NeutraliseInPlace],
+        false,
+    ),
+    row(Kind::EnvFile, &[Primitive::NeutraliseInPlace], false),
+    // A kind the core has not learned the specifics of is moved out by hand
+    // only: a new adapter ships with file-level Rules before it ships with an
+    // automatic action.
+    row(Kind::Generic, &[Primitive::MoveOut], false),
+];
+
+const fn row(kind: Kind, primitives: &'static [Primitive], automatic: bool) -> Eligibility {
+    Eligibility {
+        kind,
+        primitives,
+        automatic,
+    }
+}
+
+/// The eligibility row of one kind.
+pub fn eligibility(kind: Kind) -> &'static Eligibility {
+    ELIGIBILITY
+        .iter()
+        .find(|row| row.kind == kind)
+        .expect("every kind has an eligibility row")
+}
+
+/// Whether a stable T0 or T1 Threat Finding on this Item may quarantine it
+/// without asking. Managed Items are read-only for AgentSweep, so Scope can
+/// only ever take the answer away, never grant it.
+pub fn quarantines_automatically(item: &Item) -> bool {
+    item.scope != Scope::Managed && eligibility(item.kind).automatic
 }
 
 /// What `detect` found. The Agent binary is never executed: presence is the
@@ -122,6 +206,61 @@ impl Enumeration {
     }
 }
 
+/// The directories a watcher follows for one adapter, recomputed after every
+/// full enumeration so a symlink target is watched once a link into it exists.
+/// A home directory and a project root are never watched recursively.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WatchRoots {
+    /// Directories watched with everything below them.
+    pub recursive: Vec<PathBuf>,
+    /// Directories watched for their own entries only.
+    pub non_recursive: Vec<PathBuf>,
+}
+
+impl WatchRoots {
+    /// Declares a directory watched with everything below it.
+    pub fn watch_recursively(&mut self, path: PathBuf) {
+        self.non_recursive.retain(|declared| *declared != path);
+        if !self.recursive.contains(&path) {
+            self.recursive.push(path);
+        }
+    }
+
+    /// Declares a directory watched for its own entries only. A directory
+    /// already watched recursively stays recursive.
+    pub fn watch(&mut self, path: PathBuf) {
+        if !self.recursive.contains(&path) && !self.non_recursive.contains(&path) {
+            self.non_recursive.push(path);
+        }
+    }
+
+    /// Every declared root, the recursive ones first.
+    pub fn all(&self) -> impl Iterator<Item = &Path> {
+        self.recursive
+            .iter()
+            .chain(self.non_recursive.iter())
+            .map(PathBuf::as_path)
+    }
+
+    /// True when a changed path falls inside one of these roots, which is what
+    /// decides whether a Change Scan may be trusted with it.
+    pub fn covers(&self, path: &Path) -> bool {
+        let parent = path.parent();
+        self.non_recursive.iter().any(|root| parent == Some(root))
+            || self
+                .recursive
+                .iter()
+                .any(|root| path.strip_prefix(root).is_ok())
+    }
+
+    /// Puts both lists in a stable order, so two enumerations of the same tree
+    /// declare the same roots in the same order.
+    pub fn sort(&mut self) {
+        self.recursive.sort();
+        self.non_recursive.sort();
+    }
+}
+
 /// The per-Agent component that knows where that Agent's Surfaces live.
 pub trait SurfaceAdapter {
     /// The static declaration table.
@@ -138,4 +277,101 @@ pub trait SurfaceAdapter {
     /// Every Item on this Agent's Surfaces, at the user level and at each of
     /// the pooled project roots, with content and hashes in one pass.
     fn enumerate(&self, host: &Host, roots: &[PathBuf]) -> Enumeration;
+
+    /// The directories the watcher follows for this adapter, given what the
+    /// last full enumeration found.
+    ///
+    /// The default watches the directory each Item sits in and nothing below
+    /// it, which is the honest answer for an adapter that yields files at
+    /// known paths. An adapter with a directory Surface overrides it and
+    /// declares that directory recursive.
+    fn watch_roots(&self, enumeration: &Enumeration) -> WatchRoots {
+        let mut roots = WatchRoots::default();
+        for item in &enumeration.items {
+            match item.shape {
+                Shape::Tree => roots.watch_recursively(item.path.clone()),
+                _ => {
+                    if let Some(parent) = item.path.parent() {
+                        roots.watch(parent.to_path_buf());
+                    }
+                }
+            }
+        }
+        roots.sort();
+        roots
+    }
+
+    /// The Items a changed path belongs to. A Change Scan re-enumerates only
+    /// these ids.
+    ///
+    /// The default maps a path to the Item that sits at it and to every tree
+    /// Item that contains it, which covers file and entry Items whose locator
+    /// is their path.
+    fn items_for_path(&self, enumeration: &Enumeration, path: &Path) -> Vec<ItemId> {
+        enumeration
+            .items
+            .iter()
+            .filter(|item| {
+                item.path == path || (item.shape == Shape::Tree && path.starts_with(&item.path))
+            })
+            .map(|item| item.id.clone())
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::item::{Activation, Provenance};
+
+    #[test]
+    fn every_kind_has_exactly_one_eligibility_row() {
+        for kind in Kind::ALL {
+            let rows = ELIGIBILITY.iter().filter(|row| row.kind == kind).count();
+            assert_eq!(rows, 1, "{kind} has {rows} eligibility rows");
+            assert!(!eligibility(kind).primitives.is_empty(), "{kind}");
+        }
+    }
+
+    /// Spec section 5.2: whatever a Rule says, these two kinds are neutralised
+    /// in place and a person decides.
+    #[test]
+    fn repository_metadata_and_env_files_are_never_quarantined_automatically() {
+        for kind in [Kind::RepositoryMetadata, Kind::EnvFile] {
+            let row = eligibility(kind);
+            assert_eq!(row.primitives, [Primitive::NeutraliseInPlace], "{kind}");
+            assert!(!row.automatic, "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_managed_item_is_never_quarantined_automatically_whatever_its_kind() {
+        for kind in Kind::ALL {
+            let item = Item::file(
+                "claude-code",
+                Scope::Managed,
+                kind,
+                "x",
+                PathBuf::from("/Library/Application Support/ClaudeCode/x"),
+                Provenance::Unknown,
+                Activation::Active,
+                b"x".to_vec(),
+            );
+            assert!(!quarantines_automatically(&item), "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_watch_root_is_declared_once_and_recursive_wins() {
+        let mut roots = WatchRoots::default();
+        roots.watch(PathBuf::from("/src/demo"));
+        roots.watch(PathBuf::from("/src/demo"));
+        roots.watch(PathBuf::from("/src/demo/.git/hooks"));
+        roots.watch_recursively(PathBuf::from("/src/demo/.git/hooks"));
+        assert_eq!(roots.non_recursive, [PathBuf::from("/src/demo")]);
+        assert_eq!(roots.recursive, [PathBuf::from("/src/demo/.git/hooks")]);
+        assert!(roots.covers(Path::new("/src/demo/.env")));
+        assert!(roots.covers(Path::new("/src/demo/.git/hooks/pre-commit")));
+        assert!(!roots.covers(Path::new("/src/demo/src/main.rs")));
+    }
 }

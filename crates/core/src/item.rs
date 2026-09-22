@@ -436,6 +436,9 @@ pub struct Item {
     pub baseline: BaselineState,
     /// The derived facts about the content.
     pub facts: FileFacts,
+    /// The normalised view of the Item's kind, as the Surface Adapter parsed
+    /// it. Kinds whose Rules are byte Rules carry none.
+    pub view: crate::views::ParsedView,
     /// The content of a file Item. Tree and entry content arrive with
     /// milestone 1 of the build plan.
     pub content: Vec<u8>,
@@ -473,9 +476,16 @@ impl Item {
             link_target: String::new(),
             baseline: BaselineState::None,
             facts: FileFacts::of(&content),
+            view: crate::views::ParsedView::None,
             content_hash: sha256_hex(&content),
             content,
         }
+    }
+
+    /// Attaches the normalised view the Surface Adapter parsed for this Item.
+    pub fn with_view(mut self, view: crate::views::ParsedView) -> Item {
+        self.view = view;
+        self
     }
 
     /// The units a Rule is run over. One for a file Item; one per file for a

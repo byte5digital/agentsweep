@@ -76,6 +76,17 @@ impl Host {
     pub fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
         fs::read_link(path)
     }
+
+    /// The entries of a directory, in a stable order so that two enumerations
+    /// of the same tree yield their Items in the same order.
+    pub fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        let mut entries: Vec<PathBuf> = fs::read_dir(path)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect();
+        entries.sort();
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]

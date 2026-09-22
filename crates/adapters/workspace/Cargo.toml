@@ -9,5 +9,15 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Builds the temporary repositories the tests of this crate, of the conformance
+# suite and of the command line interface run against. Off in a release build:
+# nothing that writes a repository belongs in the shipped bundle.
+testing = []
+
 [dependencies]
 agentsweep-core.workspace = true
+gix-config = { version = "0.60.0", features = ["sha1"] }
+gix-hash = { version = "0.26.2", features = ["sha1"] }
+gix-index = { version = "0.55.0", features = ["sha1"] }
+gix-ref = { version = "0.67.1", features = ["sha1"] }

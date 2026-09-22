@@ -1,0 +1,14 @@
+[package]
+name = "agentsweep-core"
+description = "The AgentSweep core: the Item model, the Surface Adapter contract, Scans, Findings and the stores."
+# The core is consumed only through the workspace; the CLI is the one crate that
+# reaches crates.io.
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]

@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/cli",
+    "crates/daemon",
+    "crates/adapters/claude-code",
+    "crates/adapters/codex",
+    "crates/adapters/workspace",
+    "crates/adapter-conformance",
+]
+
+# Inherited by every crate in the workspace. The stable toolchain is pinned here
+# as `rust-version`, as the specification requires; `rust-toolchain.toml` pins
+# the same version for CI.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "Apache-2.0"
+repository = "https://github.com/byte5digital/agentsweep"
+authors = ["The AgentSweep contributors"]
+
+[workspace.dependencies]
+agentsweep-core = { version = "0.1.0", path = "crates/core" }
+agentsweep-adapter-claude-code = { version = "0.1.0", path = "crates/adapters/claude-code" }
+agentsweep-adapter-codex = { version = "0.1.0", path = "crates/adapters/codex" }
+agentsweep-adapter-workspace = { version = "0.1.0", path = "crates/adapters/workspace" }

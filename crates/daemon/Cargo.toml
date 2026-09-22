@@ -1,0 +1,17 @@
+[package]
+name = "agentsweep-daemon"
+description = "The AgentSweep daemon, binary agentsweepd: the only writer of the Event Log, the Baseline, the verdict cache and the state file."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "agentsweepd"
+path = "src/main.rs"
+
+[dependencies]
+agentsweep-core.workspace = true

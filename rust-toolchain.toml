@@ -1,0 +1,7 @@
+# The toolchain CI resolves through rustup. It is kept in step with the
+# `rust-version` of the workspace, which is the authoritative pin. A checkout
+# without rustup ignores this file and builds with whatever stable toolchain is
+# installed; `rust-version` then reports a version that is too old.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]

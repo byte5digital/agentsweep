@@ -1,0 +1,16 @@
+[package]
+name = "agentsweep-adapter-conformance"
+description = "The conformance suite every Surface Adapter has to pass, run against sanitised fixture trees on temporary copies."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+agentsweep-core.workspace = true
+agentsweep-adapter-claude-code.workspace = true
+agentsweep-adapter-codex.workspace = true
+agentsweep-adapter-workspace.workspace = true

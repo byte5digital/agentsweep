@@ -1,0 +1,18 @@
+[package]
+name = "agentsweep"
+description = "Scans the local configuration surfaces of Claude Code and Codex and quarantines what a deterministic rule proves bad."
+# The CLI is the crate that goes to crates.io at the first tagged release, as an
+# on-demand scanner. It stays publishable on purpose.
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "agentsweep"
+path = "src/main.rs"
+
+[dependencies]
+agentsweep-core.workspace = true

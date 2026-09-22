@@ -1,0 +1,13 @@
+[package]
+name = "agentsweep-adapter-codex"
+description = "The Codex Surface Adapter: its config layers, skills, MCP servers, hooks, exec policies and instruction files."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+agentsweep-core.workspace = true

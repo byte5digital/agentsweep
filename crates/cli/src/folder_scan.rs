@@ -214,8 +214,9 @@ mod tests {
         report
             .findings
             .iter()
-            .map(|finding| match finding.source {
-                Source::Rule(id) => id,
+            .filter_map(|finding| match finding.source {
+                Source::Rule(id) => Some(id),
+                Source::Score(_) => None,
             })
             .collect()
     }

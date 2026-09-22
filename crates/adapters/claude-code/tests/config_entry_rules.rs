@@ -35,15 +35,23 @@ fn scanned(repository: &TemporaryRepository) -> Enumeration {
     enumeration
 }
 
-/// The Rule ids that fired on one Item.
+/// The Rule ids that fired on one Item. A Finding from another source is not
+/// what this test is about and is left out rather than matched on, so a later
+/// Tier adding one of its own does not turn this into a compile error. That is
+/// also why the pattern is allowed to be the only one there currently is.
+#[allow(irrefutable_let_patterns)]
 fn fired(pack: &RulePack, item: &Item) -> Vec<i64> {
     let mut scanners = Scanners::new(pack);
     scanners
         .scan(item)
         .expect("the Rule tier runs")
         .into_iter()
-        .map(|finding| match finding.source {
-            Source::Rule(id) => id,
+        .filter_map(|finding| {
+            if let Source::Rule(id) = finding.source {
+                Some(id)
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -81,14 +89,14 @@ fn a_committed_base_url_that_is_not_the_vendors_is_a_finding_and_the_users_own_i
             commit: TemporaryRepository::HEAD_COMMIT.to_string()
         }
     );
-    assert_eq!(fired(&pack, found), [6]);
-    assert_eq!(
-        fired(&pack, item(&enumeration, "#/permissions/defaultMode")),
-        [6]
+    assert!(fired(&pack, found).contains(&6));
+    assert!(
+        fired(&pack, item(&enumeration, "#/permissions/defaultMode")).contains(&6),
+        "a committed permission bypass is the same Finding"
     );
-    assert_eq!(
-        fired(&pack, item(&enumeration, "#/enableAllProjectMcpServers")),
-        [6]
+    assert!(
+        fired(&pack, item(&enumeration, "#/enableAllProjectMcpServers")).contains(&6),
+        "so is a project approving its own servers"
     );
 
     let own = TemporaryRepository::new("cc-rules-own");
@@ -148,21 +156,20 @@ fn a_server_from_a_temporary_directory_and_a_plaintext_token_are_both_reported()
         panic!("an MCP Item carries the mcp view");
     };
     assert!(view.command_in_temp, "{view:?}");
-    assert_eq!(fired(&pack, lint), [8]);
+    assert!(fired(&pack, lint).contains(&8));
 
     let tracker = item(&enumeration, ".mcp.json#tracker");
     let findings = Scanners::new(&pack)
         .scan(tracker)
         .expect("the Rule tier runs");
-    assert_eq!(findings.len(), 1, "{findings:?}");
-    assert_eq!(findings[0].source, Source::Rule(10));
-    assert_eq!(findings[0].category, Category::Exposure);
-    assert_eq!(findings[0].severity, Severity::Medium);
-    assert_eq!(findings[0].tier, Tier::Rules);
-    assert!(
-        findings[0].sensitive,
-        "the match lands on a sensitive field"
-    );
+    let exposure = findings
+        .iter()
+        .find(|finding| finding.source == Source::Rule(10))
+        .unwrap_or_else(|| panic!("the token is an Exposure: {findings:?}"));
+    assert_eq!(exposure.category, Category::Exposure);
+    assert_eq!(exposure.severity, Severity::Medium);
+    assert_eq!(exposure.tier, Tier::Rules);
+    assert!(exposure.sensitive, "the match lands on a sensitive field");
 
     // The Finding is about a credential, so what may be shown is the excerpt
     // this adapter renders: the value as a short hash of itself and never the

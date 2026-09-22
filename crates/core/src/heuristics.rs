@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::finding::{Category, Finding, FiredHeuristic, RuleStatus, Severity, Source, Tier};
-use crate::item::Item;
+use crate::item::{Item, ItemId};
 use crate::pack::Bands;
 use crate::rules::{RuleMeta, RulePack};
 use crate::scan::{RuleHit, ScanFailure, Scanners};
@@ -86,6 +86,9 @@ impl fmt::Display for Band {
 /// Band that Score puts it in.
 #[derive(Clone, Debug)]
 pub struct Assessment {
+    /// The Item the Assessment is about. An Ambiguous Item raises no Finding,
+    /// so this is the only place its id is named.
+    pub item_id: ItemId,
     /// The Score: the sum of the Weights of the Threat Heuristics that fired,
     /// each counted once.
     pub score: i64,
@@ -161,6 +164,7 @@ pub fn assess_hits(pack: &RulePack, bands: Bands, item: &Item, hits: &[RuleHit])
     if settled {
         rule_findings.sort_by_key(order);
         return Assessment {
+            item_id: item.id.clone(),
             score: 0,
             band: Band::Clear,
             fired: Vec::new(),
@@ -183,6 +187,7 @@ pub fn assess_hits(pack: &RulePack, bands: Bands, item: &Item, hits: &[RuleHit])
     }
 
     Assessment {
+        item_id: item.id.clone(),
         score,
         band,
         fired,

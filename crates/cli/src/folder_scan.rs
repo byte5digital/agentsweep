@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use agentsweep_adapter_claude_code::ClaudeCode;
 use agentsweep_adapter_workspace::Workspace;
 use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
-use agentsweep_core::finding::RuleStatus;
+use agentsweep_core::finding::{Finding, FiredHeuristic, RuleStatus};
+use agentsweep_core::heuristics::Band;
 use agentsweep_core::host::Host;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::{ScanReport, scan_enumeration};
@@ -85,7 +86,10 @@ pub fn render(root: &Path, report: &ScanReport) -> String {
             probation(finding.status)
         );
         let _ = writeln!(out, "  {}", finding.plain);
+        evidence(&mut out, finding);
     }
+
+    ambiguous(&mut out, report);
 
     let _ = writeln!(out);
     if report.is_clear() {
@@ -95,6 +99,67 @@ pub fn render(root: &Path, report: &ScanReport) -> String {
     }
     let _ = writeln!(out, "Nothing was recorded.");
     out
+}
+
+/// The Heuristics that fired on the Item, under the Finding they belong to:
+/// the evidence of a Suspicious Finding, and what was also noticed under a
+/// Rule Finding.
+fn evidence(out: &mut String, finding: &Finding) {
+    if finding.heuristics.is_empty() {
+        return;
+    }
+    if !finding.also_noticed().is_empty() {
+        let _ = writeln!(out, "  Also noticed:");
+    }
+    for heuristic in &finding.heuristics {
+        let _ = writeln!(out, "    {}", line_of(heuristic));
+    }
+}
+
+/// One fired Heuristic on one line: its id, its Weight and its plain sentence.
+fn line_of(heuristic: &FiredHeuristic) -> String {
+    format!(
+        "{:04}  weight {}  {}",
+        heuristic.id, heuristic.weight, heuristic.plain
+    )
+}
+
+/// The Items whose Score fell between the thresholds. They raise no Finding
+/// and there is nothing to do about them, so they are named and left.
+fn ambiguous(out: &mut String, report: &ScanReport) {
+    let ambiguous: Vec<_> = report
+        .assessments
+        .iter()
+        .filter(|assessment| assessment.band == Band::Ambiguous)
+        .collect();
+    if ambiguous.is_empty() {
+        return;
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "{} in the {} Band, nothing to do:",
+        count(ambiguous.len(), "Item", "Items"),
+        Band::Ambiguous
+    );
+    for assessment in ambiguous {
+        let id = assessment.item_id.as_str();
+        let name = Path::new(id)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "  {} \u{b7} {}  (score {})",
+            finding_kind(id),
+            name,
+            assessment.score
+        );
+        let _ = writeln!(out, "  {id}");
+        for heuristic in &assessment.fired {
+            let _ = writeln!(out, "    {}", line_of(heuristic));
+        }
+    }
 }
 
 /// The exit code of a Folder Scan: nothing found, or something found.

@@ -1,0 +1,20 @@
+# Near miss: a private key path in prose, with a dynamic context that only reads the commit date.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/key-checkup"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "key-checkup"
+allowed_tools = ["Bash(git log:*)"]
+allowed_tools_n = 1
+has_dynamic_context = true
+
+[expect]
+fire = []

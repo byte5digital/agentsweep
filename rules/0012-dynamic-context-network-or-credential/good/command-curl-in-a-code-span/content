@@ -1,0 +1,7 @@
+---
+description: Explain how to read the latest release from the API.
+allowed-tools: Bash(gh api:*)
+---
+
+Tell the user to run `curl -fsS https://api.example.invalid/releases/latest` in their own
+terminal and to paste the answer back. Never run that command from this command file.

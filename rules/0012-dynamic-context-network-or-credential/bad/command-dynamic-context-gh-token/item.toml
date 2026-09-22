@@ -1,0 +1,22 @@
+# Fixture for as_0012. A command file whose dynamic context prints the GitHub CLI token into the prompt.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/commands/review.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "review"
+allowed_tools = ["Bash(gh pr view:*)"]
+allowed_tools_n = 1
+has_dynamic_context = true
+
+[expect]
+fire = [12]

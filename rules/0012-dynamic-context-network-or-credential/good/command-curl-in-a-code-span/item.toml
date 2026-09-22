@@ -1,0 +1,21 @@
+# Near miss: a command file that shows a fetch in an ordinary code span and tells the user to run it themselves.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/commands/release-check.md"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "release-check"
+allowed_tools = ["Bash(gh api:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = []

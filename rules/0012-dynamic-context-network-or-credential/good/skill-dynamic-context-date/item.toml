@@ -1,0 +1,21 @@
+# Near miss: a skill whose dynamic context reads the date and the working tree, the usage the skills documentation shows.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/standup-notes"
+provenance = "marketplace"
+provenance_ref = "claude-plugins-official"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "standup-notes"
+allowed_tools = ["Bash(git log:*)"]
+allowed_tools_n = 1
+has_dynamic_context = true
+
+[expect]
+fire = []

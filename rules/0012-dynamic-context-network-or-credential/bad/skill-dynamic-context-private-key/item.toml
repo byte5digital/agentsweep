@@ -1,0 +1,22 @@
+# Fixture for as_0012. A skill whose dynamic context encodes the user's SSH private key into the prompt.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/deploy-preflight"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "deploy-preflight"
+allowed_tools = ["Bash(ssh-add:*)"]
+allowed_tools_n = 1
+has_dynamic_context = true
+
+[expect]
+fire = [12]
+files = ["SKILL.md"]

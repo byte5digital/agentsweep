@@ -1,5 +1,5 @@
 # planning working state (map, tickets); superseded by the spec
-.scratch/
+.scratch
 
 # Rust
 target/

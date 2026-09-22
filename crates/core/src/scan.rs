@@ -14,11 +14,12 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use serde_json::Value;
 use yara_x::Scanner;
 
 use crate::adapter::{Enumeration, Problem};
 use crate::finding::{Finding, MatchRange, Source};
-use crate::item::{Item, Kind};
+use crate::item::{Item, Kind, ScanUnit};
 use crate::rules::RulePack;
 use crate::views::Views;
 
@@ -54,6 +55,19 @@ impl From<yara_x::errors::ScanError> for ScanFailure {
     }
 }
 
+/// One Rule that fired on one unit of bytes, before the core turns it into a
+/// Finding. The corpus runner checks these directly, because a Fixture states
+/// which Rule ids must fire and, for a tree, which files carry the match.
+#[derive(Clone, Debug)]
+pub struct RuleHit {
+    /// The YARA name of the Rule, `as_<nnnn>_<slug>`.
+    pub rule: String,
+    /// The relative path within a tree, empty for a file or an entry Item.
+    pub file: String,
+    /// Where the patterns matched.
+    pub matches: Vec<MatchRange>,
+}
+
 /// One worker thread's scanners, one per Surface kind, created on first use.
 pub struct Scanners<'p> {
     pack: &'p RulePack,
@@ -86,54 +100,83 @@ impl<'p> Scanners<'p> {
     /// Item and turns each hit into a Finding.
     pub fn scan(&mut self, item: &Item) -> Result<Vec<Finding>, ScanFailure> {
         let pack = self.pack;
-        let Some(rules) = pack.rules_for(item.kind) else {
-            return Ok(Vec::new());
-        };
-        let scanner = self
-            .by_kind
-            .entry(item.kind)
-            .or_insert_with(|| Scanner::new(rules));
+        let mut hits = Vec::new();
+        for unit in item.scan_units() {
+            let globals = Views::of(item, &unit).globals();
+            hits.extend(self.run(item.kind, &globals, &unit)?);
+        }
 
         let mut findings = Vec::new();
-        for unit in item.scan_units() {
-            let views = Views::of(item, &unit);
-            for (name, value) in views.globals() {
-                scanner.set_global(name, value)?;
-            }
-            let results = scanner.scan(unit.bytes)?;
-            for hit in results.matching_rules() {
-                let Some(meta) = pack.meta(hit.identifier()) else {
-                    continue;
-                };
-                let mut matches = Vec::new();
-                for pattern in hit.patterns() {
-                    for found in pattern.matches() {
-                        matches.push(MatchRange {
-                            pattern: pattern.identifier().to_string(),
-                            range: found.range(),
-                        });
-                    }
-                }
-                findings.push(Finding {
-                    item_id: item.id.clone(),
-                    source: Source::Rule(meta.id),
-                    content_hash: item.content_hash.clone(),
-                    category: meta.category,
-                    severity: meta.severity,
-                    tier: meta.tier,
-                    status: meta.status,
-                    title: meta.title.clone(),
-                    plain: meta.plain.clone(),
-                    sensitive: meta.sensitive,
-                    file: unit.file.to_string(),
-                    matches,
-                });
-            }
+        for hit in hits {
+            let Some(meta) = pack.meta(&hit.rule) else {
+                continue;
+            };
+            findings.push(Finding {
+                item_id: item.id.clone(),
+                source: Source::Rule(meta.id),
+                content_hash: item.content_hash.clone(),
+                category: meta.category,
+                severity: meta.severity,
+                tier: meta.tier,
+                status: meta.status,
+                title: meta.title.clone(),
+                plain: meta.plain.clone(),
+                sensitive: meta.sensitive,
+                file: hit.file,
+                matches: hit.matches,
+            });
         }
         findings.sort_by_key(|finding| match finding.source {
             Source::Rule(id) => id,
         });
         Ok(findings)
+    }
+
+    /// Runs every Rule that applies to one kind over one unit of bytes with
+    /// the globals the caller supplies, and reports the Rules that fired.
+    ///
+    /// [`Scanners::scan`] is the path a Scan takes, and it supplies the
+    /// globals of [`Views::of`]. This is the seam the corpus runner uses to
+    /// inject the facts a Fixture states in its `item.toml`, which no Item on
+    /// its own carries.
+    pub fn run(
+        &mut self,
+        kind: Kind,
+        globals: &[(&'static str, Value)],
+        unit: &ScanUnit<'_>,
+    ) -> Result<Vec<RuleHit>, ScanFailure> {
+        let pack = self.pack;
+        let Some(rules) = pack.rules_for(kind) else {
+            return Ok(Vec::new());
+        };
+        let scanner = self
+            .by_kind
+            .entry(kind)
+            .or_insert_with(|| Scanner::new(rules));
+
+        for (name, value) in globals {
+            scanner.set_global(name, value.clone())?;
+        }
+        let results = scanner.scan(unit.bytes)?;
+
+        let mut hits = Vec::new();
+        for fired in results.matching_rules() {
+            let mut matches = Vec::new();
+            for pattern in fired.patterns() {
+                for found in pattern.matches() {
+                    matches.push(MatchRange {
+                        pattern: pattern.identifier().to_string(),
+                        range: found.range(),
+                    });
+                }
+            }
+            hits.push(RuleHit {
+                rule: fired.identifier().to_string(),
+                file: unit.file.to_string(),
+                matches,
+            });
+        }
+        Ok(hits)
     }
 }
 

@@ -1,0 +1,19 @@
+# Near miss: the key is there, and it is switched off.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/skipDangerousModePermissionPrompt"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "skipDangerousModePermissionPrompt"
+value = "false"
+value_host = ""
+
+[expect]
+fire = []

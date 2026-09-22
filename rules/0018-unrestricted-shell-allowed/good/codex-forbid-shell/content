@@ -1,0 +1,4 @@
+prefix_rule(pattern=["bash", "-lc"], decision="forbidden")
+prefix_rule(pattern=["sh", "-c"], decision="forbidden")
+prefix_rule(pattern=["curl"], decision="prompt")
+prefix_rule(pattern=["git", "status"], decision="allow")

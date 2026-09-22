@@ -1,0 +1,19 @@
+# Fixture for as_0018. A bare Bash allow entry: every shell command, without asking.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/permissions/allow/4"
+provenance = "agent_written"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "permissions.allow.4"
+value = "Bash"
+value_host = ""
+
+[expect]
+fire = [18]

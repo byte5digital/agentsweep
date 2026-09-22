@@ -1,0 +1,19 @@
+# Fixture for as_0019. The Codex sandbox is switched off for the whole machine.
+[item]
+agent = "codex"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "user"
+path = ".codex/config.toml#sandbox_mode"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "sandbox_mode"
+value = "danger-full-access"
+value_host = ""
+
+[expect]
+fire = [19]

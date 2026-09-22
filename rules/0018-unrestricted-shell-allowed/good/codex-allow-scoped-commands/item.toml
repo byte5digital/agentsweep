@@ -1,0 +1,14 @@
+# Near miss: the execution policy Codex writes on "always allow", every entry scoped to one command.
+[item]
+agent = "codex"
+kind = "ExecPolicy"
+shape = "file"
+scope = "user"
+path = ".codex/rules/default.rules"
+provenance = "agent_written"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

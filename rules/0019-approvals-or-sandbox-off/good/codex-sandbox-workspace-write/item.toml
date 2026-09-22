@@ -1,0 +1,19 @@
+# Near miss: the sandbox is on and writes are confined to the workspace.
+[item]
+agent = "codex"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "user"
+path = ".codex/config.toml#sandbox_mode"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "sandbox_mode"
+value = "workspace-write"
+value_host = ""
+
+[expect]
+fire = []

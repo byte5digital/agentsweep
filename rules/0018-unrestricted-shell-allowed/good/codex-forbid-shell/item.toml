@@ -1,0 +1,16 @@
+# Near miss: an execution policy that names the shells in order to forbid them.
+[item]
+agent = "codex"
+kind = "ExecPolicy"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".codex/rules/hardening.rules"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

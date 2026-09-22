@@ -1,0 +1,20 @@
+# Fixture for as_0018. A Bash(*) allow entry in the project's own untracked settings.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.local.json#/permissions/allow/0"
+provenance = "agent_written"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "permissions.allow.0"
+value = "Bash(*)"
+value_host = ""
+
+[expect]
+fire = [18]

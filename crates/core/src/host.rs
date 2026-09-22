@@ -183,21 +183,22 @@ impl Host {
     /// when that is an interpreter, the first argument that is not a flag.
     ///
     /// A hook command is a shell line rather than a program, so `bash
-    /// ~/.claude/hooks/x.sh` resolves to the script and not to `bash`. The
-    /// word is taken as written; no expansion an Agent does at run time is
-    /// guessed at.
+    /// ~/.claude/hooks/x.sh` resolves to the script and not to `bash`.
+    /// Quoting is dropped, because a hook that writes
+    /// `"$CLAUDE_PROJECT_DIR"/x.sh` means one path. Nothing else an Agent
+    /// expands at run time is guessed at.
     pub fn resolve_command_line(&self, line: &str, base: Option<&Path>) -> Option<PathBuf> {
         let mut words = line
             .split_whitespace()
-            .map(|word| word.trim_matches(['"', '\'']));
+            .map(|word| word.replace(['"', '\''], ""));
         let first = words.next()?;
         let program = first.rsplit('/').next().unwrap_or_default();
         if INTERPRETERS.contains(&program)
             && let Some(script) = words.find(|word| !word.starts_with('-'))
         {
-            return self.resolve_command(script, base);
+            return self.resolve_command(&script, base);
         }
-        self.resolve_command(first, base)
+        self.resolve_command(&first, base)
     }
 
     /// True when a resolved path sits in a directory nothing legitimate
@@ -351,6 +352,10 @@ mod tests {
         assert_eq!(
             host.resolve_command_line("/opt/tools/watch --json", None),
             Some(PathBuf::from("/opt/tools/watch"))
+        );
+        assert_eq!(
+            host.resolve_command_line("\"/src/demo\"/.claude/hooks/fmt.sh", None),
+            Some(PathBuf::from("/src/demo/.claude/hooks/fmt.sh"))
         );
     }
 

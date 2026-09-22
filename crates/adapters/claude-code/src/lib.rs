@@ -425,11 +425,12 @@ impl ClaudeCode {
             registered: record.is_some(),
             trusted,
             // A committed settings file that approves the project's own servers
-            // is only honoured once the folder is trusted, so the approval is
-            // read from the layers that are allowed to give it.
-            enable_all_mcpjson: documents.iter().enumerate().any(|(index, document)| {
+            // is only honoured once the folder is trusted, which is exactly the
+            // hole CVE-2025-59536 went through. The local file is the user's
+            // own and is taken as written.
+            enable_all_mcpjson: documents.iter().any(|document| {
                 document.flag("enableAllProjectMcpServers") == Some(true)
-                    && (index == 0 || trusted == Some(true))
+                    && (document.surface == PROJECT_LOCAL_SETTINGS_FILE || trusted == Some(true))
             }),
             enabled_mcpjson,
             disabled_mcpjson,
@@ -506,7 +507,10 @@ impl ClaudeCode {
 
         if let Some(result) = self.instruction_file(host, root) {
             match result {
-                Ok(item) => enumeration.items.push(item),
+                Ok(mut item) => {
+                    item.registered = facts.registered;
+                    enumeration.items.push(item);
+                }
                 Err(problem) => enumeration.problems.push(problem),
             }
         }

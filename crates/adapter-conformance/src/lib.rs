@@ -3,10 +3,11 @@
 //! It runs every adapter against sanitised fixture trees on temporary copies
 //! and checks what the contract of spec section 3 promises: the enumeration is
 //! the one the snapshot records, two enumerations of the same tree yield the
-//! same Item ids, every watch root maps back to at least one Item, every parsed
-//! view validates against the schema a Rule compiles against, and the
-//! descriptor declares an enforcement capability for every kind it yields that
-//! agrees with the core's eligibility table.
+//! same Item ids, a second copy of the tree in a directory of its own yields
+//! the same content hashes, every watch root maps back to at least one Item,
+//! every parsed view validates against the schema a Rule compiles against, and
+//! the descriptor declares an enforcement capability for every kind it yields
+//! that agrees with the core's eligibility table.
 //!
 //! The workspace adapter is the reference: it is written against the trait and
 //! nothing else, and it is run first.
@@ -169,7 +170,24 @@ fn check_case(adapter: &dyn SurfaceAdapter, case: &str, report: &mut Report) {
     let first = adapter.enumerate(&host, &roots);
     let second = adapter.enumerate(&host, &roots);
 
+    // The second enumeration is of an independent copy in a directory of its
+    // own. Anything an Item carries that depends on where the copy happened to
+    // land, a path in the content an entry hash is taken over above all, shows
+    // up here and nowhere else.
+    let elsewhere = fixtures::Copy::of(agent, case);
+    let other_host = elsewhere.host();
+    let other = adapter.enumerate(&other_host, other_host.project_roots());
+
     check_ids(adapter, case, &first, &second, report);
+    check_placement(
+        adapter,
+        case,
+        &first,
+        copy.root(),
+        &other,
+        elsewhere.root(),
+        report,
+    );
     report
         .violations
         .extend(check_enumeration(adapter, case, &first).violations);
@@ -217,6 +235,45 @@ fn check_ids(
             case,
             "id stability",
             format!("{:?} then {:?}", ids(first), ids(second)),
+        );
+    }
+}
+
+/// The same fixture tree in two different directories yields the same Items.
+///
+/// An Item id names where a project root is, so ids differ by construction and
+/// are compared with the root written out as `<root>`. A content hash may not
+/// differ at all: an entry hash is what Trust and the Baseline key on, and one
+/// that moves with the directory the tree happens to sit in would mean a
+/// machine could never carry either over.
+fn check_placement(
+    adapter: &dyn SurfaceAdapter,
+    case: &str,
+    here: &Enumeration,
+    here_root: &Path,
+    elsewhere: &Enumeration,
+    elsewhere_root: &Path,
+    report: &mut Report,
+) {
+    let agent = adapter.descriptor().agent;
+    let rendered = |enumeration: &Enumeration, root: &Path| -> Vec<String> {
+        enumeration
+            .items
+            .iter()
+            .map(|item| {
+                format!("{} {}", item.id, item.content_hash)
+                    .replace(&root.display().to_string(), "<root>")
+            })
+            .collect()
+    };
+    let one = rendered(here, here_root);
+    let other = rendered(elsewhere, elsewhere_root);
+    if one != other {
+        report.note(
+            agent,
+            case,
+            "placement",
+            format!("a second copy of the tree yields {other:?} instead of {one:?}"),
         );
     }
 }
@@ -417,9 +474,16 @@ pub fn snapshot(adapter: &dyn SurfaceAdapter, enumeration: &Enumeration, root: &
     let mut out = String::new();
     for item in &enumeration.items {
         let _ = writeln!(out, "item {}", item.id);
+        // The reason is written only when there is one, so a case whose Items
+        // are all active reads exactly as it did before adapters learned to
+        // say why something would not be loaded.
+        let reason = match item.activation.reason() {
+            "" => String::new(),
+            reason => format!("({reason})"),
+        };
         let _ = writeln!(
             out,
-            "  shape={} scope={} provenance={} activation={} registered={} symlink={} size={}",
+            "  shape={} scope={} provenance={} activation={}{reason} registered={} symlink={} size={}",
             item.shape.as_str(),
             item.scope.as_str(),
             item.provenance.as_str(),

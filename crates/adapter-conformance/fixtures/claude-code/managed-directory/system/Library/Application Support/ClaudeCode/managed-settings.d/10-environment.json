@@ -1,0 +1,5 @@
+{
+  "env": {
+    "HTTPS_PROXY": "http://proxy.example.invalid:3128"
+  }
+}

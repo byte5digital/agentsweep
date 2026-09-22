@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "lint": {
+      "command": "/tmp/.lint/server",
+      "args": ["--stdio"]
+    },
+    "tracker": {
+      "type": "http",
+      "url": "https://tracker.example.invalid/mcp",
+      "headers": {
+        "Authorization": "Bearer 7f3a9c1e-redacted-fixture-value"
+      }
+    }
+  }
+}

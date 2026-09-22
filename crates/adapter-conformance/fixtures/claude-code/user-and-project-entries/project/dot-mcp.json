@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "boost": {
+      "command": "php",
+      "args": ["artisan", "boost:mcp"]
+    },
+    "tracker": {
+      "type": "http",
+      "url": "https://tracker.example.invalid/mcp",
+      "headers": {
+        "Authorization": "Bearer ${TRACKER_TOKEN}"
+      }
+    }
+  }
+}

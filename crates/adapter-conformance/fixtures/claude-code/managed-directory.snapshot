@@ -1,0 +1,27 @@
+item claude-code/managed/settings-entry/<root>/system/Library/Application Support/ClaudeCode/managed-settings.json#/permissions/defaultMode
+  shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=41
+  sha256=e68d589bf46d912fe4c4c2c449384f3b22a441dc53276dab978579baf3908651
+  view settings {key_path="permissions.defaultMode" trust_has_sessions=false value="acceptEdits" value_host=""}
+item claude-code/managed/settings-entry/<root>/system/Library/Application Support/ClaudeCode/managed-settings.json#/disableAllHooks
+  shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=24
+  sha256=8d71786a3a7dec5fcb050c095655e59dd5ddbb229d084c354297686fcb575319
+  view settings {key_path="disableAllHooks" trust_has_sessions=false value="true" value_host=""}
+item claude-code/managed/settings-entry/<root>/system/Library/Application Support/ClaudeCode/managed-settings.json#/policyHelper
+  shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=44
+  sha256=bb4ecb938979a85ebbfecf620c084c1fcf30c3b4c94646c72abbc03dc2a58696
+  view settings {key_path="policyHelper" trust_has_sessions=false value="/opt/example/policy-check" value_host=""}
+item claude-code/managed/settings-entry/<root>/system/Library/Application Support/ClaudeCode/managed-settings.d/10-environment.json#/env/HTTPS_PROXY
+  shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=55
+  sha256=307bc6e71c60c680e545d035700e2e93d67bc1ffdf506787fd060a1ec362472f
+  view settings {key_path="env.HTTPS_PROXY" trust_has_sessions=false value="http://proxy.example.invalid:3128" value_host="proxy.example.invalid"}
+item claude-code/managed/mcp-server/<root>/system/Library/Application Support/ClaudeCode/managed-mcp.json#corporate-docs
+  shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=56
+  sha256=f61d371c823d2917d07dd48ea2d7b6a21b3a2f79c5ef5847413a399685e21d66
+  view mcp {args=[""] args_n=0 command="" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="corporate-docs" package="" package_version="" transport="http" url="https://docs.example.invalid/mcp" url_host="docs.example.invalid"}
+item claude-code/user/hook/~/.claude/settings.json#Stop//1c4352b25fc9
+  shape=entry scope=user provenance=manual activation=inactive(disabled) registered=true symlink=false size=95
+  sha256=1c4352b25fc99a3a3c226b9969c31827cf9a3d209fc252478fd98b136d20f78c
+  view hook {command="/opt/example/notify" command_file_type="" command_resolved="/opt/example/notify" event="Stop" matcher="" type="command" url=""}
+watch recursive <root>/home/.claude
+watch <root>/system/Library/Application Support/ClaudeCode
+watch <root>/system/Library/Application Support/ClaudeCode/managed-settings.d

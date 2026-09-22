@@ -1,0 +1,51 @@
+item claude-code/user/settings-entry/~/.claude/settings.json#/statusLine
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=69
+  sha256=1db711ec2487a62f5de634d77c250ff5fdb3706cd8eea0d5fb9c1b2339651c2a
+  view settings {key_path="statusLine" trust_has_sessions=false value="{\"command\":\"~/.claude/statusline.sh\",\"type\":\"command\"}" value_host=""}
+item claude-code/user/settings-entry/~/.claude/settings.json#/env/NODE_OPTIONS
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=48
+  sha256=a0ca876240e251f13b4c427259732c5ec05d11d8db23ce6e05eb6b325f0b0a01
+  view settings {key_path="env.NODE_OPTIONS" trust_has_sessions=false value="--max-old-space-size=8192" value_host=""}
+item claude-code/user/settings-entry/~/.claude/settings.json#/permissions/allow/0
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=20
+  sha256=51698bb2fff362333e517d0cb4f8d0d867e8a291729b51192626811c367943b3
+  view settings {key_path="permissions.allow.0" trust_has_sessions=false value="Bash(cargo test *)" value_host=""}
+item claude-code/user/hook/~/.claude/settings.json#SessionStart//8e05d7c5d51f
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=121
+  sha256=8e05d7c5d51f11984d39b011a8e7c41e46b3075fa9c88e491422df5967212092
+  view hook {command="bash ~/.claude/hooks/session-start.sh" command_file_type="text" command_resolved="<root>/home/.claude/hooks/session-start.sh" event="SessionStart" matcher="" type="command" url=""}
+item claude-code/user/mcp-server/~/.claude.json#notes
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=73
+  sha256=5adfc813283a73a64f0cdb4dcff7e8f0af7947f43a6a19763b7808a92b390d58
+  view mcp {args=["-y", "@modelcontextprotocol/server-everything"] args_n=2 command="npx" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="notes" package="@modelcontextprotocol/server-everything" package_version="" transport="stdio" url="" url_host=""}
+item claude-code/project:<root>/project/settings-entry/.claude/settings.local.json#/permissions/allow/0
+  shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=21
+  sha256=39cba76ad27d0c8fa569e581a402e54f3ac5808b3c964322ed99cbc2da9d0585
+  view settings {key_path="permissions.allow.0" trust_has_sessions=false value="Bash(php artisan *)" value_host=""}
+item claude-code/project:<root>/project/settings-entry/.claude/settings.local.json#/enabledMcpjsonServers/0
+  shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=7
+  sha256=e33e472c5ffcf14db8156b767787eda877ebc08c6cd5fefe735894d31ccb8b55
+  view settings {key_path="enabledMcpjsonServers.0" trust_has_sessions=false value="boost" value_host=""}
+item claude-code/project:<root>/project/hook/.claude/settings.json#PostToolUse/Edit/741e9fcc7cfe
+  shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=134
+  sha256=741e9fcc7cfe13aad5bbcd077b65d5b42a00ee7de4c371f3fb6253e8e1115e83
+  view hook {command="\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/format.sh" command_file_type="text" command_resolved="<root>/project/.claude/hooks/format.sh" event="PostToolUse" matcher="Edit" type="command" url=""}
+item claude-code/project:<root>/project/mcp-server/.mcp.json#boost
+  shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=48
+  sha256=2302f854ec8319ecafdba27f2459a56159ad12b07a4eb5a585e94d84dc1813f7
+  view mcp {args=["artisan", "boost:mcp"] args_n=2 command="php" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="boost" package="" package_version="" transport="stdio" url="" url_host=""}
+item claude-code/project:<root>/project/mcp-server/.mcp.json#tracker
+  shape=entry scope=project provenance=unknown activation=inactive(disabled) registered=true symlink=false size=113
+  sha256=d74f3384a0abf1dbfae4661de72dc1c85353af173112b5cdbdf34b01b3e0df0a
+  view mcp {args=[""] args_n=0 command="" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=["Authorization"] header_keys_n=1 name="tracker" package="" package_version="" transport="http" url="https://tracker.example.invalid/mcp" url_host="tracker.example.invalid"}
+item claude-code/project:<root>/project/mcp-server/~/.claude.json#scratch
+  shape=entry scope=project provenance=manual activation=active registered=true symlink=false size=51
+  sha256=49ec5c506598879c3d0d1ac0ac146241ab68cb03f11103670b16812a278add3e
+  view mcp {args=["~/.dev-utils/index.js"] args_n=1 command="node" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=true command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="scratch" package="" package_version="" transport="stdio" url="" url_host=""}
+item claude-code/project:<root>/project/instruction-file/CLAUDE.md
+  shape=file scope=project provenance=unknown activation=unknown registered=true symlink=false size=79
+  sha256=62894292ceb3940e0249ac29dec4b52340f05098cc610554524666c0cd7bc572
+watch recursive <root>/home/.claude
+watch recursive <root>/project/.claude
+watch <root>/home
+watch <root>/project

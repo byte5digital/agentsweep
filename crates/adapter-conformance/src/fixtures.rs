@@ -12,7 +12,15 @@
 //!
 //! A case is the project root, unless it holds both a `home` and a `project`
 //! directory, in which case those are the fake home and the fake project the
-//! Host is built from.
+//! Host is built from. A `system` directory beside them stands in for the
+//! absolute system paths a Managed Surface lives at, so no case ever reads the
+//! real `/Library` of the machine it runs on.
+//!
+//! A registry keys its records by absolute path, which nobody can write down
+//! before the copy exists. So a fixture file may name the copy with
+//! `{{home}}`, `{{project}}` and `{{root}}`, and the copy puts the real paths
+//! in. The snapshot writes them back out as `<root>`, so the case still reads
+//! the same wherever it landed.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,6 +61,7 @@ pub struct Copy {
     root: PathBuf,
     home: Option<PathBuf>,
     project: PathBuf,
+    system: Option<PathBuf>,
 }
 
 impl Copy {
@@ -69,17 +78,59 @@ impl Copy {
 
         let home = root.join("home");
         let project = root.join("project");
-        if home.is_dir() && project.is_dir() {
+        let system = root.join("system");
+        let copy = if home.is_dir() && project.is_dir() {
             Copy {
                 home: Some(home),
                 project,
+                system: system.is_dir().then_some(system),
                 root,
             }
         } else {
             Copy {
                 home: None,
                 project: root.clone(),
+                system: None,
                 root,
+            }
+        };
+        copy.name_itself();
+        copy
+    }
+
+    /// Puts the paths of the copy into the files that name them. A registry
+    /// records a project by its absolute path, so a case that has one has to
+    /// be told where it landed.
+    fn name_itself(&self) {
+        let replacements = [
+            ("{{root}}", self.root.display().to_string()),
+            (
+                "{{home}}",
+                self.home.clone().unwrap_or_default().display().to_string(),
+            ),
+            ("{{project}}", self.project.display().to_string()),
+        ];
+        let mut stack = vec![self.root.clone()];
+        while let Some(directory) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let Ok(content) = fs::read_to_string(&path) else {
+                    continue;
+                };
+                let mut named = content.clone();
+                for (placeholder, actual) in &replacements {
+                    named = named.replace(placeholder, actual);
+                }
+                if named != content {
+                    fs::write(&path, named).expect("a fixture file that names the copy");
+                }
             }
         }
     }
@@ -94,12 +145,20 @@ impl Copy {
         &self.project
     }
 
-    /// The Host over the copy: the fake home when the case has one, and the
-    /// one pooled project root.
+    /// The Host over the copy: the fake home when the case has one, the one
+    /// pooled project root, and the fake system root when the case has one.
+    ///
+    /// The search path stays empty on purpose. A bare command word would
+    /// otherwise resolve against whatever is installed on the machine running
+    /// the suite, and a snapshot has to read the same everywhere.
     pub fn host(&self) -> Host {
-        match &self.home {
+        let host = match &self.home {
             Some(home) => Host::new(home.clone(), vec![self.project.clone()]),
             None => Host::for_folder_scan(self.project.clone()),
+        };
+        match &self.system {
+            Some(system) => host.with_system_root(system.clone()),
+            None => host,
         }
     }
 }

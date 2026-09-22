@@ -1,0 +1,7 @@
+{
+  "disableAllHooks": true,
+  "policyHelper": "/opt/example/policy-check",
+  "permissions": {
+    "defaultMode": "acceptEdits"
+  }
+}

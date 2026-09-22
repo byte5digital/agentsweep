@@ -5,8 +5,17 @@
 //! decision. Surface Adapters are in-tree crates beside this one and never see
 //! a Tier or a Rule.
 //!
-//! The crate is a scaffold. The types arrive with milestone 1 of the build
-//! plan; only the frozen names live here so far.
+//! What is here so far is the first end-to-end path: the Item, the Host, the
+//! read side of the Surface Adapter contract, the view globals of the rule
+//! contract, the bundled Rule Pack and the Rule tier that runs it. The stores,
+//! the Baseline and the later Tiers arrive with their milestones.
+
+#![warn(missing_docs)]
+
+pub mod adapter;
+pub mod finding;
+pub mod host;
+pub mod item;
 
 /// The machine-readable name of the product. AgentSweep in prose and UI,
 /// `agentsweep` in every name a machine reads.
@@ -35,5 +44,20 @@ mod tests {
     #[test]
     fn the_machine_readable_name_is_the_bundle_id_suffix() {
         assert!(BUNDLE_ID.ends_with(NAME));
+    }
+
+    /// The rule engine must stay on Wasmtime's interpreter. Turning the
+    /// default features of `yara-x` back on would bring the just-in-time
+    /// compiler with them, and the notarized bundle runs under the hardened
+    /// runtime without a JIT entitlement (ADR 0004).
+    #[test]
+    fn the_rule_engine_is_built_without_a_just_in_time_compiler() {
+        let manifest = include_str!("../Cargo.toml");
+        let line = manifest
+            .lines()
+            .find(|line| line.starts_with("yara-x"))
+            .expect("the core depends on yara-x");
+        assert!(line.contains("default-features = false"), "{line}");
+        assert!(line.contains("\"pulley\""), "{line}");
     }
 }

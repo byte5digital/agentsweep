@@ -4,7 +4,13 @@
 //! with the facts its `item.toml` states, then checks that exactly the Rule
 //! ids in `expect.fire` fired and, for a tree, that they fired on the files
 //! `expect.files` names. A Fixture under `bad/` must fire its own Rule; a
-//! Fixture under `good/` is a near miss and must fire nothing at all.
+//! Fixture under `good/` is a near miss its own Rule must stay silent on.
+//!
+//! A Heuristic that fires on another Rule's Fixture is not a failure. The
+//! Heuristic tier exists to notice what the Rule tier deliberately narrowed
+//! away, so a Rule's near miss is often a Heuristic's hit; the runner counts
+//! those instead of failing on them, the way the benign corpus does. A Fixture
+//! that names a Heuristic in `expect.fire` still holds it to firing.
 //!
 //! Every failure names the Fixture and the Rule ids involved, because that is
 //! what a rule author needs to see when a new pattern reaches too far.
@@ -13,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use agentsweep_core::finding::Tier;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::{ScanFailure, Scanners};
 
@@ -30,6 +37,9 @@ pub struct Outcome {
     pub expected: Vec<i64>,
     /// The Rule ids that fired.
     pub fired: Vec<i64>,
+    /// The Heuristics that fired without being named, which is counted rather
+    /// than held against the Fixture.
+    pub also_fired: Vec<i64>,
     /// Which files each fired Rule fired on, for a tree.
     pub files: BTreeMap<i64, BTreeSet<String>>,
     /// What is wrong, empty when the Fixture holds.
@@ -135,11 +145,18 @@ fn check(
         .copied()
         .filter(|id| !fired.contains(id))
         .collect();
-    let unexpected: Vec<i64> = fired
+    let unnamed: Vec<i64> = fired
         .iter()
         .copied()
         .filter(|id| !expected.contains(id))
         .collect();
+    // A Heuristic that fires on someone else's Fixture is what the Heuristic
+    // tier is for. Every other unnamed Rule is a Fixture that no longer says
+    // what it proves.
+    let (also_fired, unexpected): (Vec<i64>, Vec<i64>) = unnamed
+        .into_iter()
+        .partition(|id| *id != fixture.rule_id && is_heuristic(pack, *id));
+
     if !missing.is_empty() {
         problems.push(format!(
             "rules {missing:?} were expected to fire and did not"
@@ -155,8 +172,11 @@ fn check(
             fixture.rule_id
         ));
     }
-    if !fixture.bad && !expected.is_empty() {
-        problems.push("a good fixture is a near miss and expects no rule to fire".to_string());
+    if !fixture.bad && expected.contains(&fixture.rule_id) {
+        problems.push(format!(
+            "a good fixture is a near miss and expects its own rule {} to stay silent",
+            fixture.rule_id
+        ));
     }
 
     match (&fixture.expect.files, fixture.shape()) {
@@ -185,9 +205,29 @@ fn check(
         fixture: fixture.id(),
         expected,
         fired,
+        also_fired,
         files,
         problems,
     })
+}
+
+/// True when the Rule of that id is a Heuristic.
+fn is_heuristic(pack: &RulePack, id: i64) -> bool {
+    pack.metas()
+        .any(|meta| meta.id == id && meta.tier == Tier::Heuristics)
+}
+
+/// How often each Heuristic fired across the corpus without being named, in id
+/// order. This is the hit report a rule author reads to see how loud a new
+/// Heuristic is.
+pub fn heuristic_hits(outcomes: &[Outcome]) -> BTreeMap<i64, usize> {
+    let mut hits = BTreeMap::new();
+    for outcome in outcomes {
+        for id in &outcome.also_fired {
+            *hits.entry(*id).or_default() += 1;
+        }
+    }
+    hits
 }
 
 #[cfg(test)]

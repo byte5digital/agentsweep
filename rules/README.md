@@ -101,6 +101,8 @@ An AI Judgement Verdict moves an Ambiguous Item to Suspicious (malicious, and on
 
 **Fixture bar.** At least two `bad/` and two `good/` fixtures. The benign corpus run reports the hit count per heuristic instead of failing on it; a weight 3 heuristic must be at zero. Heuristics ship `stable`, there is no probation for a rule that cannot quarantine; `retired` still applies.
 
+**Heuristics on another rule's fixtures.** A heuristic exists to notice what a tier 1 rule deliberately narrowed away, so a rule's near miss is often a heuristic's hit: bare `/dev/tcp`, a single zero-width character, an unpinned `npx -y`. The corpus runner counts those instead of failing on them and prints the count per heuristic, the same way the benign corpus does. A fixture that names a heuristic in `expect.fire` still holds it to firing, and every tier 1 rule stays exact.
+
 **Changing tier.** When a documented source appears for a heuristic, one pull request sets `tier = 1`, removes `weight`, sets `status = "probation"`, adds fixtures up to the tier 1 bar and keeps the id. A tier 1 rule demoted after false-positive reports takes `tier = 2` and a `weight`, keeping its id.
 
 **User rules** in `rules.d/` carry the `weight` they declare, capped at 3, defaulting to 2 when missing.
@@ -159,5 +161,5 @@ Developers may drop their own rules into the app's `rules.d/` directory. They lo
 1. Take the next free id. Create `rules/<nnnn>-<slug>/rule.yar` with the full `meta:` block.
 2. Prefer byte patterns on the Item's bytes; reach for a view field only when bytes cannot express the check. If the field does not exist, add it to the adapter and to the table above in the same pull request.
 3. Write the near misses first. A rule that cannot name three legitimate look-alikes it stays silent on is not a tier 1 rule.
-4. Run the corpus runner: `cargo test` runs every fixture of every rule, and `cargo run -p agentsweep-xtask -- corpus` prints the whole report at once. Every fixture must produce exactly the ids in `expect.fire`, and for a tree the match must land on the files in `expect.files`.
+4. Run the corpus runner: `cargo test` runs every fixture of every rule, and `cargo run -p agentsweep-xtask -- corpus` prints the whole report at once. Every fixture must produce exactly the ids in `expect.fire`, apart from heuristics firing on another rule's fixture, which are counted; for a tree the match must land on the files in `expect.files`.
 5. Ship on probation.

@@ -64,8 +64,20 @@ fn run_corpus() -> Result<String, String> {
         .map(|outcome| outcome.report())
         .collect();
     if failed.is_empty() {
+        let hits: Vec<String> = corpus::heuristic_hits(&outcomes)
+            .into_iter()
+            .map(|(id, count)| format!("{id:04}x{count}"))
+            .collect();
+        let noticed = if hits.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\nheuristics noticed on other rules' fixtures: {}\n",
+                hits.join(" ")
+            )
+        };
         return Ok(format!(
-            "{} fixtures over {} rules, all as expected\n",
+            "{} fixtures over {} rules, all as expected\n{noticed}",
             fixtures.len(),
             pack.len()
         ));

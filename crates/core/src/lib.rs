@@ -16,6 +16,8 @@ pub mod adapter;
 pub mod finding;
 pub mod host;
 pub mod item;
+pub mod rules;
+pub mod scan;
 pub mod views;
 
 /// The machine-readable name of the product. AgentSweep in prose and UI,

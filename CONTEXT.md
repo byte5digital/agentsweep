@@ -116,6 +116,10 @@ _Avoid_: Skipped, unreadable, clean
 Removing AgentSweep with an explicit choice about what is in Quarantine: restore it all, keep it, or delete everything. Keeping is the default, so removing the app never silently loses a quarantined Item.
 _Avoid_: Remove, delete the app, reset
 
+**Gate**:
+AgentSweep's own hook in each Agent that refuses a turn or a tool call while an open Threat Finding stands on the project in use, on the user's instruction files, or on the Item about to be used. Defence in depth behind Quarantine: it never quarantines, never acts on Exposure or the Ambiguous Band, allows when AgentSweep is not running, and a project can switch it off, which is shown rather than fought.
+_Avoid_: Interceptor, guard, hook (the mechanism, not the thing), real-time protection, load-time blocking
+
 **Posture**:
 How much the app shows, chosen at onboarding and changed in Settings: Simple (plain sentences, one clear action, technical details one click away per Finding) or Developer (ids, paths, hashes, Scores and matched text always visible). One UI, never two apps; a Posture changes wording and density, never what is detected or enforced.
 _Avoid_: Mode, profile, view, expert mode

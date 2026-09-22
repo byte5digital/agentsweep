@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Nothing in CI writes to the repository and no job may reach a release secret.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # A dependency that fails to fetch should fail the job, not hang it.
+  CARGO_NET_RETRY: 3
+
+jobs:
+  sign-off:
+    name: Sign-off
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check the Developer Certificate of Origin sign-off
+        env:
+          DCO_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DCO_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: .github/scripts/dco-check.sh "${DCO_BASE}" "${DCO_HEAD}"
+
+  build:
+    name: Build, lint and test
+    # macOS 14 is the minimum the product supports, so it is what CI builds on.
+    runs-on: macos-14
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: .github/scripts/install-toolchain.sh
+
+      - name: Check the formatting
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      # cargo-auditable and cargo-deny are built from crates.io with the pinned
+      # toolchain rather than pulled as prebuilt binaries by a third party
+      # action, so the only code CI runs comes from the one registry the
+      # dependency policy allows.
+      - name: Build with an embedded dependency list
+        run: |
+          cargo install --locked cargo-auditable
+          cargo auditable build --workspace --locked --release
+
+  dependencies:
+    name: Dependency policy
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: .github/scripts/install-toolchain.sh
+
+      - name: Check advisories, licences and sources
+        run: |
+          cargo install --locked cargo-deny
+          cargo deny --locked check advisories licenses sources

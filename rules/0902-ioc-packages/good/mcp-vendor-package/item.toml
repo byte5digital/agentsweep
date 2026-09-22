@@ -1,0 +1,24 @@
+# Near miss: the vendor's own server, whose name carries the same two words the other way round.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".mcp.json#/mcpServers/postmark"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "postmark"
+transport = "stdio"
+command = "npx"
+command_resolved = "/opt/homebrew/bin/npx"
+args = ["-y", "@postmark/mcp-server"]
+args_n = 2
+package = "@postmark/mcp-server"
+package_version = ""
+
+[expect]
+fire = []

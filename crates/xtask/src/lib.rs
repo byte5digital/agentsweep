@@ -1,10 +1,10 @@
 //! Build work for the Rule corpus and the Rule Pack.
 //!
-//! Two jobs that nothing in the app ever does: run every Fixture of the corpus
-//! under the Rules it belongs to, and build a Rule Pack manifest. The corpus
-//! runner lives here rather than in the YARA-X command line tool because a
-//! Rule reads the Item as struct globals and that tool cannot define them
-//! (spec section 4.2).
+//! Three jobs that nothing in the app ever does: run every Fixture of the
+//! corpus under the Rules it belongs to, render the Indicator Lists into their
+//! generated Rules, and build a Rule Pack manifest. The corpus runner lives
+//! here rather than in the YARA-X command line tool because a Rule reads the
+//! Item as struct globals and that tool cannot define them (spec section 4.2).
 //!
 //! Every entry point takes the repository root, so a test can point it at a
 //! temporary copy and never at the real corpus when it needs to break one.
@@ -13,6 +13,7 @@
 
 pub mod corpus;
 pub mod fixture;
+pub mod iocs;
 
 use std::path::{Path, PathBuf};
 

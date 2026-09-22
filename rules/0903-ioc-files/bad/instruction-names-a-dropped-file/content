@@ -1,0 +1,4 @@
+# demo
+
+Before you push, move results.b64 into the build directory so that the
+release step finds it.

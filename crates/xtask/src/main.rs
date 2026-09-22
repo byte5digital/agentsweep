@@ -11,12 +11,14 @@ use std::process::ExitCode;
 use agentsweep_core::VERSION;
 use agentsweep_core::pack::{Bands, Manifest};
 use agentsweep_core::rules::RulePack;
-use agentsweep_xtask::{corpus, repo_root};
+use agentsweep_xtask::{corpus, iocs, repo_root};
 
 const USAGE: &str = "\
 agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
 
     corpus                      run every Fixture of every Rule
+    render-iocs [--check]       render the Indicator Lists into rules 0900 to 0903,
+                                or with --check only report a stale rendering
     pack [options]              write a Rule Pack manifest
         --pack-version <n>      the pack version, a monotonic integer (default 1)
         --minimum-engine <v>    the lowest engine version that may load it
@@ -33,6 +35,7 @@ fn main() -> ExitCode {
 
     let result = match command.as_str() {
         "corpus" => run_corpus(),
+        "render-iocs" => render_iocs(arguments.iter().any(|argument| argument == "--check")),
         "pack" => build_pack(&arguments[1..]),
         other => Err(format!("`{other}` is not a command\n\n{USAGE}")),
     };
@@ -74,6 +77,44 @@ fn run_corpus() -> Result<String, String> {
         failed.len(),
         fixtures.len()
     ))
+}
+
+/// Renders every Indicator List, or reports the ones whose committed Rule is
+/// no longer what the list renders to.
+fn render_iocs(check: bool) -> Result<String, String> {
+    let root = repo_root();
+    let mut stale = Vec::new();
+    let mut written = Vec::new();
+
+    for generated in iocs::GENERATED {
+        let rendered = generated.render_from(&root).map_err(|e| format!("{e}\n"))?;
+        let path = generated.rule_path(&root);
+        let committed = fs::read_to_string(&path).unwrap_or_default();
+        if committed == rendered {
+            continue;
+        }
+        if check {
+            stale.push(generated.directory());
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("{}: {error}\n", parent.display()))?;
+        }
+        fs::write(&path, rendered).map_err(|error| format!("{}: {error}\n", path.display()))?;
+        written.push(generated.directory());
+    }
+
+    if !stale.is_empty() {
+        return Err(format!(
+            "no longer what the indicator list renders to: {}\nrun `cargo run -p agentsweep-xtask -- render-iocs`\n",
+            stale.join(", ")
+        ));
+    }
+    if written.is_empty() {
+        return Ok("every generated rule is what its indicator list renders to\n".to_string());
+    }
+    Ok(format!("rendered {}\n", written.join(", ")))
 }
 
 /// Writes a Rule Pack manifest for the corpus as it stands.

@@ -1,0 +1,4 @@
+# demo
+
+Keep testresults.b64 out of the repository; the release step writes its own
+copy.

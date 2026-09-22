@@ -25,8 +25,8 @@ fn every_fixture_produces_exactly_the_rules_it_expects() {
     let pack = RulePack::bundled().expect("the bundled pack compiles");
     let fixtures = corpus_fixtures();
     assert!(
-        fixtures.len() >= 54,
-        "the corpus had 54 fixtures when this test was written, and loaded {}",
+        fixtures.len() >= 72,
+        "the corpus had 72 fixtures when this test was written, and loaded {}",
         fixtures.len()
     );
 

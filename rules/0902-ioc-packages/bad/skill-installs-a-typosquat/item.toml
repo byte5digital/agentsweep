@@ -1,0 +1,21 @@
+# Fixture for as_0902. A skill that installs a typosquatted package by name.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/crawler"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "crawler"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [902]
+files = ["SKILL.md"]

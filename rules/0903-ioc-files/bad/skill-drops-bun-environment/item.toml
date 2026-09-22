@@ -1,0 +1,22 @@
+# Fixture for as_0903. A skill tree that carries a file a published campaign drops, whose own bytes say nothing.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/bundler"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "bundler"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [903]
+files = ["bun_environment.js"]

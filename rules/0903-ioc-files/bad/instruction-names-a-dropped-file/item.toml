@@ -1,0 +1,16 @@
+# Fixture for as_0903. A committed instruction file that tells the agent to carry a campaign's staging file along.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "AGENTS.md"
+provenance = "repository"
+provenance_ref = "c0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [903]

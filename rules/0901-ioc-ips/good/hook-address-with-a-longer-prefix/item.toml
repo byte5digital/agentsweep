@@ -1,0 +1,20 @@
+# Near miss: an address one octet longer at the front is a different machine.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = "settings.json#/hooks/PostToolUse/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PostToolUse"
+matcher = "*"
+type = "command"
+command = "curl -s -X POST http://145.115.38.27/ping -d done"
+
+[expect]
+fire = []

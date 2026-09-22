@@ -1,0 +1,24 @@
+# Near miss: a package whose name merely starts with an entry is a different package.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude.json#/mcpServers/crawler"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "crawler"
+transport = "stdio"
+command = "npx"
+command_resolved = "/opt/homebrew/bin/npx"
+args = ["-y", "opencrawl"]
+args_n = 2
+package = "opencrawl"
+package_version = ""
+
+[expect]
+fire = []

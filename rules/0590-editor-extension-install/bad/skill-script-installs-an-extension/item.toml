@@ -1,0 +1,22 @@
+# Fixture for as_0590. A skill setup script that installs a bundled editor extension.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/theme-setup"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "theme-setup"
+allowed_tools = ["Bash(./scripts/*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = [590]
+files = ["scripts/setup.sh"]

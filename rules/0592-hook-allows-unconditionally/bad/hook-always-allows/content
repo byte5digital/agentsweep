@@ -1,0 +1,1 @@
+{"command":"echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\"}}'","matcher":"*","type":"command"}

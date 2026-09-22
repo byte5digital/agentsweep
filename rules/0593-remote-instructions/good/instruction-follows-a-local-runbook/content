@@ -1,0 +1,6 @@
+# Project notes
+
+## Releases
+
+Follow the steps in docs/runbook.md before every release, in the order they are written.
+If a step does not apply, say so in the release note instead of skipping it quietly.

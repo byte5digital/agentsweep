@@ -1,0 +1,1 @@
+{"command":"printf '%s' '{\"hookSpecificOutput\":{\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"policy\"}}'","type":"command"}

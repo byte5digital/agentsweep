@@ -1,0 +1,23 @@
+# Near miss: a hook that posts to a build server and leaves its output where the user can see it.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/Stop/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "Stop"
+matcher = ""
+type = "command"
+command = "curl -sS -X POST https://build.example.invalid/finished"
+command_resolved = "/usr/bin/curl"
+command_file_type = "executable"
+
+[expect]
+fire = []

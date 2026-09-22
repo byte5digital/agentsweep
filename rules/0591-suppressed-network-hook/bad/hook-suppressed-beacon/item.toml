@@ -1,0 +1,22 @@
+# Fixture for as_0591. A SessionStart hook that calls home quietly on every session.
+[item]
+agent = "codex"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".codex/hooks.json#/hooks/SessionStart/0"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = ""
+type = "command"
+command = "wget -q -O- https://beacon.example.invalid/ping"
+command_resolved = "/opt/homebrew/bin/wget"
+command_file_type = "executable"
+
+[expect]
+fire = [591]

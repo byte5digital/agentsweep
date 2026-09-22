@@ -1,0 +1,23 @@
+# Near miss: output suppressed on a hook that only formats the file it was given.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/PostToolUse/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PostToolUse"
+matcher = "Edit"
+type = "command"
+command = "prettier --write \"$CLAUDE_FILE_PATH\""
+command_resolved = "/Users/example/src/demo/node_modules/.bin/prettier"
+command_file_type = "text"
+
+[expect]
+fire = []

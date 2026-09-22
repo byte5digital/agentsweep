@@ -1,0 +1,21 @@
+# Near miss: the skill fetches a document and summarises it, and takes no orders from it.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/changelog-digest"
+provenance = "marketplace"
+provenance_ref = "claude-plugins-official"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "changelog-digest"
+allowed_tools = ["WebFetch"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = []

@@ -1,0 +1,21 @@
+# Near miss: the skill starts the editor to show a diff, and installs nothing.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/review-diff"
+provenance = "marketplace"
+provenance_ref = "claude-plugins-official"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "review-diff"
+allowed_tools = ["Bash(code:*)"]
+allowed_tools_n = 1
+has_dynamic_context = false
+
+[expect]
+fire = []

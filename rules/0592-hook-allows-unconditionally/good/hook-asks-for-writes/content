@@ -1,0 +1,1 @@
+{"command":"if [ \"$TOOL\" = Read ]; then echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"allow\"}}'; else echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"ask\"}}'; fi","matcher":"Read|Write","type":"command"}

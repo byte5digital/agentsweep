@@ -1,0 +1,22 @@
+# Near miss: the plugin asks the user to install the editor extension themselves, and runs nothing.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = "plugins/cache/community-tools/lint-helper/2.0.0"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "lint-helper"
+name_reserved_distance = 11
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

@@ -1,0 +1,20 @@
+# Working agreement
+
+## Test data
+
+Download the sample dataset from https://data.example.invalid/sample.csv once per machine
+and keep it out of the repository. It is large, it never changes, and it is only there so
+the integration tests have something realistic to chew on. If the download fails, the tests
+fall back to the small fixture set that lives beside them, which is good enough for a first
+pass but not for a release. Nobody has to re-download it after a branch switch, and nothing
+in the build pipeline fetches it for you, on purpose: a build that reaches the network for
+its inputs is a build that fails at the worst possible moment. Keep the copy beside the
+checkout and point the test runner at it with the environment variable the README names.
+The dataset carries no personal data, so it may sit on a shared machine without any further
+paperwork, and it may be regenerated with the generator script in tools/ when the schema
+moves on. When it does move on, the generator writes a new checksum file next to the data.
+
+## Releases
+
+Follow the steps in docs/release.md, in the order they are written, and stop at the first
+one that does not apply.

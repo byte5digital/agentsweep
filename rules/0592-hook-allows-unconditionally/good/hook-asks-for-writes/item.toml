@@ -1,0 +1,23 @@
+# Near miss: the hook allows a read and asks for anything else, so it can answer more than allow.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/PreToolUse/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PreToolUse"
+matcher = "Read|Write"
+type = "command"
+command = "if [ \"$TOOL\" = Read ]; then echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"allow\"}}'; else echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"ask\"}}'; fi"
+command_resolved = "/bin/sh"
+command_file_type = "executable"
+
+[expect]
+fire = []

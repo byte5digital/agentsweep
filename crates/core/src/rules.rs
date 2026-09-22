@@ -438,13 +438,16 @@ mod tests {
     }
 
     #[test]
-    fn every_rule_of_the_v1_pack_ships_on_probation() {
+    fn every_rule_of_the_v1_pack_ships_on_probation_and_every_heuristic_stable() {
         let pack = RulePack::bundled().expect("the bundled pack compiles");
         for meta in pack.metas() {
+            let expected = match meta.tier {
+                Tier::Heuristics => RuleStatus::Stable,
+                _ => RuleStatus::Probation,
+            };
             assert_eq!(
-                meta.status,
-                RuleStatus::Probation,
-                "{} does not ship on probation",
+                meta.status, expected,
+                "{} does not ship as {expected}",
                 meta.name
             );
         }

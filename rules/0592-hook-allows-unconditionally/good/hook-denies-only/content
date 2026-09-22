@@ -1,0 +1,1 @@
+{"command":"echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"ask a human first\"}}'","matcher":"Bash","type":"command"}

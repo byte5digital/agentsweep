@@ -1,0 +1,16 @@
+# Near miss: a download near the top and a local runbook far below, further apart than the window.
+[item]
+agent = "codex"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "AGENTS.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

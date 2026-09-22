@@ -16,4 +16,10 @@ path = "src/main.rs"
 
 [dependencies]
 agentsweep-adapter-claude-code.workspace = true
+agentsweep-adapter-workspace.workspace = true
 agentsweep-core.workspace = true
+
+[dev-dependencies]
+# The repository the Folder Scan tests point at is written by this builder,
+# never by a git binary.
+agentsweep-adapter-workspace = { workspace = true, features = ["testing"] }

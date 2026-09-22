@@ -5,6 +5,7 @@
 //! of the build plan. What is here is `scan <dir>`, the Folder Scan, which runs
 //! entirely in this process and never reaches a daemon.
 
+mod developer;
 mod folder_scan;
 
 use std::path::PathBuf;
@@ -18,12 +19,21 @@ Usage:
   agentsweep --version    Print the version.
   agentsweep --help       Print this message.
 
-`scan` exits 0 when the folder is safe to open and 1 when it found something.";
+`scan` exits 0 when the folder is safe to open and 1 when it found something.
+
+Developer only, off unless asked for by name:
+  agentsweep --developer-list-items [<home>]
+                          List the Items the surface adapters would enumerate
+                          for a home directory, so a real installation can be
+                          compared with the surface inventory. It reads the
+                          real machine, records nothing and prints no values.
+                          Its output is never committed.";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
         Some("scan") => scan(&arguments[1..]),
+        Some("--developer-list-items") => developer_list_items(&arguments[1..]),
         Some("--version" | "-V") => {
             println!("{} {}", agentsweep_core::NAME, agentsweep_core::VERSION);
             ExitCode::SUCCESS
@@ -61,8 +71,40 @@ fn scan(arguments: &[String]) -> ExitCode {
     }
 }
 
+/// Developer only: what the surface adapters would enumerate for one home.
+fn developer_list_items(arguments: &[String]) -> ExitCode {
+    let home = match arguments {
+        [] => None,
+        [home] => Some(PathBuf::from(home)),
+        _ => {
+            eprintln!("agentsweep: `--developer-list-items` takes one folder.\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    match developer::list_items(home) {
+        Ok(listing) => {
+            print!("{listing}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("agentsweep: the Items could not be listed: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// The one flag that reads the real machine says so where a person sees
+    /// it, and nothing runs it by accident.
+    #[test]
+    fn the_developer_listing_is_marked_developer_only_in_the_help_text() {
+        let usage = super::USAGE;
+        assert!(usage.contains("Developer only"), "{usage}");
+        assert!(usage.contains("--developer-list-items"), "{usage}");
+        assert!(usage.contains("records nothing"), "{usage}");
+    }
+
     #[test]
     fn the_binary_name_is_the_machine_readable_product_name() {
         assert_eq!(env!("CARGO_BIN_NAME"), agentsweep_core::NAME);

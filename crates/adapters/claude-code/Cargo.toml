@@ -16,3 +16,8 @@ authors.workspace = true
 agentsweep-adapter-workspace.workspace = true
 agentsweep-core.workspace = true
 serde_json = "1.0.151"
+
+[dev-dependencies]
+# The repository the Rule tests point at is written by this builder, never by
+# a version control binary.
+agentsweep-adapter-workspace = { workspace = true, features = ["testing"] }

@@ -1,0 +1,13 @@
+model = "gpt-5-codex"
+
+[projects."{{home}}/elsewhere"]
+trust_level = "trusted"
+
+# A hook written inline in the config layer rather than in hooks.json. It has
+# no state pin, so Codex would offer to review it and neither answer is on
+# disk.
+[[hooks.hooks.Stop]]
+
+[[hooks.hooks.Stop.hooks]]
+type = "command"
+command = "echo done"

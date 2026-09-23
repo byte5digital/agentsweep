@@ -1,0 +1,2 @@
+allow_managed_hooks_only = true
+ignore_user_and_project_exec_policy_rules = true

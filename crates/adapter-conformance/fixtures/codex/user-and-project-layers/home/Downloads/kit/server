@@ -1,0 +1,2 @@
+#!/bin/sh
+echo 'a downloaded server that does nothing'

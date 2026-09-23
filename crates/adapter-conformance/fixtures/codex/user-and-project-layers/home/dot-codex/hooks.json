@@ -1,0 +1,20 @@
+{
+  "description": "A sanitised user hooks file.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {"type": "command", "command": "bash ~/.codex/hooks/session-start.sh", "timeout": 10}
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "shell",
+        "hooks": [
+          {"type": "command", "command": "bash ~/.codex/hooks/guard.sh"}
+        ]
+      }
+    ]
+  }
+}

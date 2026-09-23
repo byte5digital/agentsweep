@@ -1,0 +1,38 @@
+item codex/user/hook/~/.codex/config.toml#Stop//cf085885a6c4
+  shape=entry scope=user provenance=manual activation=unknown registered=true symlink=false size=85
+  sha256=cf085885a6c477f994c2ba2a1590805a7df8952031c9714697665178fb16951a
+  view hook {command="echo done" command_file_type="" command_resolved="" event="Stop" matcher="" type="command" url=""}
+item codex/project:<root>/project/settings-entry/.codex/config.toml#/approval_policy
+  shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=27
+  sha256=fb622b23fd11fdda0d0fa9b79e23134a92edc8755b5130aa08eeb43223386fb8
+  view settings {key_path="approval_policy" trust_has_sessions=false value="never" value_host=""}
+item codex/project:<root>/project/settings-entry/.codex/config.toml#/sandbox_mode
+  shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=37
+  sha256=26955cc3379a1457aac73e795d5158e7b02d1f8f71ef7fcf1962914c73a8edd1
+  view settings {key_path="sandbox_mode" trust_has_sessions=false value="danger-full-access" value_host=""}
+item codex/project:<root>/project/mcp-server/.codex/config.toml#planted
+  shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=51
+  sha256=49ec5c506598879c3d0d1ac0ac146241ab68cb03f11103670b16812a278add3e
+  view mcp {args=["~/.dev-utils/index.js"] args_n=1 command="node" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=true command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="planted" package="" package_version="" transport="stdio" url="" url_host=""}
+item codex/project:<root>/project/hook/.codex/hooks.json#SessionStart//cbb16d850ccc
+  shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=110
+  sha256=cbb16d850ccce39fb1af0ac6d559618b072a4d30e8ee61d39703a5cea2d01756
+  view hook {command="sh ./.codex/hooks/setup.sh" command_file_type="" command_resolved="<root>/project/.codex/hooks/setup.sh" event="SessionStart" matcher="" type="command" url=""}
+item codex/project:<root>/project/skill/.codex/skills/repo-skill
+  shape=file scope=project provenance=unknown activation=unknown registered=false symlink=false size=115
+  sha256=65892e681c72b2f41b8297a48a5b14085e7851bcd09a127625b53a1848bfd26d
+  view skill {allowed_tools=[""] allowed_tools_n=0 has_dynamic_context=false name="repo-skill"}
+item codex/project:<root>/project/skill/.agents/skills/shared
+  shape=file scope=project provenance=unknown activation=active registered=false symlink=false size=105
+  sha256=258bab8a71c29a1c55f95f02fc843d6db468c6bbfd7ca46f57109abc85f80cfb
+  view skill {allowed_tools=[""] allowed_tools_n=0 has_dynamic_context=false name="shared"}
+item codex/project:<root>/project/instruction-file/AGENTS.override.md
+  shape=file scope=project provenance=unknown activation=active registered=false symlink=false size=72
+  sha256=49bc87f8ff05a6a8fe1e34b15b081e59bbba75337226b5138e879f068b1cfa20
+item codex/project:<root>/project/instruction-file/AGENTS.md
+  shape=file scope=project provenance=unknown activation=inactive(disabled) registered=false symlink=false size=53
+  sha256=1580e0bce86bc8bdfa377fe3f379251976f869faf54606527f56a218c5eafd9e
+watch recursive <root>/home/.codex
+watch recursive <root>/project/.agents
+watch recursive <root>/project/.codex
+watch <root>/project

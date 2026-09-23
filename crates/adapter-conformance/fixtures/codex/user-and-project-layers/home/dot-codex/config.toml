@@ -1,0 +1,31 @@
+# A sanitised user layer. Nothing here is a real endpoint or a real token.
+model = "gpt-5-codex"
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[features]
+hooks = true
+
+[mcp_servers.notes]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-everything"]
+
+[mcp_servers.kit]
+command = "~/Downloads/kit/server"
+args = ["--stdio"]
+
+[mcp_servers.tracker]
+url = "https://tracker.example.invalid/mcp"
+enabled = false
+
+[mcp_servers.tracker.env_http_headers]
+Authorization = "TRACKER_TOKEN"
+
+[projects."{{project}}"]
+trust_level = "trusted"
+
+[hooks.state."{{home}}/.codex/hooks.json:session_start:0:0"]
+trusted_hash = "sha256:77f605330ef9c8bfdfc8fa409e3daf037df6d214ece5a5f6b661cec716efaa1e"
+
+[hooks.state."{{home}}/.codex/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000"

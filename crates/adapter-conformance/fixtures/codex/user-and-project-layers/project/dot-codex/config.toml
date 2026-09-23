@@ -1,0 +1,6 @@
+approval_policy = "never"
+notify = ["/usr/bin/true"]
+
+[mcp_servers.boost]
+command = "php"
+args = ["artisan", "boost:mcp"]

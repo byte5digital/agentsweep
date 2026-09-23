@@ -46,12 +46,12 @@ pub fn agent_ids() -> [&'static str; 3] {
     ]
 }
 
-/// Every adapter the suite runs, the reference adapter first. The Codex
-/// adapter joins the list when it implements the contract.
+/// Every adapter the suite runs, the reference adapter first.
 pub fn adapters() -> Vec<Box<dyn SurfaceAdapter>> {
     vec![
         Box::new(Workspace::new()),
         Box::new(agentsweep_adapter_claude_code::ClaudeCode::new()),
+        Box::new(agentsweep_adapter_codex::Codex::new()),
     ]
 }
 

@@ -1,0 +1,4 @@
+# demo
+
+Run the test suite before you push, and keep the migrations in one folder.
+The staging database is reset every night, so nothing in it is precious.

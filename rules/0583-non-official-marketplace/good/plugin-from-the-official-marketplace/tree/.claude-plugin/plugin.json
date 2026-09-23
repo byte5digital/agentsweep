@@ -1,0 +1,5 @@
+{
+  "name": "playwright",
+  "version": "1.4.2",
+  "description": "Drives a browser from the agent."
+}

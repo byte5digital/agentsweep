@@ -1,0 +1,23 @@
+# Fixture for as_0581. A skill that was not in the user's own folder the last
+# time AgentSweep looked. Skill is not one of 0580's four kinds, so the
+# appearance is carried here at weight 1.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/changelog"
+provenance = "manual"
+activation = "active"
+registered = true
+baseline = "added"
+file_type = "text"
+
+[skill]
+name = "changelog"
+allowed_tools = []
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [581]

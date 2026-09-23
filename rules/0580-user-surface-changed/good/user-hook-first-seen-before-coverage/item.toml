@@ -1,0 +1,24 @@
+# Near miss: the same hook on the first Scan, before any Baseline covered the
+# Surface. A first sighting is not a change, and none is never Drift.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/PostToolUse/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+baseline = "none"
+file_type = "text"
+
+[hook]
+event = "PostToolUse"
+matcher = "Edit"
+type = "command"
+command = "sh /Users/example/.claude/hooks/format.sh"
+command_resolved = "/bin/sh"
+command_file_type = "executable"
+
+[expect]
+fire = []

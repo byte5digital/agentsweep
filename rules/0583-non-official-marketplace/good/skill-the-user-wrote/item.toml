@@ -1,0 +1,21 @@
+# Near miss: a skill with no marketplace behind it at all, which is what the
+# user's own folder is full of.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/release-checklist"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "release-checklist"
+allowed_tools = []
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = []

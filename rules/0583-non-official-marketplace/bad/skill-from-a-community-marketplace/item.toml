@@ -1,0 +1,23 @@
+# Fixture for as_0583. The same question about a skill installed from a
+# catalogue the vendor does not run.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/review-notes"
+provenance = "marketplace"
+provenance_ref = "review-notes@community-skills"
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "review-notes"
+allowed_tools = []
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [583]

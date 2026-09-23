@@ -49,6 +49,15 @@ pub const USER_RULE_DEFAULT_WEIGHT: i64 = 2;
 /// The highest Weight an unsigned rule may carry, whatever it declares.
 pub const USER_RULE_MAXIMUM_WEIGHT: i64 = 3;
 
+/// The context Heuristics: the ones that decide on view fields alone, with no
+/// byte match behind them, reading the Item's Baseline state and its
+/// Provenance. A Heuristic joining them is added here.
+pub const CONTEXT_HEURISTICS: [i64; 4] = [580, 581, 582, 583];
+
+/// The highest Weight a context Heuristic may carry (`rules/README.md`).
+/// Context is a reason to read an Item, never evidence on its own.
+pub const CONTEXT_HEURISTIC_MAXIMUM_WEIGHT: i64 = 2;
+
 include!(concat!(env!("OUT_DIR"), "/bundled_rules.rs"));
 
 /// What went wrong while building a Rule Pack.
@@ -410,7 +419,21 @@ fn lint(
         }
         Tier::Heuristics => match rule.category {
             Category::Threat => match rule.weight {
-                Some(weight) if (1..=3).contains(&weight) => {}
+                Some(weight) if (1..=3).contains(&weight) => {
+                    // The cap belongs to the pack's own ids. An unsigned rule
+                    // that happens to carry one of them is not that Heuristic
+                    // and is already capped at USER_RULE_MAXIMUM_WEIGHT.
+                    if trust == PackTrust::Signed
+                        && CONTEXT_HEURISTICS.contains(&rule.id)
+                        && weight > CONTEXT_HEURISTIC_MAXIMUM_WEIGHT
+                    {
+                        return reject(format!(
+                            "heuristic {:04} decides on view fields alone and is capped at \
+                             `weight` {CONTEXT_HEURISTIC_MAXIMUM_WEIGHT}, not {weight}",
+                            rule.id
+                        ));
+                    }
+                }
                 Some(weight) => {
                     return reject(format!("`weight` {weight} is not 1, 2 or 3"));
                 }
@@ -692,9 +715,15 @@ mod tests {
     /// Compiles one rule source as a pack of its own and returns what the lint
     /// said about it.
     fn lint_of(source: String) -> Result<(), String> {
+        lint_of_origin("0021-under-lint/rule.yar", source)
+    }
+
+    /// The same, for a rule whose meta carries an id other than 21: the origin
+    /// has to name the matching directory or the index rejects it first.
+    fn lint_of_origin(origin: &'static str, source: String) -> Result<(), String> {
         let leaked: &'static str = Box::leak(source.into_boxed_str());
         let sources = vec![RuleSource {
-            origin: "0021-under-lint/rule.yar",
+            origin,
             source: leaked,
         }];
         match RulePack::compile(&sources) {
@@ -774,6 +803,49 @@ mod tests {
             ("reviewer_directed", Some("true")),
         ]))
         .expect("a heuristic with a weight passes the lint");
+    }
+
+    /// A context Heuristic fires on the Item's view fields alone, with no byte
+    /// match behind it, so `rules/README.md` caps it at Weight 2: a Baseline
+    /// state or a Provenance is a reason to read an Item, never evidence on
+    /// its own. The lint holds the cap and the bundled pack keeps to it.
+    #[test]
+    fn a_context_heuristic_may_not_be_weighted_above_the_cap() {
+        let over_the_cap = meta_variant(&[
+            ("id", Some("580")),
+            ("tier", Some("2")),
+            ("weight", Some("3")),
+            ("class", Some("5")),
+        ]);
+        let problem = lint_of_origin("0580-under-lint/rule.yar", over_the_cap)
+            .expect_err("a context heuristic is capped at 2");
+        assert!(problem.contains("0580"), "{problem}");
+        assert!(problem.contains("weight"), "{problem}");
+
+        lint_of_origin(
+            "0580-under-lint/rule.yar",
+            meta_variant(&[
+                ("id", Some("580")),
+                ("tier", Some("2")),
+                ("weight", Some("2")),
+                ("class", Some("5")),
+            ]),
+        )
+        .expect("the cap is 2, and 2 is under it");
+
+        let pack = RulePack::bundled().expect("the bundled pack compiles");
+        for id in CONTEXT_HEURISTICS {
+            let meta = pack
+                .metas()
+                .find(|meta| meta.id == id)
+                .unwrap_or_else(|| panic!("context heuristic {id:04} is in the pack"));
+            assert!(
+                meta.weight <= Some(CONTEXT_HEURISTIC_MAXIMUM_WEIGHT),
+                "{} carries weight {:?}",
+                meta.name,
+                meta.weight
+            );
+        }
     }
 
     #[test]

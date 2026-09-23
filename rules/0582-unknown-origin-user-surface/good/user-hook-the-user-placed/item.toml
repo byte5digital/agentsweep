@@ -1,0 +1,22 @@
+# Near miss: the same hook, with an origin the adapter can name.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = "startup"
+type = "command"
+command = "sh /Users/example/.claude/hooks/notify.sh"
+command_resolved = "/bin/sh"
+command_file_type = "executable"
+
+[expect]
+fire = []

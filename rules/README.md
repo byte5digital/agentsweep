@@ -115,9 +115,9 @@ The scan target is the Item's bytes: a file, each file of a tree in turn, or the
 item      agent, kind, shape (file|tree|entry), scope (managed|user|project), project_root, path,
           provenance (manual|marketplace|plugin|agent_written|repository|unknown), provenance_ref,
           activation (active|inactive|unknown), activation_reason, registered, size, is_symlink,
-          baseline (unchanged|changed|added|none, see below),
-          provenance_official (true when provenance is an official marketplace),
-          link_target, file_type (text|executable|binary|archive|office|bytecode|image|unknown), has_rtl_script,
+          baseline (unchanged|changed|added|none, see below; heuristics 0580, 0581),
+          provenance_official (true when provenance is an official marketplace; heuristic 0583),
+          link_target (heuristic 0568), file_type (text|executable|binary|archive|office|bytecode|image|unknown), has_rtl_script,
           whitespace_percent, max_blank_run (rule 0011),
           file (relative path within a tree, set per file scanned)
 mcp       name, transport (stdio|http|sse), command, command_resolved, command_in_temp,

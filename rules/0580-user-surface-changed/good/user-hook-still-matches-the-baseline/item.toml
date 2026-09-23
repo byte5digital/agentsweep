@@ -1,0 +1,23 @@
+# Near miss: the same hook, byte for byte what AgentSweep last accepted.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/PostToolUse/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+baseline = "unchanged"
+file_type = "text"
+
+[hook]
+event = "PostToolUse"
+matcher = "Edit"
+type = "command"
+command = "sh /Users/example/.claude/hooks/format.sh"
+command_resolved = "/bin/sh"
+command_file_type = "executable"
+
+[expect]
+fire = []

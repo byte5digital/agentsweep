@@ -1,0 +1,23 @@
+# Fixture for as_0582. An entry in the user's own settings that no plugin, no
+# marketplace and no repository accounts for.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = "startup"
+type = "command"
+command = "sh /Users/example/.claude/hooks/notify.sh"
+command_resolved = "/bin/sh"
+command_file_type = "executable"
+
+[expect]
+fire = [582]

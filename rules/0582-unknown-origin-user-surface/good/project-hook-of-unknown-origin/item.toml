@@ -1,0 +1,25 @@
+# Near miss: an unaccounted origin in a project rather than in the user's own
+# configuration, where the repository is the answer to the question and rules
+# 0006 and 0505 are the ones that ask it.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.local.json#/hooks/SessionStart/0/hooks/0"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = "startup"
+type = "command"
+command = "sh .claude/hooks/notify.sh"
+command_resolved = "/bin/sh"
+command_file_type = "executable"
+
+[expect]
+fire = []

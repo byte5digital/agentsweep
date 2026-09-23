@@ -1,0 +1,23 @@
+# Near miss: the same shape of install, from a marketplace the vendor runs.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/claude-plugins-official/playwright/1.4.2"
+provenance = "marketplace"
+provenance_ref = "playwright@claude-plugins-official"
+provenance_official = true
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "playwright"
+name_reserved_distance = 13
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

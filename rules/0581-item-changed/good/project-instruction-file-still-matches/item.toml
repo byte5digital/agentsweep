@@ -1,0 +1,17 @@
+# Near miss: the same file, still the content AgentSweep accepted.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+provenance_ref = "4f21c8ade0b9"
+activation = "active"
+registered = true
+baseline = "unchanged"
+file_type = "text"
+
+[expect]
+fire = []

@@ -1,0 +1,5 @@
+{
+  "name": "commit-helper",
+  "version": "3.1.0",
+  "description": "Writes commit messages from the staged diff."
+}

@@ -1,0 +1,1 @@
+{"command":"node","args":["/opt/helper-mcp/server.js"],"name":"helper","transport":"stdio"}

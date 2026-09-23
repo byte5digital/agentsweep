@@ -33,7 +33,10 @@ dependencies = [
 name = "agentsweep-adapter-codex"
 version = "0.1.0"
 dependencies = [
+ "agentsweep-adapter-workspace",
  "agentsweep-core",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

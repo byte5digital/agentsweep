@@ -10,4 +10,17 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# The known tool-manager list and the hidden-home check live in the workspace
+# adapter, which is agent neutral and part of AgentSweep itself. Every Agent
+# adapter asks it rather than keeping a list of its own.
+agentsweep-adapter-workspace.workspace = true
 agentsweep-core.workspace = true
+serde_json = "1.0.151"
+# Only the parser: every Codex config layer is TOML and this adapter reads it,
+# never writes it.
+toml = { version = "1.1.6", default-features = false, features = ["parse", "serde", "std"] }
+
+[dev-dependencies]
+# The repository the Rule tests point at is written by this builder, never by
+# a version control binary.
+agentsweep-adapter-workspace = { workspace = true, features = ["testing"] }

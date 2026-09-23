@@ -79,15 +79,6 @@ impl Document {
     pub fn flag(&self, key_path: &str) -> Option<bool> {
         self.at(key_path).and_then(Value::as_bool)
     }
-
-    /// A string at one key path, empty when the key is not set or is not a
-    /// string.
-    pub fn text(&self, key_path: &str) -> String {
-        self.at(key_path)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    }
 }
 
 /// Reads and parses one configuration file.

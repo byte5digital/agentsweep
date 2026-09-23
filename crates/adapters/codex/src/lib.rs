@@ -1021,7 +1021,14 @@ impl SurfaceAdapter for Codex {
         if let Some(directory) = self.config_dir(host) {
             self.instruction_items(host, &Scope::User, &directory, true, &mut enumeration);
         }
+        let config_dir = self.config_dir(host);
         for root in roots {
+            // A project root whose `.codex` directory is the config directory
+            // is the user layer under another name, and Codex skips it rather
+            // than loading the same layer twice.
+            if config_dir.as_deref() == Some(root.join(PROJECT_DIRECTORY).as_path()) {
+                continue;
+            }
             self.project_level(host, root, &registry, &gates, &mut enumeration);
         }
         enumeration
@@ -1748,6 +1755,32 @@ mod tests {
         assert!(
             roots.recursive.contains(&machine.home().join(".codex")),
             "{roots:?}"
+        );
+    }
+
+    /// A home that is also a pooled project root is the user layer under
+    /// another name, and Codex skips the coinciding project layer rather than
+    /// loading it twice.
+    #[test]
+    fn a_project_root_whose_codex_directory_is_the_config_directory_is_read_once() {
+        let machine = Machine::new("coinciding");
+        machine.write("home/.codex/config.toml", "approval_policy = \"never\"\n");
+
+        let host = Host::new(machine.home(), vec![machine.home(), machine.project()]);
+        let enumeration = Codex::new().enumerate(&host, host.project_roots());
+        assert_eq!(
+            enumeration
+                .items
+                .iter()
+                .filter(|item| item.id.as_str().ends_with("config.toml#/approval_policy"))
+                .count(),
+            1,
+            "{:?}",
+            enumeration
+                .items
+                .iter()
+                .map(|item| item.id.to_string())
+                .collect::<Vec<_>>()
         );
     }
 

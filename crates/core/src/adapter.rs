@@ -5,17 +5,20 @@
 //! so the core never hardcodes an Agent path, and it never sees a Tier or a
 //! Rule.
 //!
-//! This slice carries the read path of the trait in spec section 3.2:
-//! `descriptor`, `detect`, `projects`, `enumerate`, `watch_roots` and
-//! `items_for_path`. The enforcement pair arrives with milestone 4; its
-//! signature is in the spec and is not anticipated here. What the core would
-//! do with an Item a Tier decided against is already fixed as data: the
-//! [`ELIGIBILITY`] table of spec section 5.2.
+//! The trait of spec section 3.2 is here whole: the read path, `descriptor`,
+//! `detect`, `projects`, `enumerate`, `watch_roots` and `items_for_path`, and
+//! the enforcement pair, [`SurfaceAdapter::enforce`] and
+//! [`SurfaceAdapter::restore`]. What one Quarantine does to an Item of a kind
+//! is not the adapter's to decide: it is the [`ELIGIBILITY`] table of spec
+//! section 5.2, and an adapter may only declare which part of a row it can
+//! carry out.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::host::Host;
 use crate::item::{Item, ItemId, Kind, Scope, Shape};
+use crate::quarantine::{Conflict, EnforcementError, Receipt, RestoreReport, Store};
 
 /// What one enforcement step may do to an Item.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,6 +31,41 @@ pub enum Primitive {
     NativeDisable,
     /// The adapter comments the line or key out in place.
     NeutraliseInPlace,
+}
+
+impl Primitive {
+    /// The spelling a Receipt step carries.
+    pub fn as_str(self) -> &'static str {
+        self.recorded().as_str()
+    }
+
+    /// The same primitive as a Receipt step names it. The two spellings are
+    /// one vocabulary; the enum here is the adapter contract's and the one in
+    /// [`crate::eventlog`] is the record's.
+    pub fn recorded(self) -> crate::eventlog::Primitive {
+        match self {
+            Primitive::MoveOut => crate::eventlog::Primitive::MoveOut,
+            Primitive::RemoveEntry => crate::eventlog::Primitive::RemoveEntry,
+            Primitive::NativeDisable => crate::eventlog::Primitive::NativeDisable,
+            Primitive::NeutraliseInPlace => crate::eventlog::Primitive::NeutraliseInPlace,
+        }
+    }
+
+    /// The primitive a Receipt step names.
+    pub fn of_recorded(recorded: crate::eventlog::Primitive) -> Primitive {
+        match recorded {
+            crate::eventlog::Primitive::MoveOut => Primitive::MoveOut,
+            crate::eventlog::Primitive::RemoveEntry => Primitive::RemoveEntry,
+            crate::eventlog::Primitive::NativeDisable => Primitive::NativeDisable,
+            crate::eventlog::Primitive::NeutraliseInPlace => Primitive::NeutraliseInPlace,
+        }
+    }
+}
+
+impl fmt::Display for Primitive {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// One Surface an adapter knows about, as its static table declares it.
@@ -316,6 +354,63 @@ pub trait SurfaceAdapter {
             })
             .map(|item| item.id.clone())
             .collect()
+    }
+
+    /// Takes one Item out of this Agent's Surface and says what it did.
+    ///
+    /// The primitives are one row of [`ELIGIBILITY`], in the order they are to
+    /// be carried out, and what comes back is the [`Receipt`] of spec section
+    /// 5.3: one Quarantine, one Receipt, a step per primitive. The spec writes
+    /// the signature as `enforce(host, item, primitive)`; the whole row is
+    /// passed at once because a composite kind is still one Quarantine, and
+    /// the [`Store`] is passed because the quarantine store belongs to the
+    /// core and an adapter never learns where it is.
+    ///
+    /// The default refuses, so an adapter that has not learned a primitive
+    /// yet flags rather than acting.
+    fn enforce(
+        &self,
+        host: &Host,
+        store: &dyn Store,
+        item: &Item,
+        primitives: &[Primitive],
+    ) -> Result<Receipt, EnforcementError> {
+        let _ = (host, store);
+        Err(EnforcementError::Unsupported {
+            kind: item.kind,
+            primitive: primitives.first().copied().unwrap_or(Primitive::MoveOut),
+        })
+    }
+
+    /// Puts one Item back by replaying its Receipt in reverse.
+    ///
+    /// The spec writes the signature as `restore(host, receipt)`; it answers
+    /// with a report because spec section 5.4 asks for the outcome of every
+    /// reversed step, and it takes the user's answer to a conflict because
+    /// Restore refuses by itself and offers the two alternatives.
+    ///
+    /// The default refuses every step, which is what an adapter that cannot
+    /// enforce can also not undo.
+    fn restore(
+        &self,
+        host: &Host,
+        store: &dyn Store,
+        receipt: &Receipt,
+        conflict: Conflict,
+    ) -> RestoreReport {
+        let _ = (host, store, conflict);
+        RestoreReport::of(
+            receipt
+                .steps
+                .iter()
+                .rev()
+                .map(|step| crate::eventlog::ReceiptStep {
+                    outcome: crate::eventlog::Outcome::Failed,
+                    detail: "this adapter cannot put a step back".to_string(),
+                    ..step.clone()
+                })
+                .collect(),
+        )
     }
 }
 

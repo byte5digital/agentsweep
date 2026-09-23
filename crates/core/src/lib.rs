@@ -26,6 +26,7 @@ pub mod keychain;
 pub mod pack;
 pub mod paths;
 pub mod provenance;
+pub mod quarantine;
 pub mod rules;
 pub mod scan;
 pub mod user_rules;

@@ -773,6 +773,49 @@ mod tests {
     }
 
     #[test]
+    fn a_reviewer_directed_flag_on_a_heuristic_is_accepted() {
+        lint_of(meta_variant(&[
+            ("tier", Some("2")),
+            ("severity", Some("\"high\"")),
+            ("weight", Some("2")),
+            ("reviewer_directed", Some("true")),
+        ]))
+        .expect("reviewer_directed is a tier 2 key and a heuristic is tier 2");
+    }
+
+    /// The key is read back off the Heuristics that carry it, because AI
+    /// Judgement turns a benign Verdict on such an Item into unsure.
+    #[test]
+    fn the_bundled_pack_carries_reviewer_directed_on_heuristics_only() {
+        let pack = RulePack::bundled().expect("the bundled pack compiles");
+        let directed: Vec<i64> = pack
+            .metas()
+            .filter(|meta| meta.reviewer_directed)
+            .map(|meta| meta.id)
+            .collect();
+        assert!(
+            directed.contains(&525),
+            "the authorisation lure is the wording written for whoever judges the Item: {directed:?}"
+        );
+        for meta in pack.metas().filter(|meta| meta.reviewer_directed) {
+            assert_eq!(
+                meta.tier,
+                Tier::Heuristics,
+                "rule {:04} is not a heuristic and may not carry the key",
+                meta.id
+            );
+        }
+        let run_first = pack
+            .metas()
+            .find(|meta| meta.id == 522)
+            .expect("heuristic 0522 is in the pack");
+        assert!(
+            !run_first.reviewer_directed,
+            "run-first phrasing addresses the agent, not a reviewer"
+        );
+    }
+
+    #[test]
     fn a_tier_2_threat_rule_without_a_weight_is_rejected() {
         let problem = lint_of(meta_variant(&[
             ("tier", Some("2")),

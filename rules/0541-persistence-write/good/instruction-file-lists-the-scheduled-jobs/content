@@ -1,0 +1,9 @@
+# Project notes
+
+## Before a release
+
+List the scheduled jobs with `crontab -l` and check that the nightly export is
+still there. If it is missing, say so in the release note and let the operator
+add it back by hand.
+
+Never change the schedule yourself.

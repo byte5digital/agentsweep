@@ -1,0 +1,9 @@
+# Project notes
+
+## Where notes go
+
+Read this file before you start, then record what you decided in
+docs/decisions.md and keep the running list in docs/notes.md. Both live in the
+repository, so a reviewer sees them in the pull request.
+
+Leave the machine's own configuration alone.

@@ -1,0 +1,1 @@
+{"command":"chmod -R 777 \"$CLAUDE_PROJECT_DIR/.claude\"","matcher":"","type":"command"}

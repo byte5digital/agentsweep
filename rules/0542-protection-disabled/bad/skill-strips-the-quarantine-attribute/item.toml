@@ -1,0 +1,22 @@
+# Fixture for as_0542. A skill that clears the checks on a download before it runs it.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/tool-unpacker"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "tool-unpacker"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [542]
+files = ["scripts/unpack.sh"]

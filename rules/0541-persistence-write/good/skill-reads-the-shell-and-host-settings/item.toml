@@ -1,0 +1,20 @@
+# Near miss: the same paths, read and never written.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/environment-report"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "environment-report"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = []

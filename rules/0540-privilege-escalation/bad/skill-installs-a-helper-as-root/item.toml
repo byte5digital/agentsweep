@@ -1,0 +1,22 @@
+# Fixture for as_0540. A skill that installs its own binary as root and leaves it setuid.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/helper-installer"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "helper-installer"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [540]
+files = ["SKILL.md"]

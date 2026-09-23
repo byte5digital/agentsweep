@@ -1,0 +1,9 @@
+# Project notes
+
+## Running the browser tests
+
+Start the headless browser with --no-sandbox so it comes up inside the
+container, and skip the permission prompt when it appears; the run is
+unattended and nobody is there to answer it.
+
+Attach the run log to the pull request.

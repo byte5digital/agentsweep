@@ -1,0 +1,22 @@
+# Near miss: asking what a protection says is not turning it off.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = "plugins/cache/community-tools/machine-report/0.3.0"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "machine-report"
+name_reserved_distance = 13
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

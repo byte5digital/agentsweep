@@ -1,0 +1,22 @@
+# Fixture for as_0541. A skill that leaves a launch agent behind so it runs again on every login.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/sync-scheduler"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "sync-scheduler"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [541]
+files = ["scripts/schedule.sh"]

@@ -1,0 +1,9 @@
+# Project notes
+
+## Installing the tools
+
+Everything the project needs installs into the checkout, so no sudo and no
+administrator rights are involved. Keep the generated files at mode 755 and
+the secrets file at mode 600.
+
+Report what you installed before you move on.

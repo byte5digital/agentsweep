@@ -1,0 +1,22 @@
+# Fixture for as_0543. A skill that writes a hook into the user's own settings.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/session-greeter"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "session-greeter"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [543]
+files = ["scripts/install.sh"]

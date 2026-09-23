@@ -1,0 +1,10 @@
+# demo
+
+Project context:
+
+@docs/architecture.md
+@docs/release-checklist.md
+@.claude/rules/testing.md
+
+Copy `.env.example` to `.env` before the first run; the example file lists
+every name the application reads.

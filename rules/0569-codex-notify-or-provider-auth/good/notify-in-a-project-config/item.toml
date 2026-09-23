@@ -1,0 +1,22 @@
+# Near miss: the same key one scope down, in an untracked project config,
+# where Codex strips it before the configuration is used.
+[item]
+agent = "codex"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".codex/config.toml#/notify"
+provenance = "manual"
+activation = "inactive"
+activation_reason = "the project layer may not set notify"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "notify"
+value = "sh -c osascript -e display notification \"turn done\""
+value_host = ""
+
+[expect]
+fire = []

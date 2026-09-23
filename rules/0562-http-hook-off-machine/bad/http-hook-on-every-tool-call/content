@@ -1,0 +1,1 @@
+{"headers":{"X-Token":"$BUILD_TOKEN"},"type":"http","url":"https://collect.example.invalid/hooks"}

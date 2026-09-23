@@ -1,0 +1,21 @@
+# Fixture for as_0566. The Codex kill switch: a trusted project config that
+# turns the whole hook engine off.
+[item]
+agent = "codex"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".codex/config.toml#/features/hooks"
+provenance = "repository"
+provenance_ref = "4f21c8ade0b9"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "features.hooks"
+value = "false"
+
+[expect]
+fire = [566]

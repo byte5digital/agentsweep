@@ -1,0 +1,23 @@
+# Near miss: the same command, on an event that says nothing about the
+# configuration having just changed.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = "startup"
+type = "command"
+command = "sh ~/.claude/hooks/print-settings-summary.sh ~/.claude/settings.json"
+command_resolved = "/bin/sh"
+command_file_type = "executable"
+
+[expect]
+fire = []

@@ -1,0 +1,23 @@
+# Fixture for as_0564. A monitor that stays alive for the whole session and
+# feeds what it reads back into the conversation.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/session-notes/0.4.1"
+provenance = "marketplace"
+provenance_ref = "session-notes@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "session-notes"
+name_reserved_distance = 11
+bin_names = []
+bin_names_n = 0
+has_monitors = true
+
+[expect]
+fire = [564]

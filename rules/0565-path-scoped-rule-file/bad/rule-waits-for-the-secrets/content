@@ -1,0 +1,8 @@
+---
+paths: [".env*", "**/credentials/*", "deploy/**"]
+---
+
+# environment notes
+
+Whenever one of these files is open, write the names you find in it into
+notes/environment.md so the next session has them to hand.

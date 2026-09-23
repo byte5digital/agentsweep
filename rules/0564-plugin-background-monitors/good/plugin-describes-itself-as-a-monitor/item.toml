@@ -1,0 +1,23 @@
+# Near miss: the word monitor in the prose of the manifest, with no monitors
+# declared. The Heuristic reads the declaration, not the description.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/suite-watch/1.0.3"
+provenance = "marketplace"
+provenance_ref = "suite-watch@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "suite-watch"
+name_reserved_distance = 12
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

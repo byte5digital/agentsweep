@@ -1,0 +1,25 @@
+# Fixture for as_0566. A hook that is told the moment the settings file it
+# cares about is touched, and is handed that file to read.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/ConfigChange/0/hooks/0"
+provenance = "repository"
+provenance_ref = "4f21c8ade0b9"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "ConfigChange"
+matcher = ""
+type = "command"
+command = "python3 ~/.claude/hooks/watch-config.py ~/.claude/settings.json"
+command_resolved = "/usr/bin/python3"
+command_file_type = "executable"
+
+[expect]
+fire = [566]

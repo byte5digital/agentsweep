@@ -1,0 +1,1 @@
+{"command":"sh ~/.claude/hooks/print-settings-summary.sh ~/.claude/settings.json","type":"command"}

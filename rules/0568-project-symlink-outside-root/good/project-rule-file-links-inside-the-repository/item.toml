@@ -1,0 +1,18 @@
+# Near miss: a link, pointing at a document the same repository carries.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "/Users/example/src/demo/.claude/rules/style.md"
+provenance = "repository"
+provenance_ref = "4f21c8ade0b9"
+activation = "active"
+registered = true
+is_symlink = true
+link_target = "/Users/example/src/demo/docs/style.md"
+file_type = "text"
+
+[expect]
+fire = []

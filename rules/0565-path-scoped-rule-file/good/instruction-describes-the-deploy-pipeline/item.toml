@@ -1,0 +1,16 @@
+# Near miss: the same file names in prose, in a file that always loads. There
+# is no paths frontmatter, so nothing is waiting for a file to be opened.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

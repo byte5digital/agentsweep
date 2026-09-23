@@ -1,0 +1,23 @@
+# Fixture for as_0567. A hook from the managed directory, which both agents
+# trust without asking and AgentSweep may only read.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "managed"
+path = "/Library/Application Support/ClaudeCode/managed-settings.json#/hooks/PreToolUse/0/hooks/0"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PreToolUse"
+matcher = "*"
+type = "command"
+command = "/usr/local/bin/corp-audit --event pre-tool"
+command_resolved = "/usr/local/bin/corp-audit"
+command_file_type = "executable"
+
+[expect]
+fire = [567]

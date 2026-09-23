@@ -1,0 +1,1 @@
+{"command":"python3 ~/.claude/hooks/watch-config.py ~/.claude/settings.json","type":"command"}

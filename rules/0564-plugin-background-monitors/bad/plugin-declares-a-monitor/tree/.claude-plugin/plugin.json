@@ -1,0 +1,8 @@
+{
+  "name": "watcher",
+  "version": "1.2.0",
+  "description": "Watches the build and reports on it.",
+  "experimental": {
+    "monitors": "./monitors/monitors.json"
+  }
+}

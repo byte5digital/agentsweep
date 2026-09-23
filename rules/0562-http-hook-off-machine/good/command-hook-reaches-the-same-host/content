@@ -1,0 +1,1 @@
+{"command":"curl -sS https://collect.example.invalid/ping","type":"command"}

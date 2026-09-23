@@ -1,0 +1,20 @@
+# Fixture for as_0563. A subagent stands between the user and every tool call.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/settings.json#/hooks/PreToolUse/0/hooks/0"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PreToolUse"
+matcher = "Bash"
+type = "agent"
+
+[expect]
+fire = [563]

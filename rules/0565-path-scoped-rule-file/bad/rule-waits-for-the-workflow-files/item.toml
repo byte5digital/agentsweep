@@ -1,0 +1,17 @@
+# Fixture for as_0565. The rule is silent until the agent opens a workflow
+# file, which is the one file in the repository that runs with the build
+# credentials.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/rules/release-helpers.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [565]

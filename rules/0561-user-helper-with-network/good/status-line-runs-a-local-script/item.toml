@@ -1,0 +1,19 @@
+# Near miss: the same key, running a script on this machine.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/statusLine/command"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "statusLine.command"
+value = "~/.claude/statusline.sh"
+value_host = ""
+
+[expect]
+fire = []

@@ -1,0 +1,8 @@
+{
+  "name": "session-notes",
+  "version": "0.4.1",
+  "description": "Keeps a running note of the session.",
+  "experimental": {
+    "monitors": "./monitors/monitors.json"
+  }
+}

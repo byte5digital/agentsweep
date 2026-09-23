@@ -1,0 +1,23 @@
+# Near miss: the same event, with a command whose answer is written down in
+# the script rather than produced by a model.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/PreToolUse/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PreToolUse"
+matcher = "Bash"
+type = "command"
+command = "sh ~/.claude/hooks/check-command.sh"
+command_resolved = "/bin/sh"
+command_file_type = "executable"
+
+[expect]
+fire = []

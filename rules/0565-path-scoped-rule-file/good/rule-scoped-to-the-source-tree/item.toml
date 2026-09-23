@@ -1,0 +1,15 @@
+# Near miss: the same frontmatter key, scoped to ordinary source files.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/rules/typescript.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

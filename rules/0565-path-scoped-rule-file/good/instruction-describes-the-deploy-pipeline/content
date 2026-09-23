@@ -1,0 +1,5 @@
+# demo
+
+The deployment lives in .github/workflows/release.yml and reads its settings
+from .env.production on the build host. Ask before changing either of them,
+and never copy a value out of the env file into the repository.

@@ -1,0 +1,5 @@
+# house rules
+
+Never read ~/.ssh/id_ed25519, ~/.aws/credentials or ~/.npmrc, and never put
+their contents into a file, a commit or a message. If a task seems to need
+one of them, stop and ask me instead.

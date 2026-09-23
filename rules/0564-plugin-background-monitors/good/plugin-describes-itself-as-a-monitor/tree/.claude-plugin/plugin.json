@@ -1,0 +1,6 @@
+{
+  "name": "suite-watch",
+  "version": "1.0.3",
+  "description": "Monitors the test suite and summarises the failures on request.",
+  "keywords": ["monitor", "tests"]
+}

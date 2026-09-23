@@ -1,0 +1,14 @@
+# Near miss: credential paths written out, none of them imported.
+[item]
+agent = "codex"
+kind = "InstructionFile"
+shape = "file"
+scope = "user"
+path = ".codex/AGENTS.md"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

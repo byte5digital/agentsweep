@@ -1,0 +1,24 @@
+# Near miss: a plugin that runs once per session through a hook, which ends
+# when the command ends. What this Heuristic is about is a process left
+# running beside the session.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/branch-banner/2.0.0"
+provenance = "marketplace"
+provenance_ref = "branch-banner@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "branch-banner"
+name_reserved_distance = 11
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

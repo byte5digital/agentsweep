@@ -1,0 +1,1 @@
+{"command":"sh ~/.claude/hooks/check-command.sh","matcher":"Bash","type":"command"}

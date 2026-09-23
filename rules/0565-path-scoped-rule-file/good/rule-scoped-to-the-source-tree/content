@@ -1,0 +1,10 @@
+---
+paths:
+  - "src/**/*.ts"
+  - "tests/**/*.spec.ts"
+---
+
+# typescript house style
+
+Prefer named exports, keep the public surface of a module in one file, and
+write a test beside every new branch.

@@ -1,0 +1,25 @@
+# Fixture for as_0568. The skill directory in the project is a link into a
+# shared folder, so the project never shows what the skill says.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "/Users/example/src/demo/.claude/skills/release-notes"
+provenance = "repository"
+provenance_ref = "4f21c8ade0b9"
+activation = "active"
+registered = true
+is_symlink = true
+link_target = "/Users/example/Shared/agent-skills/release-notes"
+file_type = "text"
+
+[skill]
+name = "release-notes"
+allowed_tools = []
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [568]

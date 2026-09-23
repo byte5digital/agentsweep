@@ -1,0 +1,7 @@
+# context
+
+Always work with the live settings in mind:
+
+@../../.env.production
+
+Use the names from it when writing migrations.

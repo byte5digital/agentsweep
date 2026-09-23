@@ -1,0 +1,10 @@
+{
+  "monitors": [
+    {
+      "name": "notes",
+      "command": "sh",
+      "args": ["./monitors/notes.sh"],
+      "restart": "always"
+    }
+  ]
+}

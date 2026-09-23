@@ -1,0 +1,16 @@
+# Fixture for as_0565. A one line paths list scoping the rule to the env,
+# credential and deployment files.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".claude/rules/environment-notes.md"
+provenance = "repository"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [565]

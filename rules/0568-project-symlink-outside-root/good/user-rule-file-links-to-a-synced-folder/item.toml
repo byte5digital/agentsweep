@@ -1,0 +1,17 @@
+# Near miss: the user's own rules folder pointed at a synced directory, which
+# is how one person keeps the same rules on two machines.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "user"
+path = "/Users/example/.claude/rules/house.md"
+provenance = "manual"
+activation = "active"
+registered = true
+is_symlink = true
+link_target = "/Users/example/Sync/agent/house.md"
+file_type = "text"
+
+[expect]
+fire = []

@@ -1,0 +1,20 @@
+# Fixture for as_0563. The permission prompt is answered by an MCP server.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/PermissionRequest/0/hooks/0"
+provenance = "plugin"
+provenance_ref = "approvals@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PermissionRequest"
+matcher = "*"
+type = "mcp_tool"
+
+[expect]
+fire = [563]

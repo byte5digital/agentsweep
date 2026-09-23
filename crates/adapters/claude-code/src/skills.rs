@@ -38,6 +38,12 @@ pub const MARKETPLACE_MANIFEST: &str = ".claude-plugin/marketplace.json";
 /// directory, where nothing was installed and nothing recorded it.
 pub const SKILLS_DIRECTORY_MARKETPLACE: &str = "skills-dir";
 
+/// The folder name Claude Code reserves in the skills directory for what it
+/// syncs from the web app. Inside it is one folder per account, and the skills
+/// are one level below that, so they are reached two levels down rather than
+/// one (`docs/research/claude-code-surfaces.md`).
+pub const SYNCED_DIRECTORY: &str = "synced";
+
 /// Every skill one skills directory holds.
 ///
 /// An entry that is a symbolic link is followed one level: the Item keeps the
@@ -52,22 +58,45 @@ pub fn skills_in(
     enumeration: &mut Enumeration,
 ) {
     for path in tree::directories_in(host, directory) {
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        let contents = tree::contents_of(host, &path);
-        if contents.join(PLUGIN_MANIFEST).is_file() {
-            let id = format!("{name}@{SKILLS_DIRECTORY_MARKETPLACE}");
-            let plugin = tree::read(host, caps, placement, Kind::Plugin, &path);
-            let view = plugin_view(&plugin, &id);
-            tree::yielded(host, enumeration, plugin.with_view(view));
+        if path
+            .file_name()
+            .is_some_and(|name| name == SYNCED_DIRECTORY)
+        {
+            for account in tree::directories_in(host, &path) {
+                for synced in tree::directories_in(host, &account) {
+                    skill_at(host, caps, placement, &synced, enumeration);
+                }
+            }
             continue;
         }
-        if !contents.join(SKILL_FILE).is_file() {
-            continue;
-        }
-        let item = tree::read(host, caps, placement, Kind::Skill, &path);
-        let view = SkillView::of(&name, item.tree.content_of(SKILL_FILE));
-        tree::yielded(host, enumeration, item.with_view(ParsedView::Skill(view)));
+        skill_at(host, caps, placement, &path, enumeration);
     }
+}
+
+/// One folder of a skills directory, as the Item Claude Code would load from
+/// it: a skill, or the plugin a folder with a plugin manifest really is.
+fn skill_at(
+    host: &Host,
+    caps: TreeCaps,
+    placement: &Placement,
+    path: &Path,
+    enumeration: &mut Enumeration,
+) {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let contents = tree::contents_of(host, path);
+    if contents.join(PLUGIN_MANIFEST).is_file() {
+        let id = format!("{name}@{SKILLS_DIRECTORY_MARKETPLACE}");
+        let plugin = tree::read(host, caps, placement, Kind::Plugin, path);
+        let view = plugin_view(&plugin, &id);
+        tree::yielded(host, enumeration, plugin.with_view(view));
+        return;
+    }
+    if !contents.join(SKILL_FILE).is_file() {
+        return;
+    }
+    let item = tree::read(host, caps, placement, Kind::Skill, path);
+    let view = SkillView::of(&name, item.tree.content_of(SKILL_FILE));
+    tree::yielded(host, enumeration, item.with_view(ParsedView::Skill(view)));
 }
 
 /// Every legacy command file one commands directory holds, nested ones

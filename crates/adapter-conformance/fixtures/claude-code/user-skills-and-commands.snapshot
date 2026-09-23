@@ -25,6 +25,11 @@ item claude-code/user/skill/~/.claude/skills/shared-notes
   sha256=c12c25df3f39f5ad3b3b9a8efc48f4b6403ab122e46f821089492e4813307677
   file SKILL.md 141 scanned text
   view skill {allowed_tools=[""] allowed_tools_n=0 has_dynamic_context=false name="shared-notes"}
+item claude-code/user/skill/~/.claude/skills/synced/account-one/web-notes
+  shape=tree scope=user provenance=manual activation=active registered=true symlink=false size=108
+  sha256=37130d9e26d5d85205af5466e3e23aba3d1ac763aeda862b863376e78393b767
+  file SKILL.md 108 scanned text
+  view skill {allowed_tools=[""] allowed_tools_n=0 has_dynamic_context=false name="web-notes"}
 item claude-code/user/skill/~/.claude/commands/deploy.md
   shape=file scope=user provenance=manual activation=active registered=true symlink=false size=131
   sha256=4e4fd85bc724ab4aa5078d9869a6b2945c34aba4073fefe570675575e8cb77d6

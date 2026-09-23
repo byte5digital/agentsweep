@@ -665,6 +665,13 @@ impl ClaudeCode {
         );
     }
 
+    /// True when a pooled project root is the home itself, whose configuration
+    /// directory is the user's own rather than a project's.
+    fn is_own_config_directory(&self, host: &Host, root: &Path) -> bool {
+        self.config_dir(host)
+            .is_some_and(|directory| directory == root.join(CONFIG_DIRECTORY))
+    }
+
     /// Everything one project root holds that is a file or a tree.
     fn project_trees(
         &self,
@@ -678,10 +685,20 @@ impl ClaudeCode {
         for instructions in [
             root.join(PROJECT_INSTRUCTION_FILE),
             root.join(LOCAL_INSTRUCTION_FILE),
-            config_dir.join(PROJECT_INSTRUCTION_FILE),
         ] {
             files::instruction_file(host, &placement, &instructions, enumeration);
         }
+        // Everything below is in the configuration directory, which for the
+        // home is the user's own and has been read once already.
+        if self.is_own_config_directory(host, root) {
+            return;
+        }
+        files::instruction_file(
+            host,
+            &placement,
+            &config_dir.join(PROJECT_INSTRUCTION_FILE),
+            enumeration,
+        );
         files::instruction_files_in(
             host,
             &placement,
@@ -728,9 +745,16 @@ impl ClaudeCode {
     ) -> Vec<Document> {
         let scope = Scope::Project(root.to_path_buf());
         let record = registry.and_then(|registry| registry.record(root));
-        let layers = [PROJECT_LOCAL_SETTINGS_FILE, PROJECT_SETTINGS_FILE];
+        // The home is a registered project as soon as a session was started in
+        // it, and its configuration directory is the user's own. Reading those
+        // layers again as a project's would make a second Item out of every
+        // key the user set.
+        let layers: &[&str] = match self.is_own_config_directory(host, root) {
+            true => &[],
+            false => &[PROJECT_LOCAL_SETTINGS_FILE, PROJECT_SETTINGS_FILE],
+        };
         let mut documents = Vec::new();
-        for layer in layers {
+        for layer in layers.iter().copied() {
             match document::load(host, &scope, &root.join(layer), Kind::SettingsEntry) {
                 Ok(Some(document)) => documents.push(document),
                 Ok(None) => {}
@@ -2195,6 +2219,46 @@ mod tests {
         assert_eq!(
             item(&enumeration, "/instruction-file/CLAUDE.local.md").kind,
             Kind::InstructionFile
+        );
+    }
+
+    /// The home is a registered project as soon as a session was started in
+    /// it, and its configuration directory is the user's own. Read again as a
+    /// project's, every skill and every key of the user would be a second Item
+    /// over the same bytes.
+    #[test]
+    fn the_home_pooled_as_a_project_root_does_not_yield_its_own_config_twice() {
+        let machine = Machine::new("home-as-project");
+        machine.write(
+            "home/.claude/skills/notes/SKILL.md",
+            "---\nname: notes\n---\n\nTake notes.\n",
+        );
+        machine.write("home/.claude/settings.json", "{\"apiKeyHelper\": \"./k\"}");
+        machine.write("home/CLAUDE.md", "# the home itself\n");
+
+        let host = Host::new(machine.home(), vec![machine.home(), machine.project()]);
+        let enumeration = ClaudeCode::new().enumerate(&host, host.project_roots());
+
+        let skills: Vec<&Item> = enumeration
+            .items
+            .iter()
+            .filter(|item| item.kind == Kind::Skill)
+            .collect();
+        assert_eq!(skills.len(), 1, "{:?}", skills);
+        assert_eq!(skills[0].scope, Scope::User);
+        assert_eq!(
+            enumeration
+                .items
+                .iter()
+                .filter(|item| item.kind == Kind::SettingsEntry)
+                .count(),
+            1
+        );
+        // The instruction file of the home is still the home's own: it sits
+        // beside the configuration directory rather than inside it.
+        assert_eq!(
+            item(&enumeration, "/instruction-file/CLAUDE.md").scope,
+            Scope::Project(machine.home())
         );
     }
 

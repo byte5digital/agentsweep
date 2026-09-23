@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "plugins": {
+    "notes@demo-marketplace": [
+      {
+        "scope": "user",
+        "version": "1.2.0",
+        "gitCommitSha": "9f1c2bd4e7a0",
+        "installedAt": "2026-08-01T09:00:00.000Z",
+        "lastUpdated": "2026-09-16T08:00:00.000Z",
+        "installPath": "{{home}}/.claude/plugins/cache/demo-marketplace/notes/1.2.0"
+      }
+    ]
+  }
+}

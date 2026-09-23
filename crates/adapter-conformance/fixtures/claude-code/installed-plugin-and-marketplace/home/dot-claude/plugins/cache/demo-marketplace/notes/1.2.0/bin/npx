@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "the plugin shadows a tool name"

@@ -10,6 +10,11 @@
 //! So every path component that starts with `dot-` is committed that way and
 //! renamed to a leading dot on the copy.
 //!
+//! A symbolic link is committed as a file whose name ends in `.symlink` and
+//! whose one line is the target it points at. Most skills on a real machine are
+//! links into a shared directory, and a link committed as a link would be
+//! followed by every tool that reads this repository.
+//!
 //! A case is the project root, unless it holds both a `home` and a `project`
 //! directory, in which case those are the fake home and the fake project the
 //! Host is built from. A `system` directory beside them stands in for the
@@ -117,6 +122,11 @@ impl Copy {
             };
             for entry in entries.filter_map(Result::ok) {
                 let path = entry.path();
+                // A link is left alone: what it points at is named where it
+                // really sits, and walking through one could walk in circles.
+                if fs::symlink_metadata(&path).is_ok_and(|found| found.is_symlink()) {
+                    continue;
+                }
                 if path.is_dir() {
                     stack.push(path);
                     continue;
@@ -176,12 +186,38 @@ fn copy_tree(source: &Path, destination: &Path) {
     for entry in entries.filter_map(Result::ok) {
         let from = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
+        if let Some(link) = name.strip_suffix(LINK_SUFFIX) {
+            linked(&from, &destination.join(undotted(link)));
+            continue;
+        }
         let to = destination.join(undotted(&name));
         if from.is_dir() {
             copy_tree(&from, &to);
         } else {
             fs::copy(&from, &to).expect("a file of a fixture tree");
         }
+    }
+}
+
+/// The suffix of the file that stands in for a symbolic link.
+const LINK_SUFFIX: &str = ".symlink";
+
+/// Makes the link one committed file describes. Its target may not exist yet:
+/// a link is allowed to point at a directory the copy has not reached.
+#[cfg(unix)]
+fn linked(from: &Path, to: &Path) {
+    let target = fs::read_to_string(from).expect("the target of a committed link");
+    std::os::unix::fs::symlink(target.trim(), to).expect("a link of a fixture tree");
+}
+
+/// A platform without symbolic links copies the target instead, so a case that
+/// has one still runs.
+#[cfg(not(unix))]
+fn linked(from: &Path, to: &Path) {
+    let target = fs::read_to_string(from).expect("the target of a committed link");
+    let resolved = to.parent().unwrap_or(to).join(target.trim());
+    if resolved.is_dir() {
+        copy_tree(&resolved, to);
     }
 }
 

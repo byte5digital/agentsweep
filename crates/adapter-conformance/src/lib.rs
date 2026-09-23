@@ -402,10 +402,14 @@ fn check_watch_roots(
     let roots = adapter.watch_roots(enumeration);
 
     for root in roots.all() {
+        // A root maps back to an Item by holding it, or by being the place a
+        // tree's files really are: a skill reached through a link is watched
+        // at its target and says so through `items_for_path`.
         let covered = enumeration
             .items
             .iter()
-            .any(|item| item.path.starts_with(root));
+            .any(|item| item.path.starts_with(root))
+            || !adapter.items_for_path(enumeration, root).is_empty();
         if !covered {
             report.note(
                 agent,
@@ -493,6 +497,19 @@ pub fn snapshot(adapter: &dyn SurfaceAdapter, enumeration: &Enumeration, root: &
             item.size
         );
         let _ = writeln!(out, "  sha256={}", item.content_hash);
+        // A tree's files are the case's own documentation: which ones a Rule
+        // is run over, which ones are only in the manifest, and which ones are
+        // not part of the tree at all.
+        for file in &item.tree.files {
+            let _ = writeln!(
+                out,
+                "  file {} {} {} {}",
+                file.path,
+                file.size,
+                if file.scanned { "scanned" } else { "hashed" },
+                file.facts.file_type.as_str()
+            );
+        }
         if let Some(view) = view_line(item) {
             let _ = writeln!(out, "  {view}");
         }

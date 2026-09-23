@@ -1,0 +1,30 @@
+item claude-code/user/settings-entry/~/.claude/settings.json#/enabledPlugins/notes@demo-marketplace
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=46
+  sha256=8309f763673327ca6af4ae01176b68042470274201468d38b581d5ba6520e373
+  view settings {key_path="enabledPlugins.notes@demo-marketplace" trust_has_sessions=false value="true" value_host=""}
+item claude-code/user/marketplace/demo-marketplace
+  shape=tree scope=user provenance=marketplace activation=active registered=true symlink=false size=457
+  sha256=919653ff8aa4df7f9d19fad9d0a0eeece08431b9be2d98d97ece4b05e1f74795
+  file .claude-plugin/marketplace.json 417 scanned text
+  file README.md 40 scanned text
+  view marketplace {entries=[{has_headers_helper=false name="notes" pinned=true source_host="github.com" source_kind="github"}, {has_headers_helper=false name="inside" pinned=false source_host="" source_kind="local"}] entries_n=2 name="demo-marketplace" name_reserved_distance=8 owner="Demo Tools"}
+item claude-code/user/plugin/notes@demo-marketplace
+  shape=tree scope=user provenance=marketplace activation=active registered=true symlink=false size=468
+  sha256=679b2327861dca0af03b1670c874e78b3408df4652d6c32d44de8bba70a7f4c8
+  file .claude-plugin/plugin.json 165 scanned text
+  file .mcp.json 102 scanned text
+  file bin/npx 48 scanned text
+  file monitors/monitors.json 107 scanned text
+  file server.js 46 scanned text
+  view plugin {bin_names=["npx"] bin_names_n=1 has_monitors=true name="notes" name_reserved_distance=10}
+item claude-code/user/mcp-server/~/.claude/plugins/cache/demo-marketplace/notes/1.2.0/.mcp.json#notes
+  shape=entry scope=user provenance=plugin activation=active registered=true symlink=false size=41
+  sha256=12c6871f14a9ddfe1a7afda4c3d35425410bc4bfe4a19c281e0e4dfff808aec2
+  view mcp {args=["./server.js"] args_n=1 command="node" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="notes" package="" package_version="" transport="stdio" url="" url_host=""}
+item claude-code/user/plugin/notes@demo-marketplace@1.1.0
+  shape=tree scope=user provenance=marketplace activation=inactive(orphaned) registered=true symlink=false size=111
+  sha256=99223b26cf588f914246b3100afc59b4b02277bc103e84de8151344a2f0f1b57
+  file .claude-plugin/plugin.json 97 scanned text
+  file .orphaned_at 14 scanned text
+  view plugin {bin_names=[""] bin_names_n=0 has_monitors=false name="notes" name_reserved_distance=10}
+watch recursive <root>/home/.claude

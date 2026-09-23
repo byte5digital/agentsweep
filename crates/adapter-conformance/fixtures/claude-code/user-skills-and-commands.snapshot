@@ -1,0 +1,44 @@
+item claude-code/project:<root>/project/skill/.claude/skills/project-helper
+  shape=tree scope=project provenance=unknown activation=unknown registered=false symlink=false size=117
+  sha256=b6f881fb46d4b573e90d94563d7a8119d8df87c1b183c54516b354032e213101
+  file SKILL.md 117 scanned text
+  view skill {allowed_tools=[""] allowed_tools_n=0 has_dynamic_context=false name="project-helper"}
+item claude-code/user/instruction-file/~/.claude/CLAUDE.md
+  shape=file scope=user provenance=manual activation=active registered=true symlink=false size=33
+  sha256=cfe4665e92a52f002be093aea089b8ac294416aced8d0ef56e6903382f1a9b6a
+item claude-code/user/instruction-file/~/.claude/rules/style.md
+  shape=file scope=user provenance=manual activation=active registered=true symlink=false size=48
+  sha256=61b0a907904f0edb193569a3ea3eb75ed622f0e4a3e60c894d76dbd157086952
+item claude-code/user/instruction-file/~/.claude/output-styles/terse.md
+  shape=file scope=user provenance=manual activation=active registered=true symlink=false size=46
+  sha256=43de2b28918850c081f9d397a0fb781e5daecf3aa9c4f6e5a91465ab126d1266
+item claude-code/user/skill/~/.claude/skills/pdf-tools
+  shape=tree scope=user provenance=manual activation=active registered=true symlink=false size=316
+  sha256=aaf6eae7be0e9cc86e248848543daebca773fe5a1328d18dd637ae77b494fcee
+  file SKILL.md 186 scanned text
+  file bin/helper 12 scanned executable
+  file node_modules/left-pad/index.js 84 hashed text
+  file scripts/convert.sh 34 scanned text
+  view skill {allowed_tools=["Bash(pdftotext *)", "Read"] allowed_tools_n=2 has_dynamic_context=false name="pdf-tools"}
+item claude-code/user/skill/~/.claude/skills/shared-notes
+  shape=tree scope=user provenance=manual activation=active registered=true symlink=true size=141
+  sha256=c12c25df3f39f5ad3b3b9a8efc48f4b6403ab122e46f821089492e4813307677
+  file SKILL.md 141 scanned text
+  view skill {allowed_tools=[""] allowed_tools_n=0 has_dynamic_context=false name="shared-notes"}
+item claude-code/user/skill/~/.claude/commands/deploy.md
+  shape=file scope=user provenance=manual activation=active registered=true symlink=false size=131
+  sha256=4e4fd85bc724ab4aa5078d9869a6b2945c34aba4073fefe570675575e8cb77d6
+  view skill {allowed_tools=["Bash(git push *)"] allowed_tools_n=1 has_dynamic_context=false name="deploy"}
+item claude-code/user/subagent/~/.claude/agents/reviewer.md
+  shape=file scope=user provenance=manual activation=active registered=true symlink=false size=166
+  sha256=6c658e0c07a220cc66c34210732befc34f378489f03e81a7b40da01539b0fe61
+  view subagent {name="reviewer" permission_mode="default"}
+item claude-code/user/workflow/~/.claude/workflows/release.js
+  shape=file scope=user provenance=manual activation=active registered=true symlink=false size=99
+  sha256=c8cd704fef7d7950d3e13368ab1020c241dda4bb0546bcda18c1bea764e32dc5
+item claude-code/user/instruction-file/~/.claude/projects/-root-project/memory/MEMORY.md
+  shape=file scope=user provenance=agent_written activation=active registered=true symlink=false size=39
+  sha256=a096c6e0fa9fe223329930bc0b9afc3c2a2763b12deeaf7685fa8a2fba7004f9
+watch recursive <root>/home/.agents/skills/shared-notes
+watch recursive <root>/home/.claude
+watch recursive <root>/project/.claude

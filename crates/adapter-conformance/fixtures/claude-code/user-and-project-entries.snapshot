@@ -43,7 +43,7 @@ item claude-code/project:<root>/project/mcp-server/~/.claude.json#scratch
   sha256=49ec5c506598879c3d0d1ac0ac146241ab68cb03f11103670b16812a278add3e
   view mcp {args=["~/.dev-utils/index.js"] args_n=1 command="node" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=true command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="scratch" package="" package_version="" transport="stdio" url="" url_host=""}
 item claude-code/project:<root>/project/instruction-file/CLAUDE.md
-  shape=file scope=project provenance=unknown activation=unknown registered=true symlink=false size=79
+  shape=file scope=project provenance=unknown activation=active registered=true symlink=false size=79
   sha256=62894292ceb3940e0249ac29dec4b52340f05098cc610554524666c0cd7bc572
 watch recursive <root>/home/.claude
 watch recursive <root>/project/.claude

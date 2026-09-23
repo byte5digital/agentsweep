@@ -1,0 +1,1 @@
+- the person keeps notes in `notes.md`

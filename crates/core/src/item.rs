@@ -650,7 +650,8 @@ pub struct TreeFile {
     pub path: String,
     /// The size in bytes, the length of the target for a link.
     pub size: u64,
-    /// The permission bits, as the file system holds them.
+    /// The permission bits, as the file system holds them. The manifest
+    /// renders the canonical form of them; see [`Tree::manifest`].
     pub mode: u32,
     /// The sha256 of the content, of the target for a link.
     pub sha256: String,
@@ -774,7 +775,10 @@ impl Tree {
             let _ = write!(
                 out,
                 "{} {} {:o} {}",
-                file.path, file.size, file.mode, file.sha256
+                file.path,
+                file.size,
+                canonical_mode(file.mode),
+                file.sha256
             );
             if file.is_symlink {
                 let _ = write!(out, " -> {}", file.link_target);
@@ -786,6 +790,18 @@ impl Tree {
         }
         out.into_bytes()
     }
+}
+
+/// The permission bits as the manifest records them: executable or not, the
+/// two forms git itself keeps.
+///
+/// A tree hash is what Trust and the Baseline key on, and the raw bits depend
+/// on the umask of whoever wrote the files, so recording them would make one
+/// machine's hash of a skill mean nothing on another. What the hash still
+/// moves on is the change that matters, a file that became executable; the raw
+/// bits stay on the manifest entry for the facts that read them.
+fn canonical_mode(mode: u32) -> u32 {
+    if mode & 0o111 != 0 { 0o755 } else { 0o644 }
 }
 
 /// One regular file of a tree.
@@ -1243,7 +1259,13 @@ mod tests {
     fn a_native_executable_in_a_tree_is_named_in_the_manifest_and_typed_per_file() {
         let directory = Directory::new("executable");
         directory.write("SKILL.md", b"---\nname: demo\n---\n");
-        directory.write("bin/helper", &[0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00]);
+        let helper = directory.write("bin/helper", &[0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))
+                .expect("an executable file");
+        }
 
         let item = Item::tree(
             "claude-code",
@@ -1262,6 +1284,11 @@ mod tests {
             "the manifest names the file"
         );
         assert_eq!(item.facts_of("bin/helper").file_type, FileType::Executable);
+        assert!(
+            String::from_utf8_lossy(&item.content).contains("bin/helper 6 755 "),
+            "the manifest records the canonical mode, so one machine's hash of \
+             a tree means the same on another"
+        );
         assert_eq!(item.facts_of("SKILL.md").file_type, FileType::Text);
         assert_eq!(item.tree.names_in("bin"), ["helper"]);
         let units: Vec<&str> = item.scan_units().iter().map(|unit| unit.file).collect();

@@ -1,0 +1,10 @@
+{
+  "demo-marketplace": {
+    "source": {
+      "source": "github",
+      "repo": "example/demo-marketplace"
+    },
+    "installLocation": "{{home}}/.claude/plugins/marketplaces/demo-marketplace",
+    "lastUpdated": "2026-09-16T08:00:00.000Z"
+  }
+}

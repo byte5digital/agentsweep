@@ -25,6 +25,18 @@ directory called `.git` would become part of this repository, and a file called
 `.env` is ignored by it. A hook that git would run is committed with its
 execute bit, which is what makes it an Item.
 
+A symbolic link is committed the same way round: a file whose name ends in
+`.symlink`, holding the target on one line, becomes that link on the copy. Most
+skills on a real machine are links into a shared directory, and a link
+committed as a link would be followed by everything that reads this repository.
+Keep the target relative, so a case reads the same wherever it was copied to.
+
+A tree Item's snapshot lists every file of its manifest with its size, whether
+a Rule was run over it and what kind of file it is. That is where a case says
+what is excluded (git internals), what is listed without being scanned (a
+vendored dependency directory) and what a Rule about native executables in a
+skill would see.
+
 No tree carries a git index. Nothing here is tracked by the repository it
 pretends to be, so Provenance in these snapshots is "manual"; the Repository
 Provenance path is covered where an index can be written, in the workspace

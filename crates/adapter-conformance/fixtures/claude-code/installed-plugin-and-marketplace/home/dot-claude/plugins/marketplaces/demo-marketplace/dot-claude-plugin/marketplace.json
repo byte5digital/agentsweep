@@ -1,0 +1,23 @@
+{
+  "name": "demo-marketplace",
+  "owner": {
+    "name": "Demo Tools",
+    "email": "plugins@demo.example.invalid"
+  },
+  "plugins": [
+    {
+      "name": "notes",
+      "source": {
+        "source": "github",
+        "repo": "example/notes",
+        "ref": "9f1c2bd4e7a0"
+      },
+      "version": "1.2.0"
+    },
+    {
+      "name": "inside",
+      "source": "./plugins/inside",
+      "version": "0.1.0"
+    }
+  ]
+}

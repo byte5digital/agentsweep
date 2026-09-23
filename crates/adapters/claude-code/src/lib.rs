@@ -6,12 +6,12 @@
 //! the config directory or a stat on the search path, and the version from
 //! on-disk metadata.
 //!
-//! This slice covers everything entry shaped on the config Surfaces: the
-//! settings layers, the user registry `~/.claude.json`, the project MCP file
-//! and the hook handlers every settings layer registers, plus the read-only
-//! checks of the managed directory. It also keeps the project instruction file
-//! the first end-to-end path needs. Skills, plugins, marketplaces, subagents
-//! and the other tree and file Surfaces arrive with the next ticket.
+//! It covers the config Surfaces that are entry shaped (the settings layers,
+//! the user registry `~/.claude.json`, the project MCP file and the hook
+//! handlers every settings layer registers) and the Surfaces that are a file or
+//! a directory tree: skills, the plugins the install registry points at, the
+//! marketplace clones, subagents, commands, rule files, output styles,
+//! workflows and the instruction files of every Scope.
 //!
 //! Three things this adapter never does. It never reads git or an env file:
 //! that is the workspace adapter's, once, for every Agent, and the core stamps
@@ -24,20 +24,25 @@
 #![warn(missing_docs)]
 
 pub mod document;
+pub mod files;
 pub mod hooks;
 pub mod mcp;
+pub mod plugins;
 pub mod registry;
 pub mod settings;
+pub mod skills;
+pub mod tree;
 
 use std::path::{Path, PathBuf};
 
 use agentsweep_core::adapter::{
-    Descriptor, Detection, Enumeration, Primitive, Problem, ProblemReason, ProjectRegistration,
-    Surface, SurfaceAdapter, WatchRoots,
+    Descriptor, Detection, Enumeration, Primitive, ProjectRegistration, Surface, SurfaceAdapter,
+    WatchRoots,
 };
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{
-    Activation, FileFacts, InactiveReason, Item, ItemId, Kind, Provenance, Scope, canonical_entry,
+    Activation, FileFacts, InactiveReason, Item, ItemId, Kind, Provenance, Scope, Shape, TreeCaps,
+    canonical_entry,
 };
 use agentsweep_core::views::{HookView, McpView, ParsedView, SettingsView};
 use serde_json::{Value, json};
@@ -45,6 +50,7 @@ use serde_json::{Value, json};
 use crate::document::Document;
 use crate::registry::Registry;
 use crate::settings::{DeclaredKey, Entry};
+use crate::tree::Placement;
 
 /// The Agent id this adapter declares.
 pub const AGENT_ID: &str = "claude-code";
@@ -52,8 +58,45 @@ pub const AGENT_ID: &str = "claude-code";
 /// The name shown to a person.
 pub const DISPLAY_NAME: &str = "Claude Code";
 
-/// The instruction file Claude Code reads from a project root.
+/// The instruction file Claude Code reads from a project root, from the user's
+/// own configuration directory and from the managed directory.
 pub const PROJECT_INSTRUCTION_FILE: &str = "CLAUDE.md";
+
+/// The instruction file beside it that is the user's own and is kept out of
+/// git, read after it at every level.
+pub const LOCAL_INSTRUCTION_FILE: &str = "CLAUDE.local.md";
+
+/// The configuration directory of a project root, and of the managed
+/// directory, which carries the same layout one level down.
+pub const CONFIG_DIRECTORY: &str = ".claude";
+
+/// The directory of skill folders.
+pub const SKILLS_DIRECTORY: &str = "skills";
+
+/// The directory of legacy command files, which load the way a skill does.
+pub const COMMANDS_DIRECTORY: &str = "commands";
+
+/// The directory of subagent definitions.
+pub const SUBAGENTS_DIRECTORY: &str = "agents";
+
+/// The directory of rule files, which are instructions loaded before a
+/// project's own.
+pub const RULES_DIRECTORY: &str = "rules";
+
+/// The directory of output styles, which replace the default task
+/// instructions.
+pub const OUTPUT_STYLES_DIRECTORY: &str = "output-styles";
+
+/// The directory of workflows, which are scripts that run as a slash command.
+pub const WORKFLOWS_DIRECTORY: &str = "workflows";
+
+/// The directory Claude Code keeps one folder per project in, under the
+/// configuration directory.
+pub const PROJECTS_DIRECTORY: &str = "projects";
+
+/// The directory inside one of those folders that holds the memory Claude Code
+/// writes for itself and injects at the start of every session.
+pub const MEMORY_DIRECTORY: &str = "memory";
 
 /// The user settings layer, under the config directory.
 pub const USER_SETTINGS_FILE: &str = "settings.json";
@@ -98,9 +141,14 @@ const FILE_TYPE_PREFIX: usize = 4096;
 
 static KINDS: &[Kind] = &[
     Kind::InstructionFile,
+    Kind::Skill,
+    Kind::Plugin,
+    Kind::Marketplace,
     Kind::McpServer,
     Kind::Hook,
     Kind::SettingsEntry,
+    Kind::Subagent,
+    Kind::Workflow,
 ];
 
 /// The static surface table of spec section 3.5: the five settings layers that
@@ -161,20 +209,124 @@ static SURFACES: &[Surface] = &[
         locator: "/Library/Application Support/ClaudeCode/managed-mcp.json",
     },
     Surface {
+        kind: Kind::McpServer,
+        locator: "~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/.mcp.json",
+    },
+    Surface {
         kind: Kind::InstructionFile,
         locator: PROJECT_INSTRUCTION_FILE,
+    },
+    Surface {
+        kind: Kind::InstructionFile,
+        locator: LOCAL_INSTRUCTION_FILE,
+    },
+    Surface {
+        kind: Kind::InstructionFile,
+        locator: ".claude/CLAUDE.md",
+    },
+    Surface {
+        kind: Kind::InstructionFile,
+        locator: ".claude/rules",
+    },
+    Surface {
+        kind: Kind::InstructionFile,
+        locator: "~/.claude/CLAUDE.md",
+    },
+    Surface {
+        kind: Kind::InstructionFile,
+        locator: "~/.claude/rules",
+    },
+    Surface {
+        kind: Kind::InstructionFile,
+        locator: "~/.claude/output-styles",
+    },
+    Surface {
+        kind: Kind::InstructionFile,
+        locator: "~/.claude/projects/<project>/memory",
+    },
+    Surface {
+        kind: Kind::InstructionFile,
+        locator: "/Library/Application Support/ClaudeCode/CLAUDE.md",
+    },
+    Surface {
+        kind: Kind::Skill,
+        locator: "~/.claude/skills",
+    },
+    Surface {
+        kind: Kind::Skill,
+        locator: ".claude/skills",
+    },
+    Surface {
+        kind: Kind::Skill,
+        locator: "/Library/Application Support/ClaudeCode/.claude/skills",
+    },
+    Surface {
+        kind: Kind::Skill,
+        locator: "~/.claude/commands",
+    },
+    Surface {
+        kind: Kind::Skill,
+        locator: ".claude/commands",
+    },
+    Surface {
+        kind: Kind::Plugin,
+        locator: "~/.claude/plugins/installed_plugins.json",
+    },
+    Surface {
+        kind: Kind::Plugin,
+        locator: "~/.claude/plugins/cache",
+    },
+    Surface {
+        kind: Kind::Marketplace,
+        locator: "~/.claude/plugins/known_marketplaces.json",
+    },
+    Surface {
+        kind: Kind::Marketplace,
+        locator: "~/.claude/plugins/marketplaces",
+    },
+    Surface {
+        kind: Kind::Subagent,
+        locator: "~/.claude/agents",
+    },
+    Surface {
+        kind: Kind::Subagent,
+        locator: ".claude/agents",
+    },
+    Surface {
+        kind: Kind::Subagent,
+        locator: "/Library/Application Support/ClaudeCode/.claude/agents",
+    },
+    Surface {
+        kind: Kind::Workflow,
+        locator: "~/.claude/workflows",
+    },
+    Surface {
+        kind: Kind::Workflow,
+        locator: ".claude/workflows",
     },
 ];
 
 /// What one Quarantine does to each kind this adapter yields (spec section
-/// 5.2). An entry is removed from the file that holds it; a file is moved out
-/// by the core. NativeDisable is never a primitive of its own and belongs to
-/// the plugin composite, which this adapter does not yield yet.
+/// 5.2). An entry is removed from the file that holds it; a file or a tree is
+/// moved out by the core. A plugin is switched off in the Agent's own
+/// configuration first and moved out after, and a marketplace loses its
+/// registry entry before its clone is moved.
 static CAPABILITIES: &[(Kind, &[Primitive])] = &[
     (Kind::InstructionFile, &[Primitive::MoveOut]),
+    (Kind::Skill, &[Primitive::MoveOut]),
+    (
+        Kind::Plugin,
+        &[Primitive::NativeDisable, Primitive::MoveOut],
+    ),
+    (
+        Kind::Marketplace,
+        &[Primitive::RemoveEntry, Primitive::MoveOut],
+    ),
     (Kind::McpServer, &[Primitive::RemoveEntry]),
     (Kind::Hook, &[Primitive::RemoveEntry]),
     (Kind::SettingsEntry, &[Primitive::RemoveEntry]),
+    (Kind::Subagent, &[Primitive::MoveOut]),
+    (Kind::Workflow, &[Primitive::MoveOut]),
 ];
 
 static DESCRIPTOR: Descriptor = Descriptor {
@@ -188,7 +340,12 @@ static DESCRIPTOR: Descriptor = Descriptor {
 
 /// The Claude Code Surface Adapter.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ClaudeCode;
+pub struct ClaudeCode {
+    /// The caps every tree is read under. They are the core's defaults unless
+    /// a test asks for smaller ones, which is how the behaviour of a tree too
+    /// large to check fully is proven without writing a large tree.
+    caps: TreeCaps,
+}
 
 /// What the registry and the layers of one project root say about it, which is
 /// what Activation and the registered flag are read from.
@@ -211,7 +368,14 @@ struct ProjectFacts {
 impl ClaudeCode {
     /// A new adapter. It holds no state; the Host carries the machine.
     pub fn new() -> ClaudeCode {
-        ClaudeCode
+        ClaudeCode {
+            caps: TreeCaps::default(),
+        }
+    }
+
+    /// The same adapter reading its trees under other caps.
+    pub fn with_tree_caps(self, caps: TreeCaps) -> ClaudeCode {
+        ClaudeCode { caps }
     }
 
     /// The config directory in effect: the override AgentSweep holds for this
@@ -333,14 +497,17 @@ impl ClaudeCode {
         documents
     }
 
-    /// The user Surfaces: the user settings layer and the registry.
+    /// The user Surfaces: the user settings layer and the registry. What it
+    /// read is handed back, because which plugins are switched on is written
+    /// in the settings layers and read again once every layer has been seen.
     fn user_level(
         &self,
         host: &Host,
         registry: Option<&Registry>,
         managed_disables_hooks: bool,
         enumeration: &mut Enumeration,
-    ) {
+    ) -> Option<Document> {
+        let mut settings = None;
         if let Some(config_dir) = self.config_dir(host) {
             let path = config_dir.join(USER_SETTINGS_FILE);
             match document::load(host, &Scope::User, &path, Kind::SettingsEntry) {
@@ -365,6 +532,7 @@ impl ClaudeCode {
                         ..ProjectFacts::default()
                     };
                     self.hook_items(host, &document, Scope::User, &facts, true, enumeration);
+                    settings = Some(document);
                 }
                 Ok(None) => {}
                 Err(problem) => enumeration.problems.push(problem),
@@ -372,7 +540,7 @@ impl ClaudeCode {
         }
 
         let Some(registry) = registry else {
-            return;
+            return settings;
         };
         for (name, server) in registry.user_servers() {
             enumeration.items.push(self.server_item(
@@ -387,9 +555,169 @@ impl ClaudeCode {
                 None,
             ));
         }
+        settings
     }
 
-    /// Everything this adapter reads at one pooled project root.
+    /// Everything the user's own configuration directory holds that is a file
+    /// or a tree: the skills, the commands, the subagents, the rule files, the
+    /// output styles, the workflows, the instruction file, the memory Claude
+    /// Code writes for itself, and the plugins with their marketplaces.
+    fn user_trees(
+        &self,
+        host: &Host,
+        config_dir: &Path,
+        enabled: &plugins::Enabled,
+        enumeration: &mut Enumeration,
+    ) {
+        let placement = Placement::user();
+        files::instruction_file(
+            host,
+            &placement,
+            &config_dir.join(PROJECT_INSTRUCTION_FILE),
+            enumeration,
+        );
+        files::instruction_files_in(
+            host,
+            &placement,
+            &config_dir.join(RULES_DIRECTORY),
+            true,
+            enumeration,
+        );
+        files::instruction_files_in(
+            host,
+            &placement,
+            &config_dir.join(OUTPUT_STYLES_DIRECTORY),
+            false,
+            enumeration,
+        );
+        skills::skills_in(
+            host,
+            self.caps,
+            &placement,
+            &config_dir.join(SKILLS_DIRECTORY),
+            enumeration,
+        );
+        skills::commands_in(
+            host,
+            &placement,
+            &config_dir.join(COMMANDS_DIRECTORY),
+            enumeration,
+        );
+        files::subagents_in(
+            host,
+            &placement,
+            &config_dir.join(SUBAGENTS_DIRECTORY),
+            enumeration,
+        );
+        files::workflows_in(
+            host,
+            &placement,
+            &config_dir.join(WORKFLOWS_DIRECTORY),
+            enumeration,
+        );
+        self.memory_files(host, config_dir, enumeration);
+        plugins::enumerate(self, host, config_dir, enabled, enumeration);
+    }
+
+    /// The memory Claude Code writes for itself, one folder per project, and
+    /// injects at the start of every session. Its Provenance is AgentWritten,
+    /// which is what keeps a file the Agent rewrites every day out of Drift
+    /// (spec section 4.6.5) while every Tier still reads it.
+    fn memory_files(&self, host: &Host, config_dir: &Path, enumeration: &mut Enumeration) {
+        let placement = Placement::user().from(Provenance::AgentWritten);
+        for project in tree::directories_in(host, &config_dir.join(PROJECTS_DIRECTORY)) {
+            files::instruction_files_in(
+                host,
+                &placement,
+                &project.join(MEMORY_DIRECTORY),
+                true,
+                enumeration,
+            );
+        }
+    }
+
+    /// The Managed Surfaces that are a file or a tree: the administrator's
+    /// instruction file, skills and subagents. Read, reported, never touched.
+    fn managed_trees(&self, host: &Host, enumeration: &mut Enumeration) {
+        let Some(directory) = host.system_path(MANAGED_DIRECTORY) else {
+            return;
+        };
+        let placement = Placement::managed();
+        files::instruction_file(
+            host,
+            &placement,
+            &directory.join(PROJECT_INSTRUCTION_FILE),
+            enumeration,
+        );
+        let config_dir = directory.join(CONFIG_DIRECTORY);
+        skills::skills_in(
+            host,
+            self.caps,
+            &placement,
+            &config_dir.join(SKILLS_DIRECTORY),
+            enumeration,
+        );
+        files::subagents_in(
+            host,
+            &placement,
+            &config_dir.join(SUBAGENTS_DIRECTORY),
+            enumeration,
+        );
+    }
+
+    /// Everything one project root holds that is a file or a tree.
+    fn project_trees(
+        &self,
+        host: &Host,
+        root: &Path,
+        facts: &ProjectFacts,
+        enumeration: &mut Enumeration,
+    ) {
+        let placement = Placement::project(root, project_activation(facts), facts.registered);
+        let config_dir = root.join(CONFIG_DIRECTORY);
+        for instructions in [
+            root.join(PROJECT_INSTRUCTION_FILE),
+            root.join(LOCAL_INSTRUCTION_FILE),
+            config_dir.join(PROJECT_INSTRUCTION_FILE),
+        ] {
+            files::instruction_file(host, &placement, &instructions, enumeration);
+        }
+        files::instruction_files_in(
+            host,
+            &placement,
+            &config_dir.join(RULES_DIRECTORY),
+            true,
+            enumeration,
+        );
+        skills::skills_in(
+            host,
+            self.caps,
+            &placement,
+            &config_dir.join(SKILLS_DIRECTORY),
+            enumeration,
+        );
+        skills::commands_in(
+            host,
+            &placement,
+            &config_dir.join(COMMANDS_DIRECTORY),
+            enumeration,
+        );
+        files::subagents_in(
+            host,
+            &placement,
+            &config_dir.join(SUBAGENTS_DIRECTORY),
+            enumeration,
+        );
+        files::workflows_in(
+            host,
+            &placement,
+            &config_dir.join(WORKFLOWS_DIRECTORY),
+            enumeration,
+        );
+    }
+
+    /// Everything this adapter reads at one pooled project root. The settings
+    /// layers it read are handed back for the same reason the user layer is.
     fn project_level(
         &self,
         host: &Host,
@@ -397,7 +725,7 @@ impl ClaudeCode {
         registry: Option<&Registry>,
         managed_disables_hooks: bool,
         enumeration: &mut Enumeration,
-    ) {
+    ) -> Vec<Document> {
         let scope = Scope::Project(root.to_path_buf());
         let record = registry.and_then(|registry| registry.record(root));
         let layers = [PROJECT_LOCAL_SETTINGS_FILE, PROJECT_SETTINGS_FILE];
@@ -505,15 +833,8 @@ impl ClaudeCode {
             }
         }
 
-        if let Some(result) = self.instruction_file(host, root) {
-            match result {
-                Ok(mut item) => {
-                    item.registered = facts.registered;
-                    enumeration.items.push(item);
-                }
-                Err(problem) => enumeration.problems.push(problem),
-            }
-        }
+        self.project_trees(host, root, &facts, enumeration);
+        documents
     }
 
     /// One settings key as an Item.
@@ -668,49 +989,6 @@ impl ClaudeCode {
                 .unwrap_or_default();
         }
     }
-
-    /// The project instruction file of one root, or the Problem that stopped
-    /// it from becoming an Item.
-    fn instruction_file(&self, host: &Host, root: &Path) -> Option<Result<Item, Problem>> {
-        let path = root.join(PROJECT_INSTRUCTION_FILE);
-        let link = host.symlink_metadata(&path).ok()?;
-        let content = match host.read(&path) {
-            Ok(content) => content,
-            Err(_) => {
-                return Some(Err(Problem {
-                    surface: PROJECT_INSTRUCTION_FILE.to_string(),
-                    path,
-                    kind: Some(Kind::InstructionFile),
-                    reason: ProblemReason::Unreadable,
-                }));
-            }
-        };
-
-        let mut item = Item::file(
-            AGENT_ID,
-            Scope::Project(root.to_path_buf()),
-            Kind::InstructionFile,
-            PROJECT_INSTRUCTION_FILE,
-            path.clone(),
-            // Repository Provenance is the workspace adapter's to compute, in
-            // process and never by running git. Until it does, the file's
-            // origin is not determined.
-            Provenance::Unknown,
-            // Claude Code loads a project instruction file only once the
-            // project is trusted, which is read from its own registry. A
-            // Folder Scan runs before that, so Activation is not determined.
-            Activation::Unknown,
-            content,
-        );
-        if link.file_type().is_symlink() {
-            item.is_symlink = true;
-            item.link_target = host
-                .read_link(&path)
-                .map(|target| target.display().to_string())
-                .unwrap_or_default();
-        }
-        Some(Ok(item))
-    }
 }
 
 impl SurfaceAdapter for ClaudeCode {
@@ -760,25 +1038,33 @@ impl SurfaceAdapter for ClaudeCode {
             }
         };
 
-        let managed = self.managed(host, &mut enumeration);
-        let managed_disables_hooks = managed
+        let mut layers = self.managed(host, &mut enumeration);
+        let managed_disables_hooks = layers
             .iter()
             .any(|document| document.flag("disableAllHooks") == Some(true));
+        self.managed_trees(host, &mut enumeration);
 
-        self.user_level(
+        layers.extend(self.user_level(
             host,
             registry.as_ref(),
             managed_disables_hooks,
             &mut enumeration,
-        );
+        ));
         for root in roots {
-            self.project_level(
+            layers.extend(self.project_level(
                 host,
                 root,
                 registry.as_ref(),
                 managed_disables_hooks,
                 &mut enumeration,
-            );
+            ));
+        }
+
+        // The plugins come last because whether one is switched on is written
+        // in the settings layers, and every layer has now been read.
+        if let Some(config_dir) = self.config_dir(host) {
+            let enabled = enabled_plugins(&layers);
+            self.user_trees(host, &config_dir, &enabled, &mut enumeration);
         }
         enumeration
     }
@@ -788,33 +1074,83 @@ impl SurfaceAdapter for ClaudeCode {
     /// other Surface is a file at a known path, so the directory it sits in is
     /// watched for its own entries only, which keeps the home and a project
     /// root off the recursive list.
+    ///
+    /// A tree that was reached through a symbolic link is watched where its
+    /// files really are as well, so an edit in the shared skills directory is
+    /// seen the moment a link into it exists (spec section 3.2).
     fn watch_roots(&self, enumeration: &Enumeration) -> WatchRoots {
         let mut roots = WatchRoots::default();
         for item in &enumeration.items {
-            match config_directory_of(&item.path) {
-                Some(directory) => roots.watch_recursively(directory),
-                None => {
+            match (item.shape, config_directory_of(&item.path)) {
+                (_, Some(directory)) => roots.watch_recursively(directory),
+                (Shape::Tree, None) => roots.watch_recursively(item.path.clone()),
+                (_, None) => {
                     if let Some(parent) = item.path.parent() {
                         roots.watch(parent.to_path_buf());
                     }
                 }
+            }
+            if let Some(target) = followed_target(item) {
+                roots.watch_recursively(target.to_path_buf());
             }
         }
         roots.sort();
         roots
     }
 
-    /// A changed configuration file maps back to every entry read out of it,
-    /// and a changed script maps back to the hook or the MCP server that runs
-    /// it, so that editing what a hook calls re-scans the hook.
+    /// A changed configuration file maps back to every entry read out of it, a
+    /// changed script maps back to the hook or the MCP server that runs it, and
+    /// a changed file inside a tree maps back to the tree, wherever that
+    /// tree's files really are.
     fn items_for_path(&self, enumeration: &Enumeration, path: &Path) -> Vec<ItemId> {
         enumeration
             .items
             .iter()
-            .filter(|item| item.path == path || resolved_command_of(item) == Some(path))
+            .filter(|item| {
+                item.path == path
+                    || resolved_command_of(item) == Some(path)
+                    || holds_path(item, path)
+            })
             .map(|item| item.id.clone())
             .collect()
     }
+}
+
+/// Where a tree Item's files really are, when that is not where the Item sits:
+/// the target of the link a skill root is.
+fn followed_target(item: &Item) -> Option<&Path> {
+    if item.shape != Shape::Tree || !item.is_symlink || item.link_target.is_empty() {
+        return None;
+    }
+    Some(Path::new(&item.link_target))
+}
+
+/// True when one path is a file of this tree, at the tree's own place or at
+/// the place its link points to.
+fn holds_path(item: &Item, path: &Path) -> bool {
+    if item.shape != Shape::Tree {
+        return false;
+    }
+    path.starts_with(&item.path)
+        || followed_target(item).is_some_and(|target| path.starts_with(target))
+}
+
+/// What the settings layers say about each plugin id, the highest layer that
+/// mentions one deciding.
+///
+/// The layers arrive in precedence order, the managed tier first, so the first
+/// answer is the one Claude Code would honour. A plugin no layer mentions is
+/// absent rather than off: nothing on disk says either way.
+fn enabled_plugins(layers: &[Document]) -> plugins::Enabled {
+    let mut enabled = plugins::Enabled::new();
+    for document in layers {
+        for (id, value) in document.members("enabledPlugins") {
+            if let Some(flag) = value.as_bool() {
+                enabled.entry(id).or_insert(flag);
+            }
+        }
+    }
+    enabled
 }
 
 /// The nearest ancestor of a path that is a Claude Code configuration
@@ -881,6 +1217,20 @@ fn settings_activation(declared: &DeclaredKey, facts: &ProjectFacts) -> Activati
     if !declared.waits_for_trust {
         return Activation::Active;
     }
+    match facts.trusted {
+        Some(true) => Activation::Active,
+        Some(false) => Activation::Inactive(InactiveReason::UntrustedProject),
+        None => Activation::Unknown,
+    }
+}
+
+/// Whether Claude Code would load a file or a tree that sits in a project.
+///
+/// The exact folder has to be trusted first: a fresh clone is read only once
+/// someone has accepted the dialog, and the answer is in the Agent's own
+/// registry. Without a registry to ask, which is what a Folder Scan looks
+/// like, nothing on disk settles it.
+fn project_activation(facts: &ProjectFacts) -> Activation {
     match facts.trusted {
         Some(true) => Activation::Active,
         Some(false) => Activation::Inactive(InactiveReason::UntrustedProject),
@@ -959,7 +1309,7 @@ mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use agentsweep_core::adapter::eligibility;
+    use agentsweep_core::adapter::{ProblemReason, eligibility};
     use agentsweep_core::item::Shape;
     use agentsweep_core::provenance::{Provenances, RepositoryProvenance};
     use agentsweep_core::views::Views;
@@ -1001,6 +1351,29 @@ mod tests {
                 fs::create_dir_all(parent).expect("a directory for a fixture file");
             }
             fs::write(&path, content).expect("a fixture file");
+            path
+        }
+
+        /// A file of bytes rather than of text, which is how a fixture gets a
+        /// native executable without shipping one: four magic bytes are all
+        /// the classifier reads.
+        fn write_bytes(&self, relative: &str, content: &[u8]) -> PathBuf {
+            let path = self.root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("a directory for a fixture file");
+            }
+            fs::write(&path, content).expect("a fixture file");
+            path
+        }
+
+        /// A symbolic link, the way the shared skills directory is reached.
+        #[cfg(unix)]
+        fn link(&self, relative: &str, target: &str) -> PathBuf {
+            let path = self.root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("a directory for a link");
+            }
+            std::os::unix::fs::symlink(target, &path).expect("a link");
             path
         }
 
@@ -1524,6 +1897,338 @@ mod tests {
         assert_eq!(enumeration.problems[0].surface, ".claude/settings.json");
     }
 
+    /// Acceptance of ticket 07: a skill is the whole folder, its manifest
+    /// names every file in it, and the type of a native executable inside it
+    /// is a fact of that file rather than of the folder (Rule 0015).
+    #[test]
+    fn a_skill_tree_names_every_file_and_types_the_executable_among_them() {
+        let machine = Machine::new("skill-tree");
+        machine.write(
+            "home/.claude/skills/pdf-tools/SKILL.md",
+            "---\nname: pdf-tools\nallowed-tools: Bash(pdftotext *), Read\n---\n\nRun it.\n",
+        );
+        machine.write(
+            "home/.claude/skills/pdf-tools/scripts/convert.sh",
+            "#!/bin/sh\npdftotext \"$1\"\n",
+        );
+        machine.write_bytes(
+            "home/.claude/skills/pdf-tools/bin/helper",
+            &[0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01],
+        );
+
+        let enumeration = machine.enumerate();
+        let found = item(&enumeration, "/skill/~/.claude/skills/pdf-tools");
+
+        assert_eq!(found.kind, Kind::Skill);
+        assert_eq!(found.shape, Shape::Tree);
+        assert_eq!(found.scope, Scope::User);
+        let manifest = String::from_utf8_lossy(&found.content);
+        for file in ["SKILL.md", "bin/helper", "scripts/convert.sh"] {
+            assert!(manifest.contains(file), "{manifest}");
+        }
+        assert_eq!(
+            found.facts_of("bin/helper").file_type,
+            agentsweep_core::item::FileType::Executable
+        );
+        assert_eq!(
+            found.facts_of("SKILL.md").file_type,
+            agentsweep_core::item::FileType::Text
+        );
+        let ParsedView::Skill(view) = &found.view else {
+            panic!("a Skill Item carries the skill view");
+        };
+        assert_eq!(view.name, "pdf-tools");
+        assert_eq!(view.allowed_tools, ["Bash(pdftotext *)", "Read"]);
+    }
+
+    /// Spec section 3.3: the identity is the link's own location and the
+    /// content comes from the target. Most skills on a real machine are links
+    /// into the shared directory both Agents read.
+    #[cfg(unix)]
+    #[test]
+    fn a_skill_reached_through_a_link_keeps_the_link_as_its_identity() {
+        let machine = Machine::new("skill-link");
+        machine.write(
+            "home/.agents/skills/notes/SKILL.md",
+            "---\nname: notes\n---\n\nTake notes.\n",
+        );
+        machine.link("home/.claude/skills/notes", "../../.agents/skills/notes");
+
+        let enumeration = machine.enumerate();
+        let found = item(&enumeration, "/skill/~/.claude/skills/notes");
+
+        assert_eq!(found.path, machine.home().join(".claude/skills/notes"));
+        assert!(found.is_symlink);
+        assert_eq!(
+            found.link_target,
+            machine
+                .home()
+                .join(".agents/skills/notes")
+                .display()
+                .to_string()
+        );
+        assert!(
+            found.tree.holds("SKILL.md"),
+            "the content came from the target"
+        );
+
+        // The watcher follows the link, and a change at the target maps back
+        // to the Item that reads it.
+        let roots = ClaudeCode::new().watch_roots(&enumeration);
+        assert!(
+            roots
+                .recursive
+                .contains(&machine.home().join(".agents/skills/notes")),
+            "{roots:?}"
+        );
+        let mapped = ClaudeCode::new().items_for_path(
+            &enumeration,
+            &machine.home().join(".agents/skills/notes/SKILL.md"),
+        );
+        assert_eq!(mapped, vec![found.id.clone()]);
+    }
+
+    /// Acceptance of ticket 07: the plugin Item is the version directory the
+    /// install registry points at, the version nothing points at any more is
+    /// an inactive Item of its own, and the servers the plugin brings carry
+    /// Provenance Plugin.
+    #[test]
+    fn a_plugin_is_the_version_the_registry_points_at_and_an_old_one_is_orphaned() {
+        let machine = Machine::new("plugins");
+        let cache = "home/.claude/plugins/cache/demo-marketplace/notes";
+        machine.write(
+            &format!("{cache}/1.2.0/.claude-plugin/plugin.json"),
+            "{\"name\": \"notes\", \"version\": \"1.2.0\", \
+              \"experimental\": {\"monitors\": \"./monitors/monitors.json\"}}",
+        );
+        machine.write(
+            &format!("{cache}/1.2.0/.mcp.json"),
+            "{\"mcpServers\": {\"notes\": {\"command\": \"node\", \
+              \"args\": [\"./server.js\"]}}}",
+        );
+        machine.write(&format!("{cache}/1.2.0/bin/git"), "#!/bin/sh\nexec true\n");
+        machine.write(
+            &format!("{cache}/1.1.0/.claude-plugin/plugin.json"),
+            "{\"name\": \"notes\", \"version\": \"1.1.0\"}",
+        );
+        machine.write(&format!("{cache}/1.1.0/.orphaned_at"), "1758000000000");
+        machine.write(
+            "home/.claude/plugins/installed_plugins.json",
+            &format!(
+                "{{\"version\": 2, \"plugins\": {{\"notes@demo-marketplace\": [\
+                  {{\"scope\": \"user\", \"version\": \"1.2.0\", \"gitCommitSha\": \"9f1c2b\", \
+                    \"installPath\": \"{}/.claude/plugins/cache/demo-marketplace/notes/1.2.0\"}}]}}}}",
+                machine.home().display()
+            ),
+        );
+        machine.write(
+            "home/.claude/settings.json",
+            "{\"enabledPlugins\": {\"notes@demo-marketplace\": true}}",
+        );
+
+        let enumeration = machine.enumerate();
+        let plugin = item(&enumeration, "/plugin/notes@demo-marketplace");
+        let orphan = item(&enumeration, "/plugin/notes@demo-marketplace@1.1.0");
+
+        assert_eq!(plugin.shape, Shape::Tree);
+        assert_eq!(plugin.activation, Activation::Active);
+        assert_eq!(
+            plugin.provenance,
+            Provenance::Marketplace {
+                name: "demo-marketplace".to_string(),
+                pinned_ref: "9f1c2b".to_string(),
+                official: false,
+            }
+        );
+        let ParsedView::Plugin(view) = &plugin.view else {
+            panic!("a Plugin Item carries the plugin view");
+        };
+        assert_eq!(view.name, "notes");
+        assert_eq!(view.bin_names, ["git"], "Rule 0016 reads these");
+        assert!(view.has_monitors);
+        assert_eq!(
+            orphan.activation,
+            Activation::Inactive(InactiveReason::Orphaned)
+        );
+
+        let server = item(&enumeration, "/1.2.0/.mcp.json#notes");
+        assert_eq!(server.kind, Kind::McpServer);
+        assert_eq!(server.shape, Shape::Entry);
+        assert_eq!(
+            server.provenance,
+            Provenance::Plugin {
+                id: "notes@demo-marketplace".to_string()
+            }
+        );
+        assert!(
+            !enumeration
+                .items
+                .iter()
+                .any(|item| item.id.as_str().contains("1.1.0/.mcp.json")),
+            "an orphaned version starts nothing"
+        );
+    }
+
+    /// A marketplace clone is a tree named by the marketplace, without its git
+    /// internals, and the entries it lists are what Rules 0017, 0586 and 0587
+    /// read.
+    #[test]
+    fn a_marketplace_clone_is_a_tree_without_its_git_internals() {
+        let machine = Machine::new("marketplace");
+        let clone = "home/.claude/plugins/marketplaces/claude-plugins-official";
+        machine.write(
+            &format!("{clone}/.claude-plugin/marketplace.json"),
+            "{\"name\": \"claude-plugins-official\", \"owner\": {\"name\": \"Example\"}, \
+              \"plugins\": [{\"name\": \"notes\", \"source\": {\"source\": \"github\", \
+              \"repo\": \"example/notes\", \"ref\": \"9f1c2b\"}}]}",
+        );
+        machine.write(&format!("{clone}/.git/config"), "[core]\n\tbare = false\n");
+        machine.write(
+            "home/.claude/plugins/known_marketplaces.json",
+            "{\"claude-plugins-official\": {\"source\": {\"source\": \"github\", \
+              \"repo\": \"anthropics/claude-plugins\"}}}",
+        );
+
+        let enumeration = machine.enumerate();
+        let found = item(&enumeration, "/marketplace/claude-plugins-official");
+
+        assert_eq!(found.shape, Shape::Tree);
+        assert_eq!(found.activation, Activation::Active);
+        assert!(found.provenance.is_official());
+        assert!(
+            !String::from_utf8_lossy(&found.content).contains(".git/"),
+            "the clone's git metadata is the workspace adapter's, not a tree's"
+        );
+        let ParsedView::Marketplace(view) = &found.view else {
+            panic!("a Marketplace Item carries the marketplace view");
+        };
+        assert_eq!(view.owner, "Example");
+        assert_eq!(view.entries_n, 1);
+        assert_eq!(view.entries[0].source_kind, "github");
+        assert!(view.entries[0].pinned);
+    }
+
+    /// Acceptance of ticket 07: a tree over the caps is a Problem, and what
+    /// was read still says that it is not all of it.
+    #[test]
+    fn a_tree_over_the_caps_is_a_problem_and_says_so_in_its_manifest() {
+        let machine = Machine::new("caps");
+        machine.write("home/.claude/skills/big/SKILL.md", "---\nname: big\n---\n");
+        for index in 0..8 {
+            machine.write(&format!("home/.claude/skills/big/page-{index}.md"), "x\n");
+        }
+
+        let host = machine.host();
+        let adapter = ClaudeCode::new().with_tree_caps(TreeCaps {
+            max_files: 3,
+            ..TreeCaps::default()
+        });
+        let enumeration = adapter.enumerate(&host, host.project_roots());
+
+        let found = item(&enumeration, "/skill/~/.claude/skills/big");
+        assert!(found.tree.over_caps);
+        assert!(String::from_utf8_lossy(&found.content).contains("(too large to check fully)"));
+        assert_eq!(enumeration.problems.len(), 1, "{:?}", enumeration.problems);
+        assert_eq!(enumeration.problems[0].kind, Some(Kind::Skill));
+        assert_eq!(enumeration.problems[0].surface, "~/.claude/skills/big");
+    }
+
+    /// The rest of the inventory: a command file loads the way a skill does, a
+    /// subagent carries its permission mode, a rule file is an instruction
+    /// file and a workflow is a script that runs as a slash command.
+    #[test]
+    fn commands_subagents_rule_files_and_workflows_are_each_their_own_item() {
+        let machine = Machine::new("inventory");
+        machine.write(
+            "home/.claude/commands/deploy.md",
+            "---\nallowed-tools: Bash(git push *)\n---\n\nShip it.\n",
+        );
+        machine.write(
+            "home/.claude/agents/reviewer.md",
+            "---\nname: reviewer\npermission-mode: bypassPermissions\n---\n\nReview.\n",
+        );
+        machine.write("home/.claude/rules/style.md", "Use prose.\n");
+        machine.write("home/.claude/output-styles/terse.md", "Be terse.\n");
+        machine.write("home/.claude/workflows/release.js", "export default {};\n");
+        machine.write("home/.claude/CLAUDE.md", "# mine\n");
+        machine.write(
+            "home/.claude/projects/-src-demo/memory/MEMORY.md",
+            "- the user prefers prose\n",
+        );
+        machine.write("project/.claude/rules/tests.md", "Write tests first.\n");
+        machine.write("project/CLAUDE.local.md", "# local\n");
+
+        let enumeration = machine.enumerate();
+
+        let command = item(&enumeration, "/skill/~/.claude/commands/deploy.md");
+        assert_eq!(command.shape, Shape::File);
+        let ParsedView::Skill(view) = &command.view else {
+            panic!("a command carries the skill view");
+        };
+        assert_eq!(view.allowed_tools, ["Bash(git push *)"]);
+
+        let subagent = item(&enumeration, "/subagent/~/.claude/agents/reviewer.md");
+        let ParsedView::Subagent(view) = &subagent.view else {
+            panic!("a Subagent Item carries the subagent view");
+        };
+        assert_eq!(view.permission_mode, "bypassPermissions");
+
+        assert_eq!(
+            item(&enumeration, "/instruction-file/~/.claude/rules/style.md").kind,
+            Kind::InstructionFile
+        );
+        assert_eq!(
+            item(&enumeration, "~/.claude/output-styles/terse.md").kind,
+            Kind::InstructionFile
+        );
+        assert_eq!(
+            item(&enumeration, "/workflow/~/.claude/workflows/release.js").kind,
+            Kind::Workflow
+        );
+        assert_eq!(item(&enumeration, "~/.claude/CLAUDE.md").scope, Scope::User);
+        let memory = item(&enumeration, "/memory/MEMORY.md");
+        assert_eq!(memory.provenance, Provenance::AgentWritten);
+        assert_eq!(
+            item(&enumeration, "/instruction-file/.claude/rules/tests.md").scope,
+            Scope::Project(machine.project())
+        );
+        assert_eq!(
+            item(&enumeration, "/instruction-file/CLAUDE.local.md").kind,
+            Kind::InstructionFile
+        );
+    }
+
+    /// A folder of the skills directory that carries a plugin manifest is a
+    /// plugin with no install record, which is how Claude Code loads it.
+    #[test]
+    fn a_skills_directory_plugin_is_a_plugin_and_not_a_skill() {
+        let machine = Machine::new("skills-dir-plugin");
+        machine.write(
+            "home/.claude/skills/helper/.claude-plugin/plugin.json",
+            "{\"name\": \"helper\"}",
+        );
+        machine.write(
+            "home/.claude/skills/helper/SKILL.md",
+            "---\nname: helper\n---\n",
+        );
+
+        let enumeration = machine.enumerate();
+        let found = item(&enumeration, "/plugin/~/.claude/skills/helper");
+
+        assert_eq!(found.kind, Kind::Plugin);
+        let ParsedView::Plugin(view) = &found.view else {
+            panic!("a Plugin Item carries the plugin view");
+        };
+        assert_eq!(view.name, "helper");
+        assert!(
+            !enumeration
+                .items
+                .iter()
+                .any(|item| item.kind == Kind::Skill),
+            "the same folder is not also a Skill"
+        );
+    }
+
     /// The promise the whole adapter rests on: Claude Code is read, never run.
     /// Starting it would fire its own SessionStart hooks, which is exactly the
     /// Surface this adapter is here to check.
@@ -1535,10 +2240,14 @@ mod tests {
         for source in [
             include_str!("lib.rs"),
             include_str!("document.rs"),
+            include_str!("files.rs"),
             include_str!("hooks.rs"),
             include_str!("mcp.rs"),
+            include_str!("plugins.rs"),
             include_str!("registry.rs"),
             include_str!("settings.rs"),
+            include_str!("skills.rs"),
+            include_str!("tree.rs"),
         ] {
             assert!(!source.contains(&spawns), "a process is spawned");
             assert!(!source.contains(&imports), "a process is spawned");

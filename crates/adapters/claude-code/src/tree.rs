@@ -200,8 +200,23 @@ pub fn directories_in(host: &Host, directory: &Path) -> Vec<PathBuf> {
 ///
 /// A link at an entry is followed one level, which is how a rule file linked
 /// into a shared directory is still read. A link that points at a directory is
-/// walked when the walk is recursive.
+/// walked when the walk is recursive, and the walk is bounded: a link back up
+/// its own tree would otherwise be walked for ever.
 pub fn files_in(host: &Host, directory: &Path, suffixes: &[&str], recursive: bool) -> Vec<PathBuf> {
+    files_below(host, directory, suffixes, recursive, MAX_DEPTH)
+}
+
+/// How deep a walk goes. Nobody nests a rule file eight directories down, and
+/// a planted link that points at its own parent is not a reason to stop.
+const MAX_DEPTH: usize = 8;
+
+fn files_below(
+    host: &Host,
+    directory: &Path,
+    suffixes: &[&str],
+    recursive: bool,
+    depth: usize,
+) -> Vec<PathBuf> {
     let Ok(entries) = host.read_dir(directory) else {
         return Vec::new();
     };
@@ -211,8 +226,8 @@ pub fn files_in(host: &Host, directory: &Path, suffixes: &[&str], recursive: boo
             continue;
         };
         if location.is_dir() {
-            if recursive {
-                found.extend(files_in(host, &path, suffixes, recursive));
+            if recursive && depth > 0 {
+                found.extend(files_below(host, &path, suffixes, recursive, depth - 1));
             }
             continue;
         }

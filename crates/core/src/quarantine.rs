@@ -200,6 +200,9 @@ pub enum EnforcementError {
     },
     /// The store itself could not be written.
     Store(io::Error),
+    /// The Event Log could not be read or appended to, so nothing may be
+    /// done: an action without a record is exactly what ADR 0003 rules out.
+    Log(crate::chain::ChainError),
 }
 
 impl fmt::Display for EnforcementError {
@@ -216,6 +219,7 @@ impl fmt::Display for EnforcementError {
             }
             EnforcementError::NotEligible { reason } => f.write_str(reason),
             EnforcementError::Store(error) => write!(f, "the quarantine store: {error}"),
+            EnforcementError::Log(error) => write!(f, "the Event Log: {error}"),
         }
     }
 }
@@ -225,6 +229,12 @@ impl std::error::Error for EnforcementError {}
 impl From<io::Error> for EnforcementError {
     fn from(error: io::Error) -> EnforcementError {
         EnforcementError::Store(error)
+    }
+}
+
+impl From<crate::chain::ChainError> for EnforcementError {
+    fn from(error: crate::chain::ChainError) -> EnforcementError {
+        EnforcementError::Log(error)
     }
 }
 

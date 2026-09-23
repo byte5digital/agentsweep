@@ -14,8 +14,10 @@
 #![warn(missing_docs)]
 
 pub mod adapter;
+pub mod allowlist;
 pub mod chain;
 pub mod derived;
+pub mod enforcement;
 pub mod envelope;
 pub mod eventlog;
 pub mod finding;

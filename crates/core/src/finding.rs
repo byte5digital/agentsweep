@@ -1,14 +1,17 @@
 //! The Finding: one suspicious observation about one Item.
 //!
 //! A Finding is identified by the Item id, its source and the content hash
-//! (spec section 4.5). One Finding per Rule per Item. The vocabularies here
-//! are the ones `CONTEXT.md` fixes; the Finding states and the Event Log arrive
-//! with milestones 4 and 6.
+//! (spec section 4.5), which is what [`FindingId`] renders. One Finding per
+//! Rule per Item. Where a Finding stands is [`FindingState`], and it is never
+//! stored: [`standing`] reads it back off the Event Log's derived views and
+//! the Findings of the current Scan.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
 
-use crate::item::ItemId;
+use crate::derived::{QuarantineManifest, TrustTable};
+use crate::item::{ItemId, Kind};
 
 /// Whether the content was planted by an attacker or is the user's own risky
 /// configuration.
@@ -274,6 +277,177 @@ impl Finding {
     }
 }
 
+/// The identity of one Finding: the Item it is about, what produced it and the
+/// content it was made on (spec section 4.5).
+///
+/// The content hash is part of the identity, so a Finding on content that
+/// changed is a new Finding and the old one is gone. The Score is not part of
+/// it: one `score` Finding per Item, whatever the Score happens to be.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FindingId(String);
+
+impl FindingId {
+    /// The id of a Finding from its three parts.
+    pub fn new(item_id: &ItemId, source: Source, content_hash: &str) -> FindingId {
+        let source = match source {
+            Source::Rule(id) => format!("rule/{id:04}"),
+            Source::Score(_) => "score".to_string(),
+        };
+        FindingId(format!("{item_id}|{source}|{content_hash}"))
+    }
+
+    /// The id of one Finding.
+    pub fn of(finding: &Finding) -> FindingId {
+        FindingId::new(&finding.item_id, finding.source, &finding.content_hash)
+    }
+
+    /// The id as one string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Takes an id back from the form a record of the Event Log carries.
+    pub fn from_recorded(text: &str) -> FindingId {
+        FindingId(text.to_string())
+    }
+}
+
+impl fmt::Display for FindingId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Where one Finding stands (spec section 4.5).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FindingState {
+    /// The Item still carries the content and nothing has been done about it.
+    Open,
+    /// The Item was quarantined, so the Agent cannot load it.
+    Stopped,
+    /// The user said this content of this kind is safe.
+    Trusted,
+    /// The user said the change was their own doing. The Baseline milestone is
+    /// what puts a Finding here; nothing does yet.
+    Acknowledged,
+    /// The content is no longer there. Kept in the Activity.
+    Gone,
+}
+
+impl FindingState {
+    /// Every state, in the order spec section 4.5 lists them.
+    pub const ALL: [FindingState; 5] = [
+        FindingState::Open,
+        FindingState::Stopped,
+        FindingState::Trusted,
+        FindingState::Acknowledged,
+        FindingState::Gone,
+    ];
+
+    /// The spelling the state file and the command line interface carry.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FindingState::Open => "open",
+            FindingState::Stopped => "stopped",
+            FindingState::Trusted => "trusted",
+            FindingState::Acknowledged => "acknowledged",
+            FindingState::Gone => "gone",
+        }
+    }
+
+    /// Reads back that spelling.
+    pub fn parse(text: &str) -> Option<FindingState> {
+        FindingState::ALL
+            .into_iter()
+            .find(|state| state.as_str() == text)
+    }
+
+    /// True when the Finding still asks something of the user, which is what
+    /// the Gate refuses a turn on.
+    pub fn is_open(self) -> bool {
+        self == FindingState::Open
+    }
+}
+
+impl fmt::Display for FindingState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One Finding with where it stands.
+#[derive(Clone, Debug)]
+pub struct Standing {
+    /// Its identity.
+    pub id: FindingId,
+    /// The observation itself.
+    pub finding: Finding,
+    /// Where it stands.
+    pub state: FindingState,
+    /// The Receipt that stopped it, empty unless it is stopped.
+    pub receipt_id: String,
+}
+
+/// What the Event Log decided, which is half of where a Finding stands.
+#[derive(Clone, Copy, Debug)]
+pub struct Decided<'a> {
+    /// What the quarantine store holds.
+    pub quarantined: &'a QuarantineManifest,
+    /// Which content hashes carry Trust.
+    pub trusted: &'a TrustTable,
+}
+
+/// Every Finding that stands right now, derived from the Event Log and the
+/// current Scan and never stored (spec section 4.5).
+///
+/// A Finding the last Scan raised and this one did not is not dropped: it is
+/// gone, and the Activity keeps it. `kinds` says which kind each Item is,
+/// because Trust is bound to a kind and a content hash while a Finding carries
+/// only the hash.
+pub fn standing(
+    previous: &[Finding],
+    current: &[Finding],
+    kinds: &BTreeMap<ItemId, Kind>,
+    decided: Decided<'_>,
+) -> Vec<Standing> {
+    let mut placed: Vec<Standing> = Vec::new();
+    let mut seen: Vec<FindingId> = Vec::new();
+    let found_now: Vec<FindingId> = current.iter().map(FindingId::of).collect();
+
+    for finding in current.iter().chain(previous.iter()) {
+        let id = FindingId::of(finding);
+        if seen.contains(&id) {
+            continue;
+        }
+        seen.push(id.clone());
+        let stopped = decided.quarantined.entries().find(|entry| {
+            entry.item_id == finding.item_id && entry.content_hash == finding.content_hash
+        });
+        let kind = kinds
+            .get(&finding.item_id)
+            .copied()
+            .or_else(|| stopped.and_then(|entry| entry.kind));
+        let state = if stopped.is_some() {
+            FindingState::Stopped
+        } else if kind.is_some_and(|kind| decided.trusted.trusts(kind, &finding.content_hash)) {
+            FindingState::Trusted
+        } else if found_now.contains(&id) {
+            FindingState::Open
+        } else {
+            FindingState::Gone
+        };
+        placed.push(Standing {
+            id,
+            finding: finding.clone(),
+            state,
+            receipt_id: stopped
+                .map(|entry| entry.receipt_id.clone())
+                .unwrap_or_default(),
+        });
+    }
+    placed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +493,123 @@ mod tests {
         assert!(Severity::Critical > Severity::High);
         assert!(Severity::High > Severity::Medium);
         assert!(Severity::Medium > Severity::Low);
+    }
+
+    #[test]
+    fn every_state_round_trips_through_the_spelling_it_is_written_as() {
+        for state in FindingState::ALL {
+            assert_eq!(FindingState::parse(state.as_str()), Some(state));
+        }
+        assert!(FindingState::Open.is_open());
+        assert!(!FindingState::Stopped.is_open());
+    }
+
+    #[test]
+    fn a_finding_is_identified_by_the_item_the_source_and_the_content() {
+        let item = a_finding(Source::Rule(12), "a");
+        assert_eq!(
+            FindingId::of(&item).as_str(),
+            "claude-code/user/skill/demo|rule/0012|aaaaaaaa"
+        );
+        // The same Rule on content that changed is a different Finding.
+        assert_ne!(
+            FindingId::of(&item),
+            FindingId::of(&a_finding(Source::Rule(12), "b"))
+        );
+        // One score Finding per Item, whatever the Score is.
+        assert_eq!(
+            FindingId::of(&a_finding(Source::Score(4), "a")),
+            FindingId::of(&a_finding(Source::Score(7), "a"))
+        );
+    }
+
+    fn a_finding(source: Source, hash: &str) -> Finding {
+        Finding {
+            item_id: ItemId::new(
+                "claude-code",
+                &crate::item::Scope::User,
+                Kind::Skill,
+                "demo",
+            ),
+            source,
+            content_hash: hash.repeat(8),
+            category: Category::Threat,
+            severity: Severity::Critical,
+            tier: Tier::Rules,
+            status: RuleStatus::Stable,
+            title: "a planted skill".to_string(),
+            plain: "This skill would run a script from the internet.".to_string(),
+            sensitive: false,
+            file: String::new(),
+            matches: Vec::new(),
+            heuristics: Vec::new(),
+        }
+    }
+
+    /// The manifest and the Trust table as the Event Log yields them, written
+    /// to a real chain and read back.
+    fn decided_by(events: Vec<crate::eventlog::Event>) -> (QuarantineManifest, TrustTable) {
+        use crate::eventlog::{EventLog, EventLogWriter};
+        use crate::keychain::MemoryKeySource;
+
+        let directory = tempfile::TempDir::new().expect("a temporary directory");
+        let log = EventLog::at(directory.path().join("events.jsonl"));
+        let keys = MemoryKeySource::empty();
+        let (mut writer, _) = EventLogWriter::open(&log, &keys).expect("an open log");
+        for event in &events {
+            writer.append(event).expect("an appended event");
+        }
+        let view = log.read(&keys).expect("a readable log");
+        (view.quarantine_manifest(), view.trust_table())
+    }
+
+    #[test]
+    fn a_finding_stands_where_the_event_log_and_the_current_scan_put_it() {
+        use crate::eventlog::{Action, Actor, Event, Primitive, ReceiptStep};
+
+        let open = a_finding(Source::Rule(12), "a");
+        let stopped = a_finding(Source::Rule(13), "b");
+        let trusted = a_finding(Source::Rule(14), "c");
+        let vanished = a_finding(Source::Rule(15), "d");
+
+        let mut quarantine = Event::new(Action::Quarantine, Actor::Auto)
+            .about(&stopped.item_id, Kind::Skill, &stopped.content_hash)
+            .because_of("f", Tier::Rules, 13);
+        quarantine.receipt_id = "q-00000000000000000000000000000001".to_string();
+        quarantine.steps = vec![ReceiptStep::new(Primitive::MoveOut, "/nowhere/demo")];
+        let trust = Event::new(Action::Trust, Actor::User).about(
+            &trusted.item_id,
+            Kind::Skill,
+            &trusted.content_hash,
+        );
+        let (quarantined, trust_table) = decided_by(vec![quarantine, trust]);
+
+        let kinds = BTreeMap::from([(open.item_id.clone(), Kind::Skill)]);
+        let placed = standing(
+            std::slice::from_ref(&vanished),
+            &[open.clone(), stopped.clone(), trusted.clone()],
+            &kinds,
+            Decided {
+                quarantined: &quarantined,
+                trusted: &trust_table,
+            },
+        );
+
+        let state = |finding: &Finding| {
+            placed
+                .iter()
+                .find(|one| one.id == FindingId::of(finding))
+                .map(|one| one.state)
+        };
+        assert_eq!(state(&open), Some(FindingState::Open));
+        assert_eq!(state(&stopped), Some(FindingState::Stopped));
+        assert_eq!(state(&trusted), Some(FindingState::Trusted));
+        assert_eq!(state(&vanished), Some(FindingState::Gone));
+        assert_eq!(placed.len(), 4);
+        let stopped_by = placed
+            .iter()
+            .find(|one| one.state == FindingState::Stopped)
+            .expect("the stopped Finding");
+        assert_eq!(stopped_by.receipt_id, "q-00000000000000000000000000000001");
     }
 }

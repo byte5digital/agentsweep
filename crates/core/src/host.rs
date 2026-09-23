@@ -139,6 +139,51 @@ impl Host {
         fs::read_link(path)
     }
 
+    /// Where a symbolic link points, absent when the path is not one.
+    ///
+    /// A relative target is resolved against the directory the link sits in
+    /// and `.` and `..` are folded out lexically. One level only: a Surface
+    /// Adapter follows a link at a skill or rule root and never inside a tree
+    /// (spec section 3.3), and canonicalising a chain would make an Item's
+    /// content depend on what the last link in it points at right now.
+    pub fn link_target(&self, path: &Path) -> Option<PathBuf> {
+        if !self
+            .symlink_metadata(path)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return None;
+        }
+        let target = self.read_link(path).ok()?;
+        if target.is_absolute() {
+            return Some(normalise(&target));
+        }
+        Some(normalise(&path.parent()?.join(target)))
+    }
+
+    /// The sha256 of a file, read in chunks so that a file too large to scan
+    /// can still be hashed into a tree's manifest without being held whole.
+    pub fn sha256_of(&self, path: &Path) -> io::Result<String> {
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write as _;
+        use std::io::Read as _;
+
+        let mut file = fs::File::open(path)?;
+        let mut digest = Sha256::new();
+        let mut buffer = vec![0u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            digest.update(&buffer[..read]);
+        }
+        let mut hex = String::new();
+        for byte in digest.finalize() {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        Ok(hex)
+    }
+
     /// Reads at most `limit` bytes of a file, which is all it takes to say what
     /// kind of file it is.
     pub fn read_prefix(&self, path: &Path, limit: usize) -> io::Result<Vec<u8>> {
@@ -377,6 +422,31 @@ mod tests {
             ))
         );
         assert!(!host.in_temporary_directory(Path::new("/opt/homebrew/bin/node")));
+    }
+
+    /// A skill folder is linked into the shared directory both Agents read,
+    /// and the link is followed one level so the Item can keep the link's own
+    /// location as its identity.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_resolves_one_level_against_the_directory_it_sits_in() {
+        let root = std::env::temp_dir().join(format!(
+            "agentsweep-host-link-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let shared = root.join(".agents/skills/notes");
+        fs::create_dir_all(&shared).expect("a shared skill directory");
+        fs::create_dir_all(root.join(".claude/skills")).expect("a skills directory");
+        let link = root.join(".claude/skills/notes");
+        std::os::unix::fs::symlink("../../.agents/skills/notes", &link).expect("a link");
+
+        let host = Host::new(root.clone(), Vec::new());
+        assert_eq!(host.link_target(&link), Some(shared));
+        assert_eq!(host.link_target(&root.join(".agents/skills/notes")), None);
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

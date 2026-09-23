@@ -85,6 +85,241 @@ fn string_field(entry: &Value, field: &str) -> String {
         .to_string()
 }
 
+/// The first of several fields that is set, empty when none of them is. Both
+/// Agents spell some of their frontmatter keys more than one way.
+fn first_string(fields: &Map<String, Value>, names: &[&str]) -> String {
+    for name in names {
+        if let Some(value) = fields.get(*name) {
+            let written = value_string(value);
+            if !written.is_empty() {
+                return written;
+            }
+        }
+    }
+    String::new()
+}
+
+/// The strings of a field that may be written as a list or as one comma
+/// separated line, which is how `allowed-tools` appears in the wild.
+fn string_list(fields: &Map<String, Value>, names: &[&str]) -> Vec<String> {
+    for name in names {
+        match fields.get(*name) {
+            Some(Value::Array(items)) => {
+                return items
+                    .iter()
+                    .map(value_string)
+                    .filter(|item| !item.is_empty())
+                    .collect();
+            }
+            Some(Value::String(line)) if !line.trim().is_empty() => {
+                return split_tools(line);
+            }
+            _ => {}
+        }
+    }
+    Vec::new()
+}
+
+/// One `allowed-tools` line split into the tools it names. A tool carries its
+/// own commas inside brackets (`Bash(git add, git commit)`), so only the
+/// commas outside them separate.
+fn split_tools(line: &str) -> Vec<String> {
+    let mut tools = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
+    for character in line.chars() {
+        match character {
+            '(' | '[' => {
+                depth += 1;
+                current.push(character);
+            }
+            ')' | ']' => {
+                depth -= 1;
+                current.push(character);
+            }
+            ',' if depth <= 0 => {
+                tools.push(current.trim().to_string());
+                current = String::new();
+            }
+            other => current.push(other),
+        }
+    }
+    tools.push(current.trim().to_string());
+    tools.retain(|tool| !tool.is_empty());
+    tools
+}
+
+/// The reserved names a plugin or a marketplace is measured against, so that a
+/// near miss of one of them is a fact an adapter computed rather than a list a
+/// Rule carries (`rules/README.md`).
+pub const RESERVED_NAMES: [&str; 4] = [
+    "claude-code-marketplace",
+    "claude-plugins-official",
+    "anthropic-plugins",
+    "agent-skills",
+];
+
+/// The edit distance from a name to the nearest reserved name, what Rule 0017
+/// reads as `name_reserved_distance`. An empty name is as far away as the
+/// longest reserved name is long.
+pub fn name_reserved_distance(name: &str) -> i64 {
+    RESERVED_NAMES
+        .iter()
+        .map(|reserved| edit_distance(&name.to_ascii_lowercase(), reserved))
+        .min()
+        .unwrap_or_default()
+}
+
+/// The Levenshtein distance between two names.
+fn edit_distance(one: &str, other: &str) -> i64 {
+    let left: Vec<char> = one.chars().collect();
+    let right: Vec<char> = other.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0usize; right.len() + 1];
+    for (row, from) in left.iter().enumerate() {
+        current[0] = row + 1;
+        for (column, to) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(from != to);
+            current[column + 1] = substitution
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()] as i64
+}
+
+/// The YAML frontmatter of a Markdown file, empty when the file opens with
+/// something other than a `---` line.
+///
+/// Only the shape both Agents write is read: scalars, block scalars, inline
+/// lists and `-` lists, one level deep. It is deliberately not a YAML parser;
+/// a frontmatter this cannot read yields the keys it could read and the file's
+/// bytes still reach every Tier.
+pub fn frontmatter(content: &[u8]) -> Map<String, Value> {
+    let mut fields = Map::new();
+    let text = String::from_utf8_lossy(content);
+    let mut lines = text.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return fields;
+    }
+    let block: Vec<&str> = lines
+        .take_while(|line| {
+            let trimmed = line.trim_end();
+            trimmed != "---" && trimmed != "..."
+        })
+        .collect();
+
+    let mut index = 0;
+    while index < block.len() {
+        let line = block[index];
+        index += 1;
+        if line.starts_with([' ', '\t', '-']) || line.trim().is_empty() {
+            continue;
+        }
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim().to_string();
+        let rest = rest.trim();
+        let mut gathered = Vec::new();
+        while index < block.len() && block[index].starts_with([' ', '\t', '-']) {
+            gathered.push(block[index].trim());
+            index += 1;
+        }
+        let value = if rest.starts_with('[') {
+            Value::Array(
+                rest.trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .split(',')
+                    .map(|item| Value::String(unquoted(item.trim())))
+                    .filter(|item| !value_string(item).is_empty())
+                    .collect(),
+            )
+        } else if gathered.iter().any(|line| line.starts_with('-')) {
+            Value::Array(
+                gathered
+                    .iter()
+                    .filter_map(|line| line.strip_prefix('-'))
+                    .map(|item| Value::String(unquoted(item.trim())))
+                    .collect(),
+            )
+        } else if rest.is_empty() || rest == ">" || rest == "|" {
+            Value::String(unquoted(&gathered.join(" ")))
+        } else {
+            Value::String(unquoted(rest))
+        };
+        fields.insert(key, value);
+    }
+    fields
+}
+
+/// The name a frontmatter declares, falling back to the name the Surface gave
+/// the Item: a skill directory, a command file or a subagent file.
+fn declared_name(fields: &Map<String, Value>, fallback: &str) -> String {
+    let declared = first_string(fields, &["name"]);
+    if declared.is_empty() {
+        fallback.to_string()
+    } else {
+        declared
+    }
+}
+
+/// True when a body runs a command while it is being loaded: an inline
+/// `` !`cmd` `` span or a fenced block opened with `!`. Claude Code runs both
+/// before the body reaches the model, which is why Rule 0012 is about them.
+pub fn has_dynamic_context(content: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(content);
+    text.contains("!`") || text.contains("```!")
+}
+
+/// The owner a marketplace manifest declares, which is written either as a
+/// name or as a block with one.
+fn owner_of(manifest: &Value) -> String {
+    match manifest.get("owner") {
+        Some(Value::String(name)) => name.clone(),
+        Some(block) => {
+            let name = string_field(block, "name");
+            if name.is_empty() {
+                string_field(block, "email")
+            } else {
+                name
+            }
+        }
+        None => String::new(),
+    }
+}
+
+/// The host one marketplace entry's source points at. A repository named the
+/// way GitHub names one is on GitHub; anything else carries its own URL.
+fn source_host(source: &Value) -> String {
+    let url = string_field(source, "url");
+    if !url.is_empty() {
+        return url_host(&url);
+    }
+    let repo = string_field(source, "repo");
+    if repo.is_empty() {
+        return String::new();
+    }
+    let host = url_host(&repo);
+    if host.is_empty() {
+        "github.com".to_string()
+    } else {
+        host
+    }
+}
+
+/// A scalar with its quotes taken off.
+fn unquoted(value: &str) -> String {
+    let value = value.trim();
+    for quote in ['"', '\''] {
+        if value.len() >= 2 && value.starts_with(quote) && value.ends_with(quote) {
+            return value[1..value.len() - 1].to_string();
+        }
+    }
+    value.to_string()
+}
+
 /// The names of the globals, in the order the core defines them.
 pub const GLOBAL_NAMES: [&str; 10] = [
     "item",
@@ -169,7 +404,12 @@ pub struct ItemView {
 
 impl ItemView {
     /// Builds the view from an Item and the unit being scanned.
+    ///
+    /// The file facts are the unit's own, which for a tree is the file under
+    /// scan rather than the tree as a whole: Rule 0015 asks whether *this*
+    /// file of a Skill is a native executable.
     pub fn of(item: &Item, unit: &ScanUnit<'_>) -> ItemView {
+        let facts = item.facts_of(unit.file);
         ItemView {
             agent: item.agent.clone(),
             kind: item.kind.as_str().to_string(),
@@ -191,10 +431,10 @@ impl ItemView {
             baseline: item.baseline.as_str().to_string(),
             provenance_official: item.provenance.is_official(),
             link_target: item.link_target.clone(),
-            file_type: item.facts.file_type.as_str().to_string(),
-            has_rtl_script: item.facts.has_rtl_script,
-            whitespace_percent: item.facts.whitespace_percent,
-            max_blank_run: item.facts.max_blank_run,
+            file_type: facts.file_type.as_str().to_string(),
+            has_rtl_script: facts.has_rtl_script,
+            whitespace_percent: facts.whitespace_percent,
+            max_blank_run: facts.max_blank_run,
             file: unit.file.to_string(),
         }
     }
@@ -589,6 +829,23 @@ pub struct SkillView {
 }
 
 impl SkillView {
+    /// The view of one skill, read from the bytes of its `SKILL.md` or, for a
+    /// command file, of the file itself.
+    ///
+    /// The name is the one the frontmatter declares, and the directory or file
+    /// name when it declares none. Both Agents write the same frontmatter, so
+    /// this is shared rather than per adapter.
+    pub fn of(name: &str, content: &[u8]) -> SkillView {
+        let fields = frontmatter(content);
+        let allowed_tools = string_list(&fields, &["allowed-tools", "allowedTools", "tools"]);
+        SkillView {
+            name: declared_name(&fields, name),
+            allowed_tools_n: allowed_tools.len() as i64,
+            allowed_tools,
+            has_dynamic_context: has_dynamic_context(content),
+        }
+    }
+
     fn to_value(&self) -> Value {
         json!({
             "name": self.name,
@@ -615,6 +872,29 @@ pub struct PluginView {
 }
 
 impl PluginView {
+    /// The view of one plugin version: what its manifest declares and what it
+    /// ships in its `bin` directory, which the Surface Adapter reads off the
+    /// tree rather than out of the manifest.
+    pub fn of(name: &str, manifest: &Value, bin_names: Vec<String>) -> PluginView {
+        let declared = string_field(manifest, "name");
+        let name = if declared.is_empty() {
+            name.to_string()
+        } else {
+            declared
+        };
+        PluginView {
+            name_reserved_distance: name_reserved_distance(&name),
+            name,
+            bin_names_n: bin_names.len() as i64,
+            bin_names,
+            has_monitors: manifest.get("monitors").is_some()
+                || manifest
+                    .get("experimental")
+                    .and_then(|block| block.get("monitors"))
+                    .is_some(),
+        }
+    }
+
     fn to_value(&self) -> Value {
         json!({
             "name": self.name,
@@ -642,6 +922,34 @@ pub struct MarketplaceEntry {
 }
 
 impl MarketplaceEntry {
+    /// One listed plugin, read from the marketplace manifest.
+    ///
+    /// A source written as a string is a path inside the clone, which is what
+    /// `local` means here. A source written as an object names its own kind,
+    /// and it is kept as the manifest spells it: a kind this core has not seen
+    /// before is a fact a Rule can still read rather than one folded away.
+    pub fn of(entry: &Value) -> MarketplaceEntry {
+        let source = entry.get("source");
+        let (source_kind, source_host, pinned) = match source {
+            Some(Value::String(_)) => ("local".to_string(), String::new(), false),
+            Some(object) => (
+                string_field(object, "source"),
+                source_host(object),
+                ["ref", "sha", "sha256"]
+                    .iter()
+                    .any(|pin| !string_field(object, pin).is_empty()),
+            ),
+            None => (String::new(), String::new(), false),
+        };
+        MarketplaceEntry {
+            name: string_field(entry, "name"),
+            source_kind,
+            source_host,
+            pinned,
+            has_headers_helper: entry.get("headersHelper").is_some(),
+        }
+    }
+
     fn to_value(&self) -> Value {
         json!({
             "name": self.name,
@@ -669,6 +977,30 @@ pub struct MarketplaceView {
 }
 
 impl MarketplaceView {
+    /// The view of one marketplace clone, read from its manifest. The name is
+    /// the one the manifest declares, and the clone's directory name when it
+    /// declares none.
+    pub fn of(name: &str, manifest: &Value) -> MarketplaceView {
+        let declared = string_field(manifest, "name");
+        let name = if declared.is_empty() {
+            name.to_string()
+        } else {
+            declared
+        };
+        let entries: Vec<MarketplaceEntry> = manifest
+            .get("plugins")
+            .and_then(Value::as_array)
+            .map(|listed| listed.iter().map(MarketplaceEntry::of).collect())
+            .unwrap_or_default();
+        MarketplaceView {
+            name_reserved_distance: name_reserved_distance(&name),
+            name,
+            owner: owner_of(manifest),
+            entries_n: entries.len() as i64,
+            entries,
+        }
+    }
+
     fn to_value(&self) -> Value {
         let entries = self
             .entries
@@ -695,6 +1027,17 @@ pub struct SubagentView {
 }
 
 impl SubagentView {
+    /// The view of one subagent definition, read from its frontmatter. A
+    /// definition without a name is one the Agent skips, and the file name
+    /// stands in so the Item still says what it is about.
+    pub fn of(name: &str, content: &[u8]) -> SubagentView {
+        let fields = frontmatter(content);
+        SubagentView {
+            name: declared_name(&fields, name),
+            permission_mode: first_string(&fields, &["permission-mode", "permissionMode"]),
+        }
+    }
+
     fn to_value(&self) -> Value {
         json!({
             "name": self.name,
@@ -1242,5 +1585,127 @@ mod tests {
 
         let block = SettingsView::of("statusLine", &json!({"b": 1, "a": "x"}));
         assert_eq!(block.value, "{\"a\":\"x\",\"b\":1}");
+    }
+
+    /// A frontmatter is read for the keys both Agents write, in the spellings
+    /// they are written in: a list, an inline list and one comma separated
+    /// line all name the same tools.
+    #[test]
+    fn a_skill_reads_its_name_and_its_tools_out_of_its_frontmatter() {
+        let written = b"---\nname: deploy\ndescription: |\n  Ships it.\n\
+                        allowed-tools: Bash(git add, git commit), Read\n---\n\nRun it.\n";
+        let view = SkillView::of("deploy-folder", written);
+        assert_eq!(view.name, "deploy");
+        assert_eq!(view.allowed_tools, ["Bash(git add, git commit)", "Read"]);
+        assert_eq!(view.allowed_tools_n, 2);
+        assert!(!view.has_dynamic_context);
+
+        let listed = SkillView::of("x", b"---\nallowed-tools:\n  - Bash\n  - Edit\n---\n");
+        assert_eq!(
+            listed.name, "x",
+            "the directory names a skill that does not"
+        );
+        assert_eq!(listed.allowed_tools, ["Bash", "Edit"]);
+
+        let inline = SkillView::of("x", b"---\nallowed-tools: [Bash, Edit]\n---\n");
+        assert_eq!(inline.allowed_tools, ["Bash", "Edit"]);
+    }
+
+    /// Rule 0012 is about the spans a skill runs while it loads, so the fact
+    /// is computed here and never in a Rule.
+    #[test]
+    fn a_skill_that_runs_a_command_while_it_loads_says_so() {
+        assert!(
+            SkillView::of("x", b"---\nname: x\n---\n\nBranch: !`git branch`\n").has_dynamic_context
+        );
+        assert!(SkillView::of("x", b"```!\ndate\n```\n").has_dynamic_context);
+        assert!(!SkillView::of("x", b"Write `git status` yourself.\n").has_dynamic_context);
+    }
+
+    /// Rules 0016 and 0017 read the plugin view: what it ships in `bin`, that
+    /// it declares monitors, and how close its name is to a reserved one.
+    #[test]
+    fn a_plugin_carries_its_bin_names_its_monitors_and_its_distance() {
+        let manifest = json!({
+            "name": "anthropic-plugin",
+            "experimental": {"monitors": "./monitors/monitors.json"},
+        });
+        let view = PluginView::of("folder", &manifest, vec!["git".to_string()]);
+
+        assert_eq!(view.name, "anthropic-plugin");
+        assert_eq!(view.bin_names, ["git"]);
+        assert_eq!(view.bin_names_n, 1);
+        assert!(view.has_monitors);
+        assert_eq!(
+            view.name_reserved_distance, 1,
+            "one letter from anthropic-plugins"
+        );
+
+        let plain = PluginView::of("notes", &json!({}), Vec::new());
+        assert_eq!(plain.name, "notes");
+        assert_eq!(plain.bin_names_n, 0);
+        assert!(!plain.has_monitors);
+    }
+
+    /// A marketplace entry names where the plugin comes from and whether it is
+    /// pinned, which is what Heuristics 0586 and 0587 are about.
+    #[test]
+    fn a_marketplace_lists_its_entries_with_their_source_and_pinning() {
+        let manifest = json!({
+            "name": "demo-marketplace",
+            "owner": {"name": "Demo", "email": "demo@example.invalid"},
+            "plugins": [
+                {"name": "inside", "source": "./plugins/inside"},
+                {"name": "pinned", "source": {"source": "github", "repo": "demo/plugin",
+                                              "ref": "9f1c"}},
+                {"name": "fetched", "source": {"source": "url",
+                                               "url": "https://plugins.example.invalid/x.zip"},
+                 "headersHelper": "./bin/headers"},
+                {"name": "run", "source": {"source": "command", "command": "sh ./install.sh"}},
+            ],
+        });
+
+        let view = MarketplaceView::of("clone-folder", &manifest);
+
+        assert_eq!(view.name, "demo-marketplace");
+        assert_eq!(view.owner, "Demo");
+        assert_eq!(view.entries_n, 4);
+        assert_eq!(view.entries[0].source_kind, "local");
+        assert!(!view.entries[0].pinned);
+        assert_eq!(view.entries[1].source_kind, "github");
+        assert_eq!(view.entries[1].source_host, "github.com");
+        assert!(view.entries[1].pinned);
+        assert_eq!(view.entries[2].source_host, "plugins.example.invalid");
+        assert!(view.entries[2].has_headers_helper);
+        assert_eq!(view.entries[3].source_kind, "command");
+        assert_eq!(view.name_reserved_distance, 8);
+    }
+
+    #[test]
+    fn a_subagent_carries_its_name_and_its_permission_mode() {
+        let view = SubagentView::of(
+            "reviewer.md",
+            b"---\nname: reviewer\npermission-mode: bypassPermissions\n---\n\nReview it.\n",
+        );
+        assert_eq!(view.name, "reviewer");
+        assert_eq!(view.permission_mode, "bypassPermissions");
+
+        let plain = SubagentView::of("helper.md", b"Just prose.\n");
+        assert_eq!(plain.name, "helper.md");
+        assert_eq!(plain.permission_mode, "");
+    }
+
+    /// Rule 0017 measures a name against the reserved ones, so the distance is
+    /// a fact the adapter computed and never a list a Rule carries.
+    #[test]
+    fn the_reserved_distance_is_zero_for_a_reserved_name_and_grows_with_the_edit() {
+        assert_eq!(name_reserved_distance("claude-plugins-official"), 0);
+        assert_eq!(name_reserved_distance("claude-plugins-officia1"), 1);
+        assert_eq!(
+            name_reserved_distance("Agent-Skills"),
+            0,
+            "case does not matter"
+        );
+        assert!(name_reserved_distance("notes") > 2);
     }
 }

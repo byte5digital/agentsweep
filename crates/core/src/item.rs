@@ -5,14 +5,17 @@
 //! the struct-global schema in `rules/README.md`), the [`ItemId`] and the
 //! derived file facts a Surface Adapter attaches.
 //!
-//! Only the file shape is populated in this slice; the tree and entry shapes
-//! arrive with milestone 1 of the build plan, which is why [`Item::scan_units`]
-//! already returns a list rather than one unit.
+//! All three shapes are here: a file, an entry and a [`Tree`], which carries
+//! the manifest of every regular file below one directory and the bytes of the
+//! files a Rule is run over. That is why [`Item::scan_units`] returns a list
+//! rather than one unit.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
+
+use crate::host::Host;
 
 /// The Surface kinds. A closed core enum by design (ADR 0002): Rules, Severity
 /// wording and the Quarantine primitive table all key on it, and `Generic`
@@ -439,11 +442,15 @@ pub struct Item {
     /// The normalised view of the Item's kind, as the Surface Adapter parsed
     /// it. Kinds whose Rules are byte Rules carry none.
     pub view: crate::views::ParsedView,
-    /// The content of a file Item. Tree and entry content arrive with
-    /// milestone 1 of the build plan.
+    /// The bytes of a file Item, the canonical serialised form of an entry
+    /// Item, and the rendered manifest of a tree Item.
     pub content: Vec<u8>,
-    /// The sha256 of the content, lower-case hex.
+    /// The sha256 of the content, lower-case hex. For a tree that is the hash
+    /// of the sorted manifest, so Drift can name the file that changed (spec
+    /// section 3.3).
     pub content_hash: String,
+    /// The files below a tree Item, empty for the other two shapes.
+    pub tree: Tree,
 }
 
 impl Item {
@@ -479,6 +486,7 @@ impl Item {
             view: crate::views::ParsedView::None,
             content_hash: sha256_hex(&content),
             content,
+            tree: Tree::default(),
         }
     }
 
@@ -507,21 +515,384 @@ impl Item {
         item
     }
 
+    /// Builds a tree Item from the files below one directory.
+    ///
+    /// The identity is the directory on the Surface, the content is the
+    /// rendered manifest and the content hash is the hash of that manifest, so
+    /// a changed file inside the tree moves the Item's hash and the manifest
+    /// still says which file it was (spec section 3.3).
+    #[allow(clippy::too_many_arguments)]
+    pub fn tree(
+        agent: &str,
+        scope: Scope,
+        kind: Kind,
+        locator: &str,
+        path: PathBuf,
+        provenance: Provenance,
+        activation: Activation,
+        tree: Tree,
+    ) -> Item {
+        let manifest = tree.manifest();
+        let mut item = Item::file(
+            agent, scope, kind, locator, path, provenance, activation, manifest,
+        );
+        item.shape = Shape::Tree;
+        item.size = tree.total_bytes;
+        // The facts of a tree belong to its files, one by one, and are read
+        // back per scanned unit; the manifest is not a file an Agent loads.
+        item.facts = FileFacts::default();
+        item.tree = tree;
+        item
+    }
+
     /// Attaches the normalised view the Surface Adapter parsed for this Item.
     pub fn with_view(mut self, view: crate::views::ParsedView) -> Item {
         self.view = view;
         self
     }
 
-    /// The units a Rule is run over. One for a file Item; one per file for a
-    /// tree and the canonical serialised form for an entry, once those shapes
-    /// land.
-    pub fn scan_units(&self) -> Vec<ScanUnit<'_>> {
-        vec![ScanUnit {
-            file: "",
-            bytes: &self.content,
-        }]
+    /// Records that the Item was reached through a symbolic link: the identity
+    /// stays the link's location on the Surface and the content came from the
+    /// target (spec section 3.3).
+    pub fn through_link(mut self, target: &Path) -> Item {
+        self.is_symlink = true;
+        self.link_target = target.display().to_string();
+        self
     }
+
+    /// The units a Rule is run over: the whole file, the canonical serialised
+    /// entry, or one unit per scanned file of a tree.
+    ///
+    /// A tree whose files are all vendored, over the size cap or past the
+    /// caps yields one empty unit rather than none, so that every Item has a
+    /// unit the common `item` global can be built for.
+    pub fn scan_units(&self) -> Vec<ScanUnit<'_>> {
+        if self.shape != Shape::Tree {
+            return vec![ScanUnit {
+                file: "",
+                bytes: &self.content,
+            }];
+        }
+        let units: Vec<ScanUnit<'_>> = self
+            .tree
+            .files
+            .iter()
+            .filter(|file| file.scanned)
+            .map(|file| ScanUnit {
+                file: &file.path,
+                bytes: &file.content,
+            })
+            .collect();
+        if units.is_empty() {
+            return vec![ScanUnit {
+                file: "",
+                bytes: &[],
+            }];
+        }
+        units
+    }
+
+    /// The facts of one unit of this Item: the file's own facts inside a tree,
+    /// the Item's facts otherwise. Rule 0015 reads `item.file_type` per file
+    /// of a Skill tree, which is why this is per unit rather than per Item.
+    pub fn facts_of(&self, file: &str) -> FileFacts {
+        if file.is_empty() {
+            return self.facts;
+        }
+        self.tree
+            .file(file)
+            .map(|found| found.facts)
+            .unwrap_or(self.facts)
+    }
+}
+
+/// The caps a tree is read under (spec section 3.3).
+///
+/// A tree over the count or the byte cap is a Problem, "too large to check
+/// fully", and never counts as clear. A single file over the per-file cap is
+/// hashed into the manifest and not scanned: the scanner never truncates a
+/// file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TreeCaps {
+    /// How many files one tree may hold before it is too large to check.
+    pub max_files: usize,
+    /// How many bytes one tree may hold before it is too large to check.
+    pub max_bytes: u64,
+    /// How large one file may be and still be scanned rather than hashed.
+    pub max_scanned_file_bytes: u64,
+}
+
+impl Default for TreeCaps {
+    fn default() -> TreeCaps {
+        TreeCaps {
+            max_files: 10_000,
+            max_bytes: 500_000_000,
+            max_scanned_file_bytes: 16 * 1024 * 1024,
+        }
+    }
+}
+
+/// The directories whose contents are listed in the manifest and never scanned:
+/// a dependency tree is not what an attacker plants an instruction in, and
+/// scanning one would cost more than everything else together.
+pub const VENDORED_DIRECTORIES: [&str; 3] = ["node_modules", ".venv", "vendor"];
+
+/// The directory whose contents are not part of a tree at all. A clone's git
+/// metadata is the workspace adapter's Repository Metadata, and hashing it here
+/// would make every fetch look like Drift.
+const GIT_DIRECTORY: &str = ".git";
+
+/// One entry of a tree's manifest: a regular file, or a symbolic link that was
+/// not followed.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TreeFile {
+    /// The path relative to the tree root, with forward slashes.
+    pub path: String,
+    /// The size in bytes, the length of the target for a link.
+    pub size: u64,
+    /// The permission bits, as the file system holds them.
+    pub mode: u32,
+    /// The sha256 of the content, of the target for a link.
+    pub sha256: String,
+    /// True when the bytes are handed to the Rules.
+    pub scanned: bool,
+    /// True when the entry is a symbolic link, which is never followed inside
+    /// a tree (spec section 3.3).
+    pub is_symlink: bool,
+    /// The target of that link, empty otherwise.
+    pub link_target: String,
+    /// The facts derived from the file's bytes.
+    pub facts: FileFacts,
+    /// The bytes a Rule is run over, empty when the file is only hashed.
+    pub content: Vec<u8>,
+}
+
+/// The files below one directory: the manifest of every regular file plus the
+/// contents of the ones that are scanned.
+#[derive(Clone, Debug, Default)]
+pub struct Tree {
+    /// Every file of the tree, sorted by path.
+    pub files: Vec<TreeFile>,
+    /// The sum of the sizes in the manifest.
+    pub total_bytes: u64,
+    /// True when the tree is over a cap and was not read to the end, which is
+    /// the Problem "too large to check fully".
+    pub over_caps: bool,
+}
+
+impl Tree {
+    /// Reads one directory into a tree under the given caps.
+    ///
+    /// Git internals are left out, vendored dependency directories are listed
+    /// and not scanned, a file over the per-file cap is hashed and not
+    /// scanned, and a symbolic link inside the tree is recorded and never
+    /// followed. The walk is in sorted order and stops at the first cap it
+    /// crosses, so two reads of one tree yield the same manifest.
+    pub fn of(host: &Host, root: &Path, caps: TreeCaps) -> Tree {
+        let mut tree = Tree::default();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(directory) = stack.pop() {
+            let Ok(entries) = host.read_dir(&directory) else {
+                continue;
+            };
+            // Sorted order comes off the Host; the stack reverses it, so the
+            // entries go on in reverse to come off in order.
+            let mut directories = Vec::new();
+            for path in entries.into_iter().rev() {
+                let Ok(metadata) = host.symlink_metadata(&path) else {
+                    continue;
+                };
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                if metadata.is_dir() {
+                    if name != GIT_DIRECTORY {
+                        directories.push(path);
+                    }
+                    continue;
+                }
+                let Some(relative) = relative_path(root, &path) else {
+                    continue;
+                };
+                let file = if metadata.file_type().is_symlink() {
+                    link_entry(host, &path, relative, &metadata)
+                } else {
+                    file_entry(host, &path, relative, &metadata, caps)
+                };
+                tree.total_bytes += file.size;
+                tree.files.push(file);
+                if tree.files.len() > caps.max_files || tree.total_bytes > caps.max_bytes {
+                    tree.over_caps = true;
+                    tree.files.sort_by(|one, other| one.path.cmp(&other.path));
+                    return tree;
+                }
+            }
+            stack.extend(directories);
+        }
+        tree.files.sort_by(|one, other| one.path.cmp(&other.path));
+        tree
+    }
+
+    /// The file at one relative path, absent when the tree holds none.
+    pub fn file(&self, path: &str) -> Option<&TreeFile> {
+        self.files
+            .binary_search_by(|found| found.path.as_str().cmp(path))
+            .ok()
+            .map(|at| &self.files[at])
+    }
+
+    /// The names of the files directly inside one directory of the tree, in
+    /// sorted order. What a plugin ships in `bin/` is read from here.
+    pub fn names_in(&self, directory: &str) -> Vec<String> {
+        let prefix = format!("{directory}/");
+        self.files
+            .iter()
+            .filter_map(|file| file.path.strip_prefix(&prefix))
+            .filter(|rest| !rest.contains('/'))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// True when the tree holds a file at one relative path.
+    pub fn holds(&self, path: &str) -> bool {
+        self.file(path).is_some()
+    }
+
+    /// The bytes of one file of the tree, empty when it is not there or was
+    /// only hashed.
+    pub fn content_of(&self, path: &str) -> &[u8] {
+        self.file(path)
+            .map(|file| file.content.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// The manifest, one line per file: the relative path, the size, the mode
+    /// and the sha256. It is what a tree Item carries as its content and what
+    /// its content hash is taken over.
+    pub fn manifest(&self) -> Vec<u8> {
+        use fmt::Write as _;
+        let mut out = String::new();
+        for file in &self.files {
+            let _ = write!(
+                out,
+                "{} {} {:o} {}",
+                file.path, file.size, file.mode, file.sha256
+            );
+            if file.is_symlink {
+                let _ = write!(out, " -> {}", file.link_target);
+            }
+            out.push('\n');
+        }
+        if self.over_caps {
+            out.push_str("(too large to check fully)\n");
+        }
+        out.into_bytes()
+    }
+}
+
+/// One regular file of a tree.
+fn file_entry(
+    host: &Host,
+    path: &Path,
+    relative: String,
+    metadata: &std::fs::Metadata,
+    caps: TreeCaps,
+) -> TreeFile {
+    let size = metadata.len();
+    let vendored = VENDORED_DIRECTORIES
+        .iter()
+        .any(|directory| is_under(&relative, directory));
+    let scanned = !vendored && size <= caps.max_scanned_file_bytes;
+    if scanned && let Ok(content) = host.read(path) {
+        return TreeFile {
+            path: relative,
+            size,
+            mode: mode_of(metadata),
+            sha256: sha256_hex(&content),
+            scanned: true,
+            facts: FileFacts::of(&content),
+            content,
+            ..TreeFile::default()
+        };
+    }
+    // Hashed and not scanned. The first bytes still say what kind of file it
+    // is, which is what Rule 0015 reads for a native executable in a Skill.
+    let file_type = host
+        .read_prefix(path, FILE_TYPE_PREFIX)
+        .map(|prefix| FileFacts::of(&prefix).file_type)
+        .unwrap_or(FileType::Unknown);
+    TreeFile {
+        path: relative,
+        size,
+        mode: mode_of(metadata),
+        sha256: host.sha256_of(path).unwrap_or_default(),
+        scanned: false,
+        facts: FileFacts {
+            file_type,
+            ..FileFacts::default()
+        },
+        ..TreeFile::default()
+    }
+}
+
+/// One symbolic link inside a tree, recorded and never followed.
+fn link_entry(
+    host: &Host,
+    path: &Path,
+    relative: String,
+    metadata: &std::fs::Metadata,
+) -> TreeFile {
+    let target = host
+        .read_link(path)
+        .map(|target| target.display().to_string())
+        .unwrap_or_default();
+    TreeFile {
+        path: relative,
+        size: target.len() as u64,
+        mode: mode_of(metadata),
+        sha256: sha256_hex(target.as_bytes()),
+        scanned: false,
+        is_symlink: true,
+        link_target: target,
+        ..TreeFile::default()
+    }
+}
+
+/// How many bytes of a file that is not scanned are read to say what kind of
+/// file it is. A magic number sits at the front or nowhere.
+const FILE_TYPE_PREFIX: usize = 4096;
+
+#[cfg(unix)]
+fn mode_of(metadata: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o7777
+}
+
+#[cfg(not(unix))]
+fn mode_of(metadata: &std::fs::Metadata) -> u32 {
+    u32::from(metadata.permissions().readonly())
+}
+
+/// The path of one file inside a tree, with forward slashes, absent when it is
+/// not below the root.
+fn relative_path(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let mut out = String::new();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return None;
+        };
+        if !out.is_empty() {
+            out.push('/');
+        }
+        out.push_str(&name.to_string_lossy());
+    }
+    Some(out)
+}
+
+/// True when a relative path has one directory among its parents.
+fn is_under(relative: &str, directory: &str) -> bool {
+    let mut components: Vec<&str> = relative.split('/').collect();
+    components.pop();
+    components.contains(&directory)
 }
 
 /// The facts a Surface Adapter derives from an Item's bytes. Rules never
@@ -786,6 +1157,172 @@ mod tests {
             item.id.as_str(),
             "claude-code/user/mcp-server/~/.claude.json#notes"
         );
+    }
+
+    /// A directory of this test's own. Nothing here ever touches a real home.
+    struct Directory {
+        root: PathBuf,
+    }
+
+    impl Directory {
+        fn new(name: &str) -> Directory {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "agentsweep-tree-{name}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("a directory to read");
+            Directory { root }
+        }
+
+        fn write(&self, relative: &str, content: &[u8]) -> PathBuf {
+            let path = self.root.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("a directory for a file");
+            }
+            std::fs::write(&path, content).expect("a file");
+            path
+        }
+    }
+
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// Spec section 3.3: the manifest names every regular file, git internals
+    /// are not part of a tree at all, and a vendored dependency directory is
+    /// listed without being handed to the Rules.
+    #[test]
+    fn a_tree_lists_every_file_leaves_git_out_and_does_not_scan_what_is_vendored() {
+        let directory = Directory::new("manifest");
+        directory.write("SKILL.md", b"---\nname: demo\n---\n\nRun it.\n");
+        directory.write("scripts/build.sh", b"#!/bin/sh\necho hello\n");
+        directory.write("node_modules/left-pad/index.js", b"module.exports = 1;\n");
+        directory.write(".git/config", b"[core]\n");
+
+        let tree = Tree::of(&Host::default(), &directory.root, TreeCaps::default());
+
+        let paths: Vec<&str> = tree.files.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "SKILL.md",
+                "node_modules/left-pad/index.js",
+                "scripts/build.sh"
+            ]
+        );
+        assert!(tree.file("SKILL.md").expect("the skill file").scanned);
+        assert!(
+            !tree
+                .file("node_modules/left-pad/index.js")
+                .expect("the vendored file")
+                .scanned,
+            "a dependency tree is listed and not scanned"
+        );
+        assert!(!tree.over_caps);
+        let scanned: Vec<&str> = tree
+            .files
+            .iter()
+            .filter(|file| file.scanned)
+            .map(|file| file.path.as_str())
+            .collect();
+        assert_eq!(scanned, ["SKILL.md", "scripts/build.sh"]);
+        let manifest = String::from_utf8(tree.manifest()).expect("utf-8");
+        assert!(manifest.contains("scripts/build.sh 21 644 "), "{manifest}");
+        assert!(!manifest.contains(".git"), "{manifest}");
+    }
+
+    /// Rule 0015 asks whether one file of a Skill is a native executable, so
+    /// the facts are the scanned file's own and not the tree's.
+    #[test]
+    fn a_native_executable_in_a_tree_is_named_in_the_manifest_and_typed_per_file() {
+        let directory = Directory::new("executable");
+        directory.write("SKILL.md", b"---\nname: demo\n---\n");
+        directory.write("bin/helper", &[0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00]);
+
+        let item = Item::tree(
+            "claude-code",
+            Scope::User,
+            Kind::Skill,
+            "~/.claude/skills/demo",
+            directory.root.clone(),
+            Provenance::Manual,
+            Activation::Active,
+            Tree::of(&Host::default(), &directory.root, TreeCaps::default()),
+        );
+
+        assert_eq!(item.shape, Shape::Tree);
+        assert!(
+            String::from_utf8_lossy(&item.content).contains("bin/helper"),
+            "the manifest names the file"
+        );
+        assert_eq!(item.facts_of("bin/helper").file_type, FileType::Executable);
+        assert_eq!(item.facts_of("SKILL.md").file_type, FileType::Text);
+        assert_eq!(item.tree.names_in("bin"), ["helper"]);
+        let units: Vec<&str> = item.scan_units().iter().map(|unit| unit.file).collect();
+        assert_eq!(units, ["SKILL.md", "bin/helper"]);
+    }
+
+    /// Spec section 3.3: a file over the per-file cap is hashed into the
+    /// manifest and never scanned, because the scanner never truncates a file.
+    #[test]
+    fn a_file_over_the_size_cap_is_hashed_and_not_scanned() {
+        let directory = Directory::new("large");
+        directory.write("SKILL.md", b"---\nname: demo\n---\n");
+        directory.write("data.bin", &[b'x'; 64]);
+        let caps = TreeCaps {
+            max_scanned_file_bytes: 32,
+            ..TreeCaps::default()
+        };
+
+        let tree = Tree::of(&Host::default(), &directory.root, caps);
+
+        let large = tree.file("data.bin").expect("the large file");
+        assert!(!large.scanned);
+        assert!(large.content.is_empty());
+        assert_eq!(large.size, 64);
+        assert_eq!(large.sha256, sha256_hex(&[b'x'; 64]));
+    }
+
+    /// A tree over a cap is the Problem "too large to check fully": what was
+    /// read is still in the manifest and the manifest says it is not all.
+    #[test]
+    fn a_tree_over_the_count_cap_says_it_was_not_read_to_the_end() {
+        let directory = Directory::new("caps");
+        for index in 0..6 {
+            directory.write(&format!("file-{index}.md"), b"x\n");
+        }
+        let caps = TreeCaps {
+            max_files: 3,
+            ..TreeCaps::default()
+        };
+
+        let tree = Tree::of(&Host::default(), &directory.root, caps);
+
+        assert!(tree.over_caps);
+        assert!(tree.files.len() <= 4);
+        assert!(
+            String::from_utf8_lossy(&tree.manifest()).contains("(too large to check fully)"),
+            "the manifest says the tree was not read to the end"
+        );
+    }
+
+    #[test]
+    fn a_tree_over_the_byte_cap_says_the_same() {
+        let directory = Directory::new("bytes");
+        directory.write("one.md", &[b'a'; 40]);
+        directory.write("two.md", &[b'b'; 40]);
+        let caps = TreeCaps {
+            max_bytes: 50,
+            ..TreeCaps::default()
+        };
+
+        assert!(Tree::of(&Host::default(), &directory.root, caps).over_caps);
     }
 
     #[test]

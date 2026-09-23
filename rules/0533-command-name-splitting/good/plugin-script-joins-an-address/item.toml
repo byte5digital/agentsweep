@@ -1,0 +1,22 @@
+# Near miss: a web address joined to a variable is two pieces, not a hidden command name.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = "plugins/cache/community-tools/link-checker/0.4.1"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "link-checker"
+name_reserved_distance = 13
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

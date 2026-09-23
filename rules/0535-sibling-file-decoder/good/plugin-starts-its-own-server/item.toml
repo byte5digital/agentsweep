@@ -1,0 +1,22 @@
+# Near miss: starting the program the plugin ships is how a plugin server starts.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = "plugins/cache/community-tools/glossary-server/1.1.0"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "glossary-server"
+name_reserved_distance = 14
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

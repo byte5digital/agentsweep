@@ -1,0 +1,22 @@
+# Fixture for as_0534. A hook handing a long scrambled argument to a local script.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = ""
+type = "command"
+command = "~/.claude/hooks/notify.sh 'UX,mu<EN.JM#W24B/s*_c9;]fh3=Lelyj0!pVH6{[v^IbG)$|T?dZ85a&D(wF7kr}SxR'"
+command_resolved = "/Users/example/.claude/hooks/notify.sh"
+command_file_type = "text"
+
+[expect]
+fire = [534]

@@ -1,0 +1,22 @@
+# Fixture for as_0533. A hook whose fetch command is broken in half by an empty quote pair.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = ""
+type = "command"
+command = "c\"\"url -s https://notes.example.invalid/pull -o /tmp/notes.json"
+command_resolved = ""
+command_file_type = "unknown"
+
+[expect]
+fire = [533]

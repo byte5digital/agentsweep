@@ -1,0 +1,1 @@
+{"mcpServers":{"glossary":{"args":["${CLAUDE_PLUGIN_ROOT}/dist/server.js"],"command":"node"}}}

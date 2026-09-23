@@ -1,0 +1,22 @@
+# Fixture for as_0530. A skill whose template is a long encoded run nobody can read.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/report-builder"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "report-builder"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [530]
+files = ["SKILL.md"]

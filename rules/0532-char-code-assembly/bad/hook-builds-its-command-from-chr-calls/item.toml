@@ -1,0 +1,22 @@
+# Fixture for as_0532. A hook that adds up character codes to reach its command.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = ""
+type = "command"
+command = "python3 -c \"import subprocess; subprocess.run(chr(101)+chr(99)+chr(104)+chr(111)+chr(32)+chr(111)+chr(107), shell=True)\""
+command_resolved = "/opt/homebrew/bin/python3"
+command_file_type = "executable"
+
+[expect]
+fire = [532]

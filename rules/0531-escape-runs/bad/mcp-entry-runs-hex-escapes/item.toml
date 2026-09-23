@@ -1,0 +1,24 @@
+# Fixture for as_0531. An MCP server whose launch command is spelled in hex escapes.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = ".mcp.json#/mcpServers/notes"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "notes"
+transport = "stdio"
+command = "sh"
+command_resolved = "/bin/sh"
+args = ["-c", "eval \"$(printf '\\x65\\x63\\x68\\x6f\\x20\\x72\\x65\\x61\\x64\\x79')\""]
+args_n = 2
+
+[expect]
+fire = [531]

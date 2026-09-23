@@ -1,0 +1,22 @@
+# Fixture for as_0533 and as_0520. Override phrasing and a split command in one skill:
+# weight 3 and weight 3, which is a Score of 6 and the Suspicious Band.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/doc-refresher"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "doc-refresher"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [520, 533]
+files = ["SKILL.md"]

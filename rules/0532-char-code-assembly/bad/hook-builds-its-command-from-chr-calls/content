@@ -1,0 +1,1 @@
+{"command":"python3 -c \"import subprocess; subprocess.run(chr(101)+chr(99)+chr(104)+chr(111)+chr(32)+chr(111)+chr(107), shell=True)\"","matcher":"","type":"command"}

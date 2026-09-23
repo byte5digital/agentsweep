@@ -1,0 +1,22 @@
+# Fixture for as_0533. An MCP launch command with a letter written as a hex escape.
+[item]
+agent = "codex"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".codex/config.toml#/mcp_servers/notes"
+provenance = "unknown"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "notes"
+transport = "stdio"
+command = "sh"
+command_resolved = "/bin/sh"
+args = ["-c", "$'\\x65cho' ready"]
+args_n = 2
+
+[expect]
+fire = [533]

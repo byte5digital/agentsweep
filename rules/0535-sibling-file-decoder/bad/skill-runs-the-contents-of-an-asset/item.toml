@@ -1,0 +1,22 @@
+# Fixture for as_0535. A skill whose real instructions live in a file under assets.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/chart-drawer"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "chart-drawer"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = [535]
+files = ["SKILL.md"]

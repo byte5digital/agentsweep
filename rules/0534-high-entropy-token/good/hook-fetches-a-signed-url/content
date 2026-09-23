@@ -1,0 +1,1 @@
+{"command":"curl -fsS -o build/app.js 'https://cdn.example.invalid/build/app.2f91c4.js?signature=PJeLIV7qmnmglBCbA-jWeEKNOzH-t3iK1ox5ZaPcJjuiJt7thWO9A6vGECjC9ZcKTccH0t1EeZi46-BjtsnrbWW6&expires=1700003600'","matcher":"","type":"command"}

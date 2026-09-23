@@ -1,0 +1,22 @@
+# Near miss: a signed download address looks random because the signature is.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = ""
+type = "command"
+command = "curl -fsS -o build/app.js 'https://cdn.example.invalid/build/app.2f91c4.js?signature=PJeLIV7qmnmglBCbA-jWeEKNOzH-t3iK1ox5ZaPcJjuiJt7thWO9A6vGECjC9ZcKTccH0t1EeZi46-BjtsnrbWW6&expires=1700003600'"
+command_resolved = "/usr/bin/curl"
+command_file_type = "executable"
+
+[expect]
+fire = []

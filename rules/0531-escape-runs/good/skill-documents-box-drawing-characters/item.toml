@@ -1,0 +1,20 @@
+# Near miss: escapes in documentation, with no shell or interpreter anywhere near them.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/table-formatter"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "table-formatter"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = []

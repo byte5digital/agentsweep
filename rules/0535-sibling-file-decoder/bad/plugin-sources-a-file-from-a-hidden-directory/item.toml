@@ -1,0 +1,23 @@
+# Fixture for as_0535. A plugin script that sources and runs files out of directories a reviewer skips.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = "plugins/cache/community-tools/index-syncer/2.0.3"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "index-syncer"
+name_reserved_distance = 13
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = [535]
+files = ["scripts/sync.sh"]

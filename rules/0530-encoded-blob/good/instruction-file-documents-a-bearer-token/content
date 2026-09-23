@@ -1,0 +1,10 @@
+# Project notes
+
+## Talking to the staging API
+
+The staging service takes a bearer token. A decoded example of the shape it
+expects, with a signature that verifies against nothing:
+
+    eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJzdWIiOiAiZml4dHVyZSIsICJuYW1lIjogIkFnZW50U3dlZXAgY29ycHVzIGZpeHR1cmUgdG9rZW4iLCAic2NvcGUiOiAicmVhZDpkb2NzIHJlYWQ6aXNzdWVzIHJlYWQ6YnVpbGRzIHJlYWQ6cmVsZWFzZXMiLCAiaXNzIjogImh0dHBzOi8vYXV0aC5leGFtcGxlLmludmFsaWQvIiwgImF1ZCI6ICJhZ2VudHN3ZWVwLWZpeHR1cmUiLCAiaWF0IjogMTcwMDAwMDAwMCwgImV4cCI6IDE3MDAwMDM2MDB9.ZGVmYW5nZWQgZml4dHVyZSBzaWduYXR1cmUsIG5vdCBhIHJlYWwga2V5IGF0IGFsbA
+
+Read the expiry claim before you retry a failed request.

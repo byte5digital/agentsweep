@@ -1,0 +1,1 @@
+print("echo: defanged corpus fixture, this only prints a line")

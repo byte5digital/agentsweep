@@ -19,6 +19,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use agentsweep_adapter_claude_code::ClaudeCode;
+use agentsweep_adapter_codex::Codex;
 use agentsweep_adapter_workspace::Workspace;
 use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
 use agentsweep_core::host::Host;
@@ -40,13 +41,17 @@ pub fn list_items(home: Option<PathBuf>) -> Result<String, Box<dyn Error>> {
         return Err(format!("{} is not a folder", home.display()).into());
     }
 
-    let claude_code = ClaudeCode::new();
+    // The project roots are pooled across every Agent, so each adapter scans
+    // its own Surfaces at every root the other one knows too. That is what the
+    // registered flag is about.
+    let agents: Vec<Box<dyn SurfaceAdapter>> =
+        vec![Box::new(ClaudeCode::new()), Box::new(Codex::new())];
     let inventory = Host::new(home.clone(), Vec::new())
         .with_search_path(search_path())
         .with_system_root(PathBuf::from(SYSTEM_ROOT));
-    let mut roots: Vec<PathBuf> = claude_code
-        .projects(&inventory)
-        .into_iter()
+    let mut roots: Vec<PathBuf> = agents
+        .iter()
+        .flat_map(|agent| agent.projects(&inventory))
         .map(|registration| registration.root)
         .filter(|root| root.is_dir())
         .collect();
@@ -61,10 +66,12 @@ pub fn list_items(home: Option<PathBuf>) -> Result<String, Box<dyn Error>> {
     let provenances = workspace.provenances(&host, &roots);
     let mut enumeration = Enumeration::default();
     enumeration.extend(workspace.enumerate(&host, &roots));
-    enumeration.extend(claude_code.enumerate(&host, &roots));
+    for agent in &agents {
+        enumeration.extend(agent.enumerate(&host, &roots));
+    }
     provenances.stamp(&mut enumeration);
 
-    Ok(render(&claude_code, &host, &roots, &enumeration))
+    Ok(render(&agents, &host, &roots, &enumeration))
 }
 
 fn search_path() -> Vec<PathBuf> {
@@ -74,24 +81,26 @@ fn search_path() -> Vec<PathBuf> {
 }
 
 fn render(
-    claude_code: &ClaudeCode,
+    agents: &[Box<dyn SurfaceAdapter>],
     host: &Host,
     roots: &[PathBuf],
     enumeration: &Enumeration,
 ) -> String {
     let mut out = String::new();
-    let detection = claude_code.detect(host);
-    let _ = writeln!(
-        out,
-        "{} installed={} version={} config_dir={}",
-        claude_code.descriptor().display_name,
-        detection.installed,
-        detection.version.as_deref().unwrap_or("unknown"),
-        detection
-            .config_dir
-            .map(|dir| dir.display().to_string())
-            .unwrap_or_default()
-    );
+    for agent in agents {
+        let detection = agent.detect(host);
+        let _ = writeln!(
+            out,
+            "{} installed={} version={} config_dir={}",
+            agent.descriptor().display_name,
+            detection.installed,
+            detection.version.as_deref().unwrap_or("unknown"),
+            detection
+                .config_dir
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_default()
+        );
+    }
     let _ = writeln!(out, "project roots: {}", roots.len());
     let _ = writeln!(out);
 
@@ -113,7 +122,12 @@ fn render(
     let mut counted: BTreeMap<String, usize> = BTreeMap::new();
     for item in &enumeration.items {
         *counted
-            .entry(format!("{} {}", item.scope.as_str(), item.kind))
+            .entry(format!(
+                "{} {} {}",
+                item.agent,
+                item.scope.as_str(),
+                item.kind
+            ))
             .or_default() += 1;
     }
     for (what, how_many) in &counted {
@@ -158,8 +172,16 @@ mod tests {
         let listed = list_items(Some(home.clone())).expect("the listing runs");
 
         assert!(listed.contains("Claude Code installed=true"), "{listed}");
+        // Whether Codex is installed depends on the machine the suite runs
+        // on; that its line is there and that it found nothing in this fake
+        // home does not.
+        assert!(listed.contains("Codex installed="), "{listed}");
+        assert!(!listed.contains("codex/"), "{listed}");
         assert!(listed.contains("project roots: 0"), "{listed}");
-        assert!(listed.contains("user SettingsEntry"), "{listed}");
+        assert!(
+            listed.contains("claude-code user SettingsEntry"),
+            "{listed}"
+        );
         assert!(listed.contains("1  Items"), "{listed}");
         assert!(listed.contains("Nothing was recorded."), "{listed}");
         assert!(

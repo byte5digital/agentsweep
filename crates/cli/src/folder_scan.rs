@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use agentsweep_adapter_claude_code::ClaudeCode;
+use agentsweep_adapter_codex::Codex;
 use agentsweep_adapter_workspace::Workspace;
 use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
 use agentsweep_core::finding::{Finding, FiredHeuristic, RuleStatus};
@@ -36,6 +37,7 @@ pub fn folder_scan(directory: &Path) -> Result<(PathBuf, ScanReport), Box<dyn Er
     let mut enumeration = Enumeration::default();
     enumeration.extend(workspace.enumerate(&host, roots));
     enumeration.extend(ClaudeCode::new().enumerate(&host, roots));
+    enumeration.extend(Codex::new().enumerate(&host, roots));
     provenances.stamp(&mut enumeration);
 
     let pack = RulePack::bundled()?;

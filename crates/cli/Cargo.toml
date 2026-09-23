@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 agentsweep-adapter-claude-code.workspace = true
+agentsweep-adapter-codex.workspace = true
 agentsweep-adapter-workspace.workspace = true
 agentsweep-core.workspace = true
 

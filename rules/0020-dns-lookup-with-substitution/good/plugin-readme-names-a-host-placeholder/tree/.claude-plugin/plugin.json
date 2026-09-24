@@ -1,0 +1,5 @@
+{
+  "name": "tunnels",
+  "version": "2.0.1",
+  "description": "Publish a local server on a route of your own domain."
+}

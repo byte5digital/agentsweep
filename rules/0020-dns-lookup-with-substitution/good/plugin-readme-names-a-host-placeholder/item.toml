@@ -1,0 +1,24 @@
+# Near miss: prose about a host, with a placeholder in a code span right after
+# it. A backtick opens a Markdown code span, never a command substitution, so
+# the angle bracket behind it reads nothing. Found on the benign corpus.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = "plugins/cache/community-tools/tunnels/2.0.1"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "tunnels"
+name_reserved_distance = 6
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

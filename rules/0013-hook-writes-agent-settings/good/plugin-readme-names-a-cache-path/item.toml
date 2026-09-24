@@ -1,0 +1,25 @@
+# Near miss: a plugin README that documents where its own hooks file is
+# installed. The angle brackets of the placeholder put a `>` in front of the
+# path, and prose about a settings file is not a write to one. Found on the
+# benign corpus.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = "plugins/cache/community-tools/notes/1.4.0"
+provenance = "marketplace"
+provenance_ref = "community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "notes"
+name_reserved_distance = 5
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

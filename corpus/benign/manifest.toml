@@ -1,0 +1,358 @@
+# The benign corpus: public content that is known to be good.
+#
+# Spec section 4.2 puts a precision bar on the Rule tier, and two of its five
+# conditions are measured here: zero T1 hits on the benign corpus, and a hit
+# count per Heuristic with every weight 3 Heuristic at zero. Every source below
+# is a real, public repository, pinned to the commit it was read at, fetched
+# over plain HTTPS at test time and never committed. No git binary is ever run:
+# an archive comes from `codeload.github.com/<owner>/<repo>/tar.gz/<commit>` and
+# a single file from `raw.githubusercontent.com/<owner>/<repo>/<commit>/<path>`.
+#
+# `sha256` pins the content, not the transfer. For a file it is the digest of
+# the file's bytes; for an archive it is the digest of a canonical rendering of
+# the paths this manifest takes and their bytes, in path order, because the
+# tarball GitHub generates is not promised to be byte-stable while its content
+# is. A moved tag or an edited file therefore fails the fetch, and re-recording
+# a hash is a commit somebody reviews. `cargo run -p agentsweep-xtask --
+# benign-corpus --record` writes the hashes of what it fetched back into this
+# file.
+#
+# Each source says how it is presented, because a Rule reads the views the
+# Surface Adapter computed and not just the bytes. The presentations are:
+#
+#   marketplace       the path is a marketplace clone, registered in the Agent's
+#                     own marketplace registry
+#   plugin-trees      each immediate subdirectory of the path is one installed
+#                     plugin, with the MCP and hook files it bundles
+#   skill-tree        the path is one skill directory
+#   skill-trees       each immediate subdirectory of the path is one skill
+#   instruction-file  the file is the instruction file of a project root of its
+#                     own, CLAUDE.md for Claude Code and AGENTS.md for Codex
+#
+# `agent` says whose Surfaces the source is laid out on; it defaults to
+# claude-code.
+
+# The Anthropic skills repository: the marketplace it is, and every skill in it.
+[[archive]]
+name = "anthropic-agent-skills"
+owner = "anthropics"
+repo = "skills"
+commit = "34040c9c568585f6929bedeaad110ad08f079624"
+sha256 = "0a1924a4767ef5bfd3bc1c20037c91e7b835a5bd6010e4217617db9686ef2b45"
+take = [
+    { path = "", present = "marketplace" },
+    { path = "skills", present = "skill-trees" },
+    { path = "template", present = "skill-tree" },
+    { path = "README.md", present = "instruction-file" },
+]
+
+# The official plugin marketplace: the clone, the plugins Anthropic ships and
+# the third-party plugins it lists, which are where the bundled `.mcp.json` and
+# `hooks/` files come from.
+[[archive]]
+name = "claude-plugins-official"
+owner = "anthropics"
+repo = "claude-plugins-official"
+commit = "6bfd4e0c6d3da6050984fa5ed8281d915fa7ed69"
+sha256 = "51e18a28ec86667105050d3222c93fcbecd3323392ccd980be1b223f7c32fe30"
+take = [
+    { path = "", present = "marketplace" },
+    { path = "plugins", present = "plugin-trees" },
+    { path = "external_plugins", present = "plugin-trees" },
+    { path = "README.md", present = "instruction-file" },
+]
+
+# Codex: the example skills it ships as samples, the skills its own repository
+# keeps for its own agents, and its committed AGENTS.md.
+[[archive]]
+name = "codex"
+owner = "openai"
+repo = "codex"
+commit = "51d45620702cd3c825d3520ddc7d7e8052a16b87"
+sha256 = "77b8b511894e94d858dc52f4309a88fc0a4270754ed62f79ae77f0fcaf423fc8"
+take = [
+    { path = "codex-rs/skills/src/assets/samples", present = "skill-trees", agent = "codex" },
+    { path = ".codex/skills", present = "skill-trees", agent = "codex" },
+    { path = "AGENTS.md", present = "instruction-file", agent = "codex" },
+]
+
+# Twenty MCP server READMEs: the seven reference servers, then the thirteen
+# most-starred community servers as of the day they were pinned. A README is
+# what a user pastes into an instruction file, so it is read as one.
+[[file]]
+name = "mcp-everything"
+owner = "modelcontextprotocol"
+repo = "servers"
+commit = "f46d9578190b476b3501923ea8977d899e8db2cb"
+path = "src/everything/README.md"
+sha256 = "384132b4831ba4d003d7c411645ba3530da08a37e8da10a33021961490788aa0"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-fetch"
+owner = "modelcontextprotocol"
+repo = "servers"
+commit = "f46d9578190b476b3501923ea8977d899e8db2cb"
+path = "src/fetch/README.md"
+sha256 = "867166ea86382144368465683cd01d61001771ddaa3eb6967b14d5267510c9a2"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-filesystem"
+owner = "modelcontextprotocol"
+repo = "servers"
+commit = "f46d9578190b476b3501923ea8977d899e8db2cb"
+path = "src/filesystem/README.md"
+sha256 = "eece1f5a87dde300b663a0cb5b4847bbfaa54861b69abe1df7321712f834c8ee"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-git"
+owner = "modelcontextprotocol"
+repo = "servers"
+commit = "f46d9578190b476b3501923ea8977d899e8db2cb"
+path = "src/git/README.md"
+sha256 = "62b892f69bb43a10c5bdec531935b9c74846354307a5ba103d1c19607bee2d51"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-memory"
+owner = "modelcontextprotocol"
+repo = "servers"
+commit = "f46d9578190b476b3501923ea8977d899e8db2cb"
+path = "src/memory/README.md"
+sha256 = "2e9bcf32c1bce89b58bac1ec4d97352b59d06b55a6f3f75b94e9c2aff517a124"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-sequentialthinking"
+owner = "modelcontextprotocol"
+repo = "servers"
+commit = "f46d9578190b476b3501923ea8977d899e8db2cb"
+path = "src/sequentialthinking/README.md"
+sha256 = "090e1c8b70ad1c530834751b1a1489bceae10f57838d7753ab3a2b7dca7eadf5"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-time"
+owner = "modelcontextprotocol"
+repo = "servers"
+commit = "f46d9578190b476b3501923ea8977d899e8db2cb"
+path = "src/time/README.md"
+sha256 = "deadbe8a5e14bd98bac07f63bbc5264147935d12bd9dab6b7efca7fa92f10e75"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-context7"
+owner = "upstash"
+repo = "context7"
+commit = "e7dbfd0bd22f9abcc8697e96d99340e19b49e7ac"
+path = "README.md"
+sha256 = "1818671e0c514cc0287fdde671c0825aa1501508f0cd342ee1c8824f42c37ea6"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-playwright"
+owner = "microsoft"
+repo = "playwright-mcp"
+commit = "f1257a5a67aff872f947fae274759f7d54853862"
+path = "README.md"
+sha256 = "2d884636627bad843f5f118696972b14ccfbac7b9de242848e0737f385357d79"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-github"
+owner = "github"
+repo = "github-mcp-server"
+commit = "85598ba6e1256f7ebf4867b95d63b833c4549264"
+path = "README.md"
+sha256 = "0907ad94aa1a48bc821004f98c8267de4d1e3305cb922ed5ed61532dd191a6a4"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-serena"
+owner = "oraios"
+repo = "serena"
+commit = "7a2968335f2198b966864de1ce3655c8e485a653"
+path = "README.md"
+sha256 = "f1940e2929f15cc5c5067900eb8cf14f2c58b95ec4d1ba3de0d425cac02d8450"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-figma-context"
+owner = "GLips"
+repo = "Figma-Context-MCP"
+commit = "c083d65c7e002923e7cb98f4e3bdafb105e90f6d"
+path = "README.md"
+sha256 = "45ce507e0f745f4943cf4ebb8652b08935b6cccabcd8c2219e90d812d1457359"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-aws"
+owner = "awslabs"
+repo = "mcp"
+commit = "3e0418ff99c5201bec6df4883729fd9f09b856b9"
+path = "README.md"
+sha256 = "20e58584c8863d91610efe47cb0903383a19ee3651265324a41f653036f03e64"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-firecrawl"
+owner = "firecrawl"
+repo = "firecrawl-mcp-server"
+commit = "f535eff29e2d509515e9bd1667eecf90fa667c7e"
+path = "README.md"
+sha256 = "d4e8b76a760fad472d5a6e78e28b4063fb616863bfd412f2166c44d80080103e"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-exa"
+owner = "exa-labs"
+repo = "exa-mcp-server"
+commit = "f3d71fb6b0ff4b4683f108f05bc2bae61a9f7e97"
+path = "README.md"
+sha256 = "60d0da8a7ebe788c8d65d52ffc4b6c74d75d43b1ec51210beb275576256aa434"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-notion"
+owner = "makenotion"
+repo = "notion-mcp-server"
+commit = "730ae781ba28beeaf0865025a3f2ed4c25ea2387"
+path = "README.md"
+sha256 = "b277aea4aafc92278186ea800fbdeeddb1e150d58394e1513a47085c36f37a98"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-cloudflare"
+owner = "cloudflare"
+repo = "mcp-server-cloudflare"
+commit = "632916d3fcc862a7832d2fe5a49e700f017c109f"
+path = "README.md"
+sha256 = "645e57951ecdbe9c33f29dce0301810fc1d880f9a6ba818b8ece9027ba4725d8"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-grafana"
+owner = "grafana"
+repo = "mcp-grafana"
+commit = "65bd38b61bd5e9edc3883be5824f4b7494e20366"
+path = "README.md"
+sha256 = "0fe0c27465e3c565ebdaebe90edcfe778206e649669eab2f4cd4c4f5df466866"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-browserbase"
+owner = "browserbase"
+repo = "mcp-server-browserbase"
+commit = "3e6f53461949037d5e65dd425da3ceb1263f11d6"
+path = "README.md"
+sha256 = "95d497b2f02de7467ef529e56e9a37376baa46780dcbd516a3fdb61762e328e8"
+present = "instruction-file"
+
+[[file]]
+name = "mcp-supabase"
+owner = "supabase"
+repo = "mcp"
+commit = "4cc6660f656673eb83f3b80b0c3ae7030b3d2772"
+path = "README.md"
+sha256 = "e8bca5e07ba9c2e3bbbafc92deccf3f36049ae843caee451cd8c6eca6bdfada2"
+present = "instruction-file"
+
+# Ten widely used repositories that commit an instruction file of their own.
+[[file]]
+name = "bun"
+owner = "oven-sh"
+repo = "bun"
+commit = "8d36bff512d1f8c824c74c8352240974294db48f"
+path = "CLAUDE.md"
+sha256 = "34470c422af2446667a0c17237e2391a075c384920ba8b1301227b8db8b45654"
+present = "instruction-file"
+
+[[file]]
+name = "deno"
+owner = "denoland"
+repo = "deno"
+commit = "461f32ec6174d88b7e43654a054d46d67ae2fdab"
+path = "CLAUDE.md"
+sha256 = "6d9ce69d915701b8c79880b917849cbc4b139c6dfcb260dacda32087051a2467"
+present = "instruction-file"
+
+[[file]]
+name = "librechat"
+owner = "LibreChat-AI"
+repo = "LibreChat"
+commit = "f13b0eaef465c9173c3c14070b1d352e4bea24bf"
+path = "CLAUDE.md"
+sha256 = "88f1406b8f792e3a0b99047d64ee274e46813dee33f0c62876340ded2b9fd579"
+present = "instruction-file"
+
+[[file]]
+name = "next-js"
+owner = "vercel"
+repo = "next.js"
+commit = "76117ccd71fdfaf4d5377b7ed08d238de845321b"
+path = "AGENTS.md"
+sha256 = "5372168bb9ca5b77d9a6cdb8cb85cec3c93e229dedb08b61af074adc2a2758ab"
+present = "instruction-file"
+agent = "codex"
+
+[[file]]
+name = "langchain"
+owner = "langchain-ai"
+repo = "langchain"
+commit = "7622d3dce760ac4be6d9aef4c653277e06064aea"
+path = "AGENTS.md"
+sha256 = "9d2e0f3ea5304d223352bfa9c62ea4f9172f3247f8ff5d47a79ece1bc279d84b"
+present = "instruction-file"
+agent = "codex"
+
+[[file]]
+name = "rust"
+owner = "rust-lang"
+repo = "rust"
+commit = "3670d2532bdf51abbe0b8fea22284d7ca340ffe3"
+path = "AGENTS.md"
+sha256 = "17bf46ba1a90355ce28fc3520c115852e299aefc90d584a2d18d0e1a62fd4d3a"
+present = "instruction-file"
+agent = "codex"
+
+[[file]]
+name = "ruff"
+owner = "astral-sh"
+repo = "ruff"
+commit = "a0e239f3cdaa777d5dbbda4cea099c06a4e08632"
+path = "AGENTS.md"
+sha256 = "0bc8d411bc6ac986dfab222570d8a6bed212408ce8c23a5f482a843f693d92ad"
+present = "instruction-file"
+agent = "codex"
+
+[[file]]
+name = "tldraw"
+owner = "tldraw"
+repo = "tldraw"
+commit = "293312bb79be0d4e9d05da79b0e95d0d2266c605"
+path = "AGENTS.md"
+sha256 = "cbddeb0e639e95f528cbca2de784a59832f56e46dfb4d73bf97d76dac0bba7b9"
+present = "instruction-file"
+agent = "codex"
+
+[[file]]
+name = "airflow"
+owner = "apache"
+repo = "airflow"
+commit = "f14bed9b8523c415420e68c7d6f6daa25c56a7ff"
+path = "AGENTS.md"
+sha256 = "fc64c4b2389401bea95cbeac520994695e89b98574789467380b63273dfa4e5a"
+present = "instruction-file"
+agent = "codex"
+
+[[file]]
+name = "pydantic-ai"
+owner = "pydantic"
+repo = "pydantic-ai"
+commit = "f8a5fe56ff6978ee33aaac32e23b88fb93258d4a"
+path = "AGENTS.md"
+sha256 = "13d9ee1b271a03a2056928e3da4152539d30bad0fc8acfdded1fa0d5b0b4619a"
+present = "instruction-file"
+agent = "codex"

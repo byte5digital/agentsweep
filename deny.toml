@@ -56,7 +56,15 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.93
-exceptions = []
+exceptions = [
+    # The Mozilla root certificate bundle, carried by the HTTPS client that
+    # fetches the benign corpus in CI. CDLA-Permissive-2.0 is a permissive data
+    # licence with no copyleft and no attribution requirement on a binary, and
+    # the bundle is data rather than code. It reaches nothing a user installs:
+    # the client is a dependency of `agentsweep-xtask`, which is `publish =
+    # false` and is never built into the app, the daemon or the CLI.
+    { name = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
 
 [bans]
 multiple-versions = "warn"

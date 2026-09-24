@@ -10,12 +10,17 @@ use std::process::ExitCode;
 
 use agentsweep_core::pack::Manifest;
 use agentsweep_core::rules::RulePack;
-use agentsweep_xtask::{corpus, iocs, repo_root};
+use agentsweep_xtask::{benign, corpus, iocs, repo_root};
 
 const USAGE: &str = "\
 agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
 
     corpus                      run every Fixture of every Rule
+    benign-corpus [--record]    fetch the public sources of corpus/benign/manifest.toml,
+                                lay them out as the adapters would see them and report
+                                the T1 hits and the hit count per Heuristic; with
+                                --record write the digest of what was fetched back into
+                                the manifest instead of holding the fetch to it
     render-iocs [--check]       render the Indicator Lists into rules 0900 to 0903,
                                 or with --check only report a stale rendering
     pack [options]              write a Rule Pack manifest
@@ -34,6 +39,9 @@ fn main() -> ExitCode {
 
     let result = match command.as_str() {
         "corpus" => run_corpus(),
+        "benign-corpus" => {
+            run_benign_corpus(arguments.iter().any(|argument| argument == "--record"))
+        }
         "render-iocs" => render_iocs(arguments.iter().any(|argument| argument == "--check")),
         "pack" => build_pack(&arguments[1..]),
         other => Err(format!("`{other}` is not a command\n\n{USAGE}")),
@@ -88,6 +96,53 @@ fn run_corpus() -> Result<String, String> {
         failed.len(),
         fixtures.len()
     ))
+}
+
+/// Fetches the benign corpus and reports what the bundled Rule Pack makes of
+/// it. A T1 hit and a weight 3 Heuristic both fail; everything else is a
+/// count a rule author reads.
+///
+/// Offline the command says so and succeeds, unless the environment asks for
+/// the corpus by name, which is what CI does: a job that fetched nothing and
+/// said nothing would be a green tick over an unproven Rule Pack.
+fn run_benign_corpus(record: bool) -> Result<String, String> {
+    let root = repo_root();
+    let required = std::env::var(benign::REQUIRED).is_ok_and(|value| !value.is_empty());
+    match benign::run(&root, record)? {
+        benign::Run::Offline(what) => {
+            if required {
+                return Err(format!(
+                    "the benign corpus could not be fetched and {} asks for it: {what}\n",
+                    benign::REQUIRED
+                ));
+            }
+            Ok(format!(
+                "the benign corpus was skipped: {what}\nRun it again with a network, or set {}=1 to make this a failure.\n",
+                benign::REQUIRED
+            ))
+        }
+        benign::Run::Scanned(scanned) => {
+            let mut report = scanned.render();
+            if record {
+                let path = benign::record(&root, &scanned.digests)?;
+                report.push_str(&format!(
+                    "\nrecorded {} digests in {}\n",
+                    scanned.digests.len(),
+                    path.display()
+                ));
+                return Ok(report);
+            }
+            if scanned.meets_the_bar() {
+                report.push_str("\nThe benign corpus meets the bar of spec section 4.2.\n");
+                return Ok(report);
+            }
+            report.push('\n');
+            for failure in scanned.report.failures() {
+                report.push_str(&format!("{failure}\n"));
+            }
+            Err(report)
+        }
+    }
 }
 
 /// Renders every Indicator List, or reports the ones whose committed Rule is

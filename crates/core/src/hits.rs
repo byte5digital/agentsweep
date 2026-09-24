@@ -54,6 +54,10 @@ pub struct HitReport {
     pub items: usize,
     /// Every T1 Rule hit, in Rule and Item order.
     pub rules: Vec<RuleHitLine>,
+    /// Every Weight 3 Heuristic that fired, named the same way, because on
+    /// content known to be good each one is something a rule author has to go
+    /// and look at.
+    pub strong_hits: Vec<RuleHitLine>,
     /// How often each Heuristic fired, in id order.
     pub heuristics: BTreeMap<i64, HeuristicCount>,
 }
@@ -87,9 +91,18 @@ impl HitReport {
             }
             for heuristic in &assessment.fired {
                 report.count(heuristic.id, heuristic.weight);
+                if heuristic.weight >= 3 {
+                    report.strong_hits.push(RuleHitLine {
+                        rule: heuristic.id,
+                        item_id: assessment.item_id.clone(),
+                        file: heuristic.file.clone(),
+                        title: heuristic.title.clone(),
+                    });
+                }
             }
         }
         report.rules.sort();
+        report.strong_hits.sort();
         Ok(report)
     }
 
@@ -130,10 +143,15 @@ impl HitReport {
                 hit.rule, hit.item_id, hit.title
             ));
         }
-        for (id, counted) in self.strong() {
+        for hit in &self.strong_hits {
+            let file = if hit.file.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", hit.file)
+            };
             failures.push(format!(
-                "heuristic {id:04} of weight {} fired on {} of {} items and must be at zero",
-                counted.weight, counted.items, self.items
+                "heuristic {:04} of weight 3 fired on {}{file} and must be at zero: {}",
+                hit.rule, hit.item_id, hit.title
             ));
         }
         failures
@@ -174,21 +192,23 @@ impl HitReport {
             };
             let _ = writeln!(out, "  {id:04}  {:>6}  {weight}", counted.items);
         }
-        let strong = self.strong();
         let _ = writeln!(out);
-        if strong.is_empty() {
+        if self.strong_hits.is_empty() {
             let _ = writeln!(out, "Every weight 3 Heuristic is at zero.");
         } else {
             let _ = writeln!(
                 out,
-                "{} weight 3 Heuristics fired and must be at zero: {}",
-                strong.len(),
-                strong
-                    .iter()
-                    .map(|(id, counted)| format!("{id:04}x{}", counted.items))
-                    .collect::<Vec<String>>()
-                    .join(" ")
+                "{} weight 3 Heuristic hits, which must be at zero:",
+                self.strong_hits.len()
             );
+            for hit in &self.strong_hits {
+                let file = if hit.file.is_empty() {
+                    String::new()
+                } else {
+                    format!("  {}", hit.file)
+                };
+                let _ = writeln!(out, "  {:04}  {}{file}", hit.rule, hit.item_id);
+            }
         }
         out
     }

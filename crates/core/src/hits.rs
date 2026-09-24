@@ -182,15 +182,15 @@ impl HitReport {
         let _ = writeln!(out);
         if self.heuristics.is_empty() {
             let _ = writeln!(out, "No Heuristic fired.");
-            return out;
-        }
-        let _ = writeln!(out, "Heuristics, items each fired on:");
-        for (id, counted) in &self.heuristics {
-            let weight = match counted.weight {
-                0 => "exposure".to_string(),
-                weight => format!("weight {weight}"),
-            };
-            let _ = writeln!(out, "  {id:04}  {:>6}  {weight}", counted.items);
+        } else {
+            let _ = writeln!(out, "Heuristics, items each fired on:");
+            for (id, counted) in &self.heuristics {
+                let weight = match counted.weight {
+                    0 => "exposure".to_string(),
+                    weight => format!("weight {weight}"),
+                };
+                let _ = writeln!(out, "  {id:04}  {:>6}  {weight}", counted.items);
+            }
         }
         let _ = writeln!(out);
         if self.strong_hits.is_empty() {

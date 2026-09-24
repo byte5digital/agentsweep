@@ -64,6 +64,27 @@ jobs:
           cargo install --locked cargo-auditable
           cargo auditable build --workspace --locked --release
 
+  benign-corpus:
+    name: Benign corpus
+    # The corpus is scanned the way the Surface Adapters see it, and the adapters
+    # are the macOS ones, so it runs where the product runs.
+    runs-on: macos-14
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: .github/scripts/install-toolchain.sh
+
+      # Every source is a public repository pinned to a commit and to the digest
+      # of the content taken from it, fetched over plain HTTPS. Asking for the
+      # corpus by name turns the offline skip off: a job that fetched nothing
+      # and said nothing would be a green tick over an unproven Rule Pack.
+      - name: Scan the benign corpus
+        env:
+          AGENTSWEEP_CORPUS_REQUIRED: "1"
+        run: cargo run -p agentsweep-xtask --locked -- benign-corpus
+
   dependencies:
     name: Dependency policy
     runs-on: ubuntu-24.04

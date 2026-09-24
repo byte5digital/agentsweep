@@ -13,6 +13,14 @@ apps/*/src-tauri/gen/
 # macOS
 .DS_Store
 
+# the developer flags read the real machine, and what they print is the author's
+# own configuration; the benign corpus is public content fetched at test time.
+# Neither is ever committed. Both default to target/, which is ignored above;
+# these names catch a run somebody redirected by hand.
+developer-report.txt
+*.developer-report.txt
+corpus/benign/cache/
+
 # local secrets
 .env
 *.pem

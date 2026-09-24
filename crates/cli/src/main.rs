@@ -27,13 +27,21 @@ Developer only, off unless asked for by name:
                           for a home directory, so a real installation can be
                           compared with the surface inventory. It reads the
                           real machine, records nothing and prints no values.
-                          Its output is never committed.";
+                          Its output is never committed.
+  agentsweep --developer-scan-items [<home>]
+                          Scan the user-level surfaces of both agents with the
+                          bundled rule pack and print the tier 1 hits and the
+                          hit count per heuristic, the same report the benign
+                          corpus prints in CI. It reads the real machine,
+                          records nothing and prints no content. Its output is
+                          never committed.";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
         Some("scan") => scan(&arguments[1..]),
         Some("--developer-list-items") => developer_list_items(&arguments[1..]),
+        Some("--developer-scan-items") => developer_scan_items(&arguments[1..]),
         Some("--version" | "-V") => {
             println!("{} {}", agentsweep_core::NAME, agentsweep_core::VERSION);
             ExitCode::SUCCESS
@@ -93,6 +101,28 @@ fn developer_list_items(arguments: &[String]) -> ExitCode {
     }
 }
 
+/// Developer only: what the bundled Rule Pack makes of one real machine.
+fn developer_scan_items(arguments: &[String]) -> ExitCode {
+    let home = match arguments {
+        [] => None,
+        [home] => Some(PathBuf::from(home)),
+        _ => {
+            eprintln!("agentsweep: `--developer-scan-items` takes one folder.\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    match developer::scan_items(home) {
+        Ok(report) => {
+            print!("{report}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("agentsweep: the Items could not be scanned: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// The one flag that reads the real machine says so where a person sees
@@ -102,7 +132,9 @@ mod tests {
         let usage = super::USAGE;
         assert!(usage.contains("Developer only"), "{usage}");
         assert!(usage.contains("--developer-list-items"), "{usage}");
-        assert!(usage.contains("records nothing"), "{usage}");
+        assert!(usage.contains("--developer-scan-items"), "{usage}");
+        assert_eq!(usage.matches("records nothing").count(), 2, "{usage}");
+        assert_eq!(usage.matches("never committed").count(), 2, "{usage}");
     }
 
     #[test]

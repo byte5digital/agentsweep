@@ -26,6 +26,7 @@ use agentsweep_core::finding::Finding;
 use agentsweep_core::item::{ItemId, Scope};
 use agentsweep_core::keychain::KeySource;
 use agentsweep_core::paths::DataDirectory;
+use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::ScanKind;
 use agentsweep_core::state::Trigger;
 
@@ -41,6 +42,8 @@ pub struct ChangeScan<'a> {
     pub directory: &'a DataDirectory,
     /// The chain key behind them.
     pub keys: &'a dyn KeySource,
+    /// The compiled Rule Pack in force.
+    pub pack: &'a RulePack,
     /// Every Finding the last Scan left standing. The ones about Items this
     /// Scan does not look at come back untouched.
     pub previous: &'a [Finding],
@@ -123,6 +126,7 @@ impl ChangeScan<'_> {
             kind: ScanKind::Change,
             directory: self.directory,
             keys: self.keys,
+            pack: self.pack,
             plan: &survey.plan,
             descriptors: &descriptors,
             previous: &mine,

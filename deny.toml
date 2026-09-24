@@ -69,6 +69,12 @@ exceptions = [
     # the client is a dependency of `agentsweep-xtask`, which is `publish =
     # false` and is never built into the app, the daemon or the CLI.
     { name = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+    # The watcher. CC0-1.0 is a dedication to the public domain, so it obliges
+    # a binary to carry neither a notice nor a copyright line and asks strictly
+    # less than the MIT licence allowed above. It is named here rather than
+    # allowed everywhere because a public domain dedication is unusual enough
+    # to be worth reading each time it turns up.
+    { name = "notify", allow = ["CC0-1.0"] },
 ]
 
 [bans]

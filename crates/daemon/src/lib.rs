@@ -9,10 +9,12 @@
 //!
 //! What it does so far: opens the stores and says what verifying them found,
 //! binds the socket the specification names, runs a Full Scan over the machine
-//! at start, caches what that Scan derived in the state file, and answers a
-//! signed peer of the same version with Health, the Scan summary and the
-//! Findings that stand. The watcher, the due check, the actions and the Rule
-//! Feed arrive with the tickets after this one.
+//! at start, watches the roots that Scan declared and scans what changes on
+//! them, runs the daily Full Scan when it is due, compacts the Baseline behind
+//! a completed Full Scan, caches what a Scan derived in the state file, and
+//! answers a signed peer of the same version with Health, the Scan summary and
+//! the Findings that stand. The actions and the Rule Feed arrive with the
+//! tickets after this one.
 //!
 //! The binary is a few lines around [`run`]; everything else is here so that a
 //! test can start a daemon against a temporary home, a temporary data
@@ -32,4 +34,4 @@ pub mod stores;
 pub mod watcher;
 
 pub use options::{Invocation, Options, OptionsError, USAGE};
-pub use service::{Background, Daemon, Running, run, start};
+pub use service::{Background, Daemon, Running, Tuning, run, start};

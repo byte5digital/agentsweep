@@ -31,6 +31,7 @@ use agentsweep_core::health::{Health, Protection, StateFileHealth};
 use agentsweep_core::item::{ItemId, Scope};
 use agentsweep_core::keychain::{KeySource, MemoryKeySource};
 use agentsweep_core::paths::DataDirectory;
+use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::{BACKGROUND_WORKERS, ScanKind, on_demand_workers};
 use agentsweep_core::state::{RecordedFinding, State, StateFile, StateWriter, Trigger};
 use agentsweep_ipc::peer::PeerCheck;
@@ -160,6 +161,9 @@ pub struct Daemon {
     raised: Mutex<Vec<Finding>>,
     /// What has been asked for, and what is running.
     queue: Mutex<Queue>,
+    /// The Rule Pack in force, compiled once. Compiling it costs far more than
+    /// a Change Scan is allowed to take, so no Scan compiles its own.
+    pack: Arc<RulePack>,
     /// The Tier outcomes this daemon has already produced. In memory only,
     /// empty at start, thrown away when a Rule Pack is accepted.
     cache: Arc<EvaluationCache>,
@@ -251,6 +255,11 @@ impl Daemon {
             None => Machine::real(options.home_directory()?),
         };
 
+        // The bundled pack is compiled once, here, and every Scan of this
+        // daemon runs it. A daemon that cannot compile its own pack has
+        // nothing to protect with and says so rather than starting.
+        let pack = RulePack::bundled()?;
+
         let health = Health {
             protection: Protection::On,
             events,
@@ -273,6 +282,7 @@ impl Daemon {
             health: Mutex::new(health),
             raised: Mutex::new(Vec::new()),
             queue: Mutex::new(Queue::default()),
+            pack: Arc::new(pack),
             cache: Arc::new(EvaluationCache::new()),
             roots: Mutex::new(Vec::new()),
             watch: Mutex::new(None),
@@ -419,6 +429,7 @@ impl Daemon {
                     machine: &self.machine,
                     directory: &self.directory,
                     keys: &*self.keys,
+                    pack: &self.pack,
                     previous: &previous,
                     cache: &*self.cache,
                     workers,
@@ -440,6 +451,7 @@ impl Daemon {
                     machine: &self.machine,
                     directory: &self.directory,
                     keys: &*self.keys,
+                    pack: &self.pack,
                     previous: &previous,
                     pooled: &pooled,
                     cache: &*self.cache,
@@ -599,7 +611,11 @@ impl Daemon {
 
     /// What one debounced batch is worth, decided by the watcher and acted on
     /// here.
-    fn noticed(self: &Arc<Daemon>, decision: Decision) {
+    ///
+    /// The seam between the two: the watcher works out what a batch means and
+    /// this carries it out, so a test can hand over a decision no real file
+    /// system would make it wait for.
+    pub fn noticed(self: &Arc<Daemon>, decision: Decision) {
         match decision {
             Decision::Nothing => {}
             Decision::Change(batch) => {

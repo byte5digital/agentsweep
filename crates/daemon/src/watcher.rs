@@ -325,6 +325,7 @@ pub fn watch(
     drop(sender);
 
     let mut following = 0;
+    let mut spelled: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (root, mode) in roots
         .recursive
         .iter()
@@ -338,15 +339,39 @@ pub fn watch(
     {
         if watcher.watch(root, mode).is_ok() {
             following += 1;
+            // FSEvents answers with the path the file really has, so a root
+            // reached through a symbolic link comes back spelled another way
+            // than the adapter declared it. What the adapter declared is what
+            // an Item's path is, so the real spelling is remembered and
+            // undone on the way back in.
+            if let Ok(real) = std::fs::canonicalize(root)
+                && real != *root
+            {
+                spelled.push((real, root.clone()));
+            }
         }
     }
+    // The longest real prefix wins, so a root inside another root is rewritten
+    // with its own spelling rather than its parent's.
+    spelled.sort_by_key(|(real, _)| std::cmp::Reverse(real.as_os_str().len()));
 
     let stopping = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&stopping);
     let declared = roots.clone();
     let thread = std::thread::Builder::new()
         .name("agentsweep-watcher".to_string())
-        .spawn(move || pump(receiver, Debouncer::new(timings), declared, flag, sink))
+        .spawn(move || {
+            pump(
+                receiver,
+                Debouncer::new(timings),
+                Declared {
+                    roots: declared,
+                    spelled,
+                },
+                flag,
+                sink,
+            )
+        })
         .expect("the watcher thread starts");
 
     Ok(Watch {
@@ -366,7 +391,7 @@ pub fn watch(
 fn pump(
     receiver: Receiver<Observation>,
     mut debouncer: Debouncer,
-    roots: WatchRoots,
+    roots: Declared,
     stopping: Arc<AtomicBool>,
     sink: impl Fn(Decision),
 ) {
@@ -394,18 +419,41 @@ fn pump(
     }
 }
 
-/// Drops the paths of an observation that fall outside the declared roots.
+/// The roots as the adapters spelled them, and how the file system spells the
+/// ones that are reached through a symbolic link.
+#[derive(Clone, Debug, Default)]
+struct Declared {
+    roots: WatchRoots,
+    spelled: Vec<(PathBuf, PathBuf)>,
+}
+
+impl Declared {
+    /// The path as an adapter would have written it: the real spelling the
+    /// backend answered with, put back the way the Scan saw it.
+    fn as_declared(&self, path: PathBuf) -> PathBuf {
+        for (real, declared) in &self.spelled {
+            if let Ok(rest) = path.strip_prefix(real) {
+                return declared.join(rest);
+            }
+        }
+        path
+    }
+}
+
+/// Drops the paths of an observation that fall outside the declared roots, and
+/// spells the rest the way the adapters do.
 ///
 /// A non-recursive root is a directory watched for its own entries only, and
 /// the backend is not asked to promise that: the promise is kept here, so a
 /// Change Scan is only ever told about paths an adapter declared an interest
 /// in.
-fn inside(observation: Observation, roots: &WatchRoots) -> Observation {
+fn inside(observation: Observation, roots: &Declared) -> Observation {
     match observation {
         Observation::Changed(paths) => Observation::Changed(
             paths
                 .into_iter()
-                .filter(|path| roots.covers(path))
+                .map(|path| roots.as_declared(path))
+                .filter(|path| roots.roots.covers(path))
                 .collect(),
         ),
         other => other,
@@ -544,6 +592,10 @@ mod tests {
         let mut roots = WatchRoots::default();
         roots.watch_recursively(PathBuf::from("/home/.claude"));
         roots.watch(PathBuf::from("/home"));
+        let declared = Declared {
+            roots,
+            spelled: Vec::new(),
+        };
 
         let seen = inside(
             Observation::Changed(vec![
@@ -551,7 +603,7 @@ mod tests {
                 PathBuf::from("/home/.claude.json"),
                 PathBuf::from("/home/src/demo/main.rs"),
             ]),
-            &roots,
+            &declared,
         );
         assert_eq!(
             seen,
@@ -559,6 +611,35 @@ mod tests {
                 PathBuf::from("/home/.claude/skills/one/SKILL.md"),
                 PathBuf::from("/home/.claude.json"),
             ])
+        );
+    }
+
+    /// FSEvents answers with the path a file really has, so a root reached
+    /// through a symbolic link comes back spelled another way. What the
+    /// adapter declared is what an Item's path is, so the spelling is put back
+    /// before anything is matched against it.
+    #[test]
+    fn a_root_reached_through_a_link_is_spelled_the_way_the_adapter_declared_it() {
+        let mut roots = WatchRoots::default();
+        roots.watch_recursively(PathBuf::from("/var/agentsweep/.claude"));
+        let declared = Declared {
+            roots,
+            spelled: vec![(
+                PathBuf::from("/private/var/agentsweep/.claude"),
+                PathBuf::from("/var/agentsweep/.claude"),
+            )],
+        };
+
+        let seen = inside(
+            Observation::Changed(vec![
+                PathBuf::from("/private/var/agentsweep/.claude/settings.json"),
+                PathBuf::from("/private/var/elsewhere/settings.json"),
+            ]),
+            &declared,
+        );
+        assert_eq!(
+            seen,
+            Observation::Changed(vec![PathBuf::from("/var/agentsweep/.claude/settings.json")])
         );
     }
 

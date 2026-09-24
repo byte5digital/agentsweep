@@ -125,10 +125,12 @@ pub fn run(
     trigger: Trigger,
     progress: &dyn Progress,
 ) -> Result<ScanRun, ScanError> {
+    let pack = RulePack::bundled().map_err(|error| ScanError::Pack(error.to_string()))?;
     FullScan {
         machine,
         directory,
         keys,
+        pack: &pack,
         previous,
         cache: &NoCache,
         workers: BACKGROUND_WORKERS,
@@ -145,6 +147,10 @@ pub struct FullScan<'a> {
     pub directory: &'a DataDirectory,
     /// The chain key behind them.
     pub keys: &'a dyn KeySource,
+    /// The compiled Rule Pack in force. It is compiled once per daemon and
+    /// handed to every Scan: compiling it per Scan would cost more than the
+    /// Change Scan is allowed to take altogether (spec section 6.10).
+    pub pack: &'a RulePack,
     /// The Findings the last Scan raised.
     pub previous: &'a [Finding],
     /// The Tier outcomes this daemon already has.
@@ -179,6 +185,7 @@ impl FullScan<'_> {
             kind: ScanKind::Full,
             directory: self.directory,
             keys: self.keys,
+            pack: self.pack,
             plan: &survey.plan,
             descriptors: &descriptors,
             previous: self.previous,
@@ -357,6 +364,8 @@ pub struct Judgement<'a> {
     pub directory: &'a DataDirectory,
     /// The chain key behind them.
     pub keys: &'a dyn KeySource,
+    /// The compiled Rule Pack in force.
+    pub pack: &'a RulePack,
     /// The coverage this enumeration stands for.
     pub plan: &'a CoveragePlan,
     /// The adapters whose declarations a Drift decision reads.
@@ -393,14 +402,13 @@ impl Judgement<'_> {
         let held = baseline.read(self.keys)?;
 
         let declarations = Declarations::of(self.descriptors);
-        let pack = RulePack::bundled().map_err(|error| ScanError::Pack(error.to_string()))?;
         let rule_pack = Manifest::bundled().pack_version;
 
         let start = match self.kind {
             ScanKind::Change => ScanPass::change,
             _ => ScanPass::full,
         };
-        let outcome = start(&pack, &held, self.plan, &trusted, &known, &declarations)
+        let outcome = start(self.pack, &held, self.plan, &trusted, &known, &declarations)
             .caching(self.cache, rule_pack, "")
             .with_workers(self.workers)
             .at(self.at)

@@ -8,21 +8,27 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 use agentsweep_adapter_conformance::fixtures;
+use agentsweep_core::baseline::AcceptedBy;
 use agentsweep_core::chain::ChainState;
 use agentsweep_core::enforcement::Enforcement;
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::eventlog::{Actor, EventLog};
 use agentsweep_core::health::StateFileHealth;
-use agentsweep_core::item::Kind;
+use agentsweep_core::item::{ItemId, Kind, Scope};
 use agentsweep_core::keychain::{ChainKey, KeyError, KeySource, MemoryKeySource};
 use agentsweep_core::paths::DataDirectory;
+use agentsweep_core::scan_pass::ScanKind;
 use agentsweep_core::state::{StateFile, Trigger};
+use agentsweep_daemon::Tuning;
+use agentsweep_daemon::due::{self, Schedule, Stated};
 use agentsweep_daemon::full_scan::{self, Unwatched};
 use agentsweep_daemon::machine::Machine;
 use agentsweep_daemon::options::{KeySourceChoice, Options};
 use agentsweep_daemon::service::{self, Background, Daemon};
+use agentsweep_daemon::watcher::{Batch, Decision, Escalation, PATHS_PER_BATCH, Timings};
 use agentsweep_ipc::peer::{Nobody, Peer, PeerCheck, SameUser, this_user};
 use agentsweep_ipc::protocol::{Hello, Message, Refusal, Role, StateEvent, Status};
 use agentsweep_ipc::{Client, RESTART_AGENTSWEEP, connect};
@@ -157,6 +163,40 @@ impl Sandbox {
         let background = running.serve_in_the_background();
         wait_for_a_scan(background.daemon());
         background
+    }
+
+    /// The same, timed the test's way: the debounce in milliseconds rather
+    /// than in seconds, so the suite never waits out a real one.
+    fn start_tuned(&self, tuning: Tuning) -> Background {
+        let options = self.options();
+        let daemon = Daemon::open_tuned(
+            &options,
+            Arc::new(SameUser),
+            Box::new(self.keys.clone()),
+            tuning,
+        )
+        .expect("an open daemon");
+        let running = service::start_with(&options, daemon).expect("a listening daemon");
+        let background = running.serve_in_the_background();
+        wait_for_a_scan(background.daemon());
+        background
+    }
+
+    /// The Baseline as it stands, read with the key this sandbox's daemons
+    /// share.
+    fn baseline(&self) -> agentsweep_core::baseline::BaselineView {
+        agentsweep_core::baseline::Baseline::in_data_directory(&self.data())
+            .read(&self.keys)
+            .expect("a readable Baseline")
+    }
+}
+
+/// A debounce a test can wait out: a tenth of a second quiet, half a second of
+/// holding on.
+fn quick() -> Tuning {
+    Tuning {
+        watch: Timings::of(Duration::from_millis(100), Duration::from_millis(500)),
+        ..Tuning::default()
     }
 }
 
@@ -606,5 +646,273 @@ fn a_full_scan_pools_the_project_roots_the_registry_lists() {
             .iter()
             .all(|found| !found.finding.item_id.as_str().is_empty()),
         "every Finding names its Item"
+    );
+}
+
+/// A registry holding one plain MCP server and no project.
+const A_PLAIN_REGISTRY: &str = r#"{
+  "projects": {},
+  "mcpServers": {
+    "tracker": { "command": "/opt/tools/tracker", "args": ["--stdio"] }
+  }
+}
+"#;
+
+/// The same registry with a token of the right shape written into the server's
+/// environment, which Rule 0010 fires on. The value is a fixture and belongs to
+/// nobody.
+const A_REGISTRY_WITH_A_TOKEN: &str = r#"{
+  "projects": {},
+  "mcpServers": {
+    "tracker": {
+      "command": "/opt/tools/tracker",
+      "args": ["--stdio"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB" }
+    }
+  }
+}
+"#;
+
+/// Waits until something is true, for at most a minute, which is far longer
+/// than any Scan of a machine this small takes even in a debug build.
+fn until(condition: impl Fn() -> bool) -> bool {
+    for _ in 0..2_400 {
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    false
+}
+
+/// Editing an MCP server entry in the user registry while the daemon runs
+/// yields a Finding within a few seconds, and it is a Change Scan that found
+/// it rather than a Full Scan (spec section 6.4).
+#[test]
+fn an_edited_mcp_entry_is_found_by_a_change_scan() {
+    let sandbox = Sandbox::empty("edited-entry");
+    std::fs::create_dir_all(sandbox.home().join(".claude")).expect("an installed Agent");
+    std::fs::write(sandbox.home().join(".claude.json"), A_PLAIN_REGISTRY).expect("a registry");
+    let daemon = sandbox.start_tuned(quick());
+    let socket = daemon.socket();
+
+    let first = ask(&socket);
+    assert_eq!(first.scan.as_ref().expect("a Scan").kind, ScanKind::Full);
+    assert!(
+        !first
+            .findings
+            .iter()
+            .any(|found| found.source == "rule 0010"),
+        "the plain registry holds no secret: {:?}",
+        first.findings
+    );
+
+    std::fs::write(sandbox.home().join(".claude.json"), A_REGISTRY_WITH_A_TOKEN)
+        .expect("an edited registry");
+
+    assert!(
+        until(|| ask(&socket)
+            .open()
+            .any(|finding| finding.source == "rule 0010")),
+        "the watcher found the edited entry: {:?}",
+        ask(&socket).findings
+    );
+
+    let scan = ask(&socket).scan.expect("a Scan");
+    assert_eq!(scan.kind, ScanKind::Change, "no Full Scan was needed");
+    assert_eq!(scan.trigger, Trigger::Watcher);
+    assert!(scan.items >= 1, "{scan:?}");
+}
+
+/// A project that appears in the Agent's own registry while the daemon runs is
+/// pooled by the next Change Scan and bootstrapped silently: its Items are
+/// accepted as first sight, and no Drift question is asked (spec section 6.4).
+#[test]
+fn a_project_that_appears_in_the_registry_is_bootstrapped_silently() {
+    let sandbox = Sandbox::empty("new-project");
+    std::fs::create_dir_all(sandbox.home().join(".claude")).expect("an installed Agent");
+    std::fs::write(sandbox.home().join(".claude.json"), A_PLAIN_REGISTRY).expect("a registry");
+    let project = sandbox.root.join("src").join("demo");
+    std::fs::create_dir_all(&project).expect("a project");
+    std::fs::write(
+        project.join("CLAUDE.md"),
+        b"# demo\n\nRun the tests before opening a change for review.\n",
+    )
+    .expect("a project instruction file");
+
+    let daemon = sandbox.start_tuned(quick());
+    let item = ItemId::new(
+        "claude-code",
+        &Scope::Project(project.clone()),
+        Kind::InstructionFile,
+        "CLAUDE.md",
+    );
+    assert!(
+        sandbox.baseline().record(&item).is_none(),
+        "a project no registry names is never scanned"
+    );
+
+    // The user trusts the project, which is the Agent writing its own registry.
+    let registered = format!(
+        "{{\n  \"projects\": {{ {:?}: {{ \"hasTrustDialogAccepted\": true }} }},\n  \"mcpServers\": {{}}\n}}\n",
+        project.display().to_string()
+    );
+    std::fs::write(sandbox.home().join(".claude.json"), registered).expect("an edited registry");
+
+    assert!(
+        until(|| sandbox.baseline().record(&item).is_some()),
+        "the newly trusted project was enumerated"
+    );
+
+    let held = sandbox.baseline();
+    let record = held.record(&item).expect("a record");
+    assert_eq!(
+        record.accepted_by,
+        AcceptedBy::Bootstrap,
+        "its Surface was not covered before, so the Item read none"
+    );
+    assert_eq!(record.first_differed_at, None, "nothing drifted");
+    assert!(
+        held.coverage().covers(
+            "claude-code",
+            &Scope::Project(project),
+            Kind::InstructionFile
+        ),
+        "the Change Scan wrote the coverage it bootstrapped"
+    );
+
+    let status = ask(&daemon.socket());
+    assert!(
+        !status.findings.iter().any(|found| found.source == "drift"),
+        "a bootstrapped project asks nothing: {:?}",
+        status.findings
+    );
+}
+
+/// Spec section 6.4: a `Rescan` flag, a watcher error and a batch of more than
+/// two hundred paths each escalate to a Full Scan, and a batch inside the limit
+/// does not.
+#[test]
+fn a_rescan_an_error_and_an_oversized_batch_each_run_a_full_scan() {
+    let sandbox = Sandbox::with_a_planted_skill("escalation");
+    let daemon = sandbox.start_tuned(quick());
+    let latest = || daemon.daemon().status().scan.expect("a Scan");
+
+    for escalation in [
+        Escalation::Rescan,
+        Escalation::Failed("no more watches".to_string()),
+        Escalation::TooManyPaths(PATHS_PER_BATCH + 1),
+    ] {
+        let before = latest();
+        daemon.daemon().noticed(Decision::Full(escalation.clone()));
+        assert!(
+            until(|| {
+                let now = latest();
+                now.kind == ScanKind::Full
+                    && now.trigger == Trigger::Watcher
+                    && now.started_at.as_unix_ms() > before.started_at.as_unix_ms()
+                    && !daemon.daemon().health().scanning
+            }),
+            "{escalation} ran a Full Scan"
+        );
+    }
+
+    let before = latest();
+    daemon.daemon().noticed(Decision::Change(Batch::of([sandbox
+        .home()
+        .join(".claude.json")])));
+    assert!(
+        until(|| {
+            let now = latest();
+            now.kind == ScanKind::Change
+                && now.started_at.as_unix_ms() > before.started_at.as_unix_ms()
+                && !daemon.daemon().health().scanning
+        }),
+        "a batch inside the limit is a Change Scan"
+    );
+}
+
+/// The due check runs the daily Full Scan once the last completed one is a day
+/// old, and Low Power Mode holds it back until it is three days old.
+#[test]
+fn the_due_check_runs_the_daily_full_scan_and_low_power_mode_defers_it() {
+    let last = Timestamp::parse("2026-09-23T08:00:00.000Z").expect("a moment");
+    let a_day_later = Timestamp::parse("2026-09-24T08:00:00.000Z").expect("a moment");
+    let three_days_later = Timestamp::parse("2026-09-26T08:00:00.000Z").expect("a moment");
+    assert!(due::is_due(Some(last), a_day_later, false));
+    assert!(!due::is_due(Some(last), a_day_later, true));
+    assert!(due::is_due(Some(last), three_days_later, true));
+
+    // And the daemon acts on the answer: a due check asking over and over
+    // about a Full Scan that has just run starts nothing.
+    let sandbox = Sandbox::empty("due");
+    let daemon = sandbox.start_tuned(Tuning {
+        watch: Timings::of(Duration::from_millis(100), Duration::from_millis(500)),
+        due: Schedule {
+            every: Duration::from_millis(20),
+            slice: Duration::from_millis(5),
+            ..Schedule::default()
+        },
+        power: Arc::new(Stated(false)),
+        ..Tuning::default()
+    });
+    let first = daemon.daemon().status().scan.expect("a Scan");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        daemon.daemon().status().scan.expect("a Scan").started_at,
+        first.started_at,
+        "a Full Scan minutes old is not due, however often the check asks"
+    );
+}
+
+/// The evaluation cache fills on the first Full Scan and is read by the next
+/// one, and the clearing seam empties it (spec section 6.4).
+#[test]
+fn the_evaluation_cache_fills_and_has_a_seam_a_new_rule_pack_empties() {
+    let sandbox = Sandbox::with_a_planted_skill("evaluation-cache");
+    let daemon = sandbox.start_tuned(quick());
+    assert!(
+        !daemon.daemon().evaluation_cache().is_empty(),
+        "the first Full Scan filled the cache"
+    );
+
+    // The first Full Scan bootstraps the Baseline, so the second sees `none`
+    // become `unchanged` and that is a key of its own. By the third the facts
+    // have settled, and a Full Scan over settled facts runs no Tier at all.
+    let mut client = Client::connect_at(&daemon.socket(), Role::Cli).expect("a client");
+    client.scan_now().expect("a Full Scan");
+    assert!(until(|| !daemon.daemon().health().scanning));
+    let settled = daemon.daemon().evaluation_cache().len();
+
+    client.scan_now().expect("another Full Scan");
+    assert!(until(|| !daemon.daemon().health().scanning));
+    assert_eq!(
+        daemon.daemon().evaluation_cache().len(),
+        settled,
+        "the third Full Scan found every key it needed"
+    );
+
+    daemon.daemon().forget_evaluations();
+    assert!(
+        daemon.daemon().evaluation_cache().is_empty(),
+        "the seam empties it"
+    );
+}
+
+/// The watcher follows the roots the Full Scan declared.
+#[test]
+fn the_watcher_follows_what_the_full_scan_declared() {
+    let sandbox = Sandbox::with_a_planted_skill("watch-roots");
+    let daemon = sandbox.start_tuned(quick());
+    assert!(
+        until(|| daemon.daemon().watching().all().count() > 0),
+        "the Full Scan declared watch roots and the watcher took them"
+    );
+    let watched = daemon.daemon().watching();
+    assert!(
+        watched
+            .all()
+            .any(|root| root.starts_with(sandbox.home().join(".claude"))),
+        "{watched:?}"
     );
 }

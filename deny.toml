@@ -49,6 +49,11 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MIT",
+    # The BSD Zero Clause License: the two-clause licence with both clauses
+    # struck out, so it obliges a binary to carry neither a notice nor a
+    # copyright line. It asks strictly less than MIT, which is allowed above.
+    # It reaches the bundle through the Unix socket crate and its helpers.
+    "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",

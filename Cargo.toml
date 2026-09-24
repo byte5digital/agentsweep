@@ -4,6 +4,7 @@ members = [
     "crates/core",
     "crates/cli",
     "crates/daemon",
+    "crates/ipc",
     "crates/adapters/claude-code",
     "crates/adapters/codex",
     "crates/adapters/workspace",
@@ -24,6 +25,7 @@ authors = ["The AgentSweep contributors"]
 
 [workspace.dependencies]
 agentsweep-core = { version = "0.1.0", path = "crates/core" }
+agentsweep-ipc = { version = "0.1.0", path = "crates/ipc" }
 agentsweep-adapter-claude-code = { version = "0.1.0", path = "crates/adapters/claude-code" }
 agentsweep-adapter-codex = { version = "0.1.0", path = "crates/adapters/codex" }
 agentsweep-adapter-workspace = { version = "0.1.0", path = "crates/adapters/workspace" }

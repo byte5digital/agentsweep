@@ -1,0 +1,29 @@
+[package]
+name = "agentsweep-ipc"
+description = "The AgentSweep inter-process vocabulary: the socket, the length-prefixed JSON frame, the hello handshake and the closed list of requests, responses and state events."
+# The vocabulary the daemon, the application and the in-bundle command line
+# interface share. It reaches crates.io with none of them.
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The domain the protocol carries: Health, the Scan summary and the Findings
+# the daemon derived. Never the `daemon` feature: a client speaks this
+# vocabulary and writes no store.
+agentsweep-core.workspace = true
+# The Unix socket, as the specification names it (section 6.1). The blocking
+# API: nothing in AgentSweep is asynchronous and a Scan is processor-bound, so
+# the daemon serves each connection on a thread of its own.
+interprocess = "2.4.4"
+# The peer's process id and audit token, which no portable API answers. Only
+# the server side asks.
+libc = "0.2.180"
+serde_json = "1.0.151"
+
+[dev-dependencies]
+tempfile = "3.27.0"

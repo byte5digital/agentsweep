@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
 
+use crate::adapter::{Problem, ProblemReason};
 use crate::derived::{QuarantineManifest, TrustTable};
 use crate::item::{ItemId, Kind};
 
@@ -180,6 +181,10 @@ pub enum Source {
     /// in the Suspicious Band. The Finding is about the Item, not about one
     /// Rule, and the number is Developer Posture detail.
     Score(i64),
+    /// A path no adapter could turn into an Item (spec section 3.3). No Rule
+    /// ever ran over it, which is the whole point: what was not read cannot be
+    /// called clear.
+    Problem(ProblemReason),
 }
 
 impl fmt::Display for Source {
@@ -187,6 +192,7 @@ impl fmt::Display for Source {
         match self {
             Source::Rule(id) => write!(f, "rule {id:04}"),
             Source::Score(score) => write!(f, "score {score}"),
+            Source::Problem(reason) => write!(f, "problem {}", reason.as_str()),
         }
     }
 }
@@ -260,6 +266,40 @@ pub struct Finding {
 }
 
 impl Finding {
+    /// The informational Exposure Finding one Problem becomes (spec section
+    /// 3.3).
+    ///
+    /// A path an adapter could not turn into an Item was never read by a Rule,
+    /// so a Scan that says nothing about it would be claiming to have seen
+    /// what it did not: a tree over the caps, an unreadable settings file and
+    /// a Surface shape this version does not support all have to keep a folder
+    /// from counting as clear. It is Exposure, because nobody planted it, and
+    /// low, because the answer is "look yourself" rather than "something is
+    /// wrong". The Tier is the deterministic one: nothing here was guessed,
+    /// and the Source says the observation is a Problem rather than a Rule.
+    pub fn of_problem(problem: &Problem) -> Finding {
+        let path = problem.path.display().to_string();
+        let item_id = match problem.kind {
+            Some(kind) => ItemId::from_recorded(&format!("{}/{path}", kind.id_segment())),
+            None => ItemId::from_recorded(&path),
+        };
+        Finding {
+            item_id,
+            source: Source::Problem(problem.reason),
+            content_hash: String::new(),
+            category: Category::Exposure,
+            severity: Severity::Low,
+            tier: Tier::Rules,
+            status: RuleStatus::Stable,
+            title: format!("{} at {}", problem.reason.title(), problem.surface),
+            plain: problem.reason.plain().to_string(),
+            sensitive: false,
+            file: String::new(),
+            matches: Vec::new(),
+            heuristics: Vec::new(),
+        }
+    }
+
     /// True when the Rule behind the Finding is still on Probation, which is
     /// what keeps it from quarantining by itself.
     pub fn on_probation(&self) -> bool {

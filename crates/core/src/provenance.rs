@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::adapter::Enumeration;
-use crate::item::{Item, Kind, Provenance, Scope};
+use crate::item::{Item, Kind, Provenance, Scope, Shape};
 
 /// What one project root's git files say about the files in it.
 #[derive(Clone, Debug)]
@@ -50,6 +50,38 @@ impl RepositoryProvenance {
     /// True when the index tracks this repository-relative path.
     pub fn tracks(&self, relative: &str) -> bool {
         self.tracked.contains(relative)
+    }
+
+    /// True when the index tracks anything below this repository-relative
+    /// directory.
+    ///
+    /// A git index holds files and never the directories above them, so a tree
+    /// Item, which is a directory, would otherwise never carry Repository
+    /// Provenance however much of it the repository committed. A skill folder
+    /// with one committed file in it came with the clone, which is what the
+    /// class 2 Rules are about.
+    pub fn tracks_under(&self, relative: &str) -> bool {
+        if relative.is_empty() {
+            return !self.tracked.is_empty();
+        }
+        let prefix = format!("{relative}/");
+        self.tracked
+            .range(prefix.clone()..)
+            .next()
+            .is_some_and(|tracked| tracked.starts_with(&prefix))
+    }
+
+    /// The Provenance of one repository-relative directory: Repository with
+    /// the HEAD commit when the index tracks a path below it, Manual when it
+    /// tracks none.
+    pub fn of_directory(&self, relative: &str) -> Provenance {
+        if self.tracks_under(relative) {
+            Provenance::Repository {
+                commit: self.commit.clone(),
+            }
+        } else {
+            Provenance::Manual
+        }
     }
 
     /// The Provenance of one repository-relative path: Repository with the
@@ -108,6 +140,14 @@ impl Provenances {
         Some(repository.of(&slashed(relative)))
     }
 
+    /// The same for a directory, which the index never holds a line of its
+    /// own for: it is the repository's when the index tracks a path below it.
+    pub fn of_directory(&self, root: &Path, path: &Path) -> Option<Provenance> {
+        let repository = self.by_root.get(root)?;
+        let relative = path.strip_prefix(root).ok()?;
+        Some(repository.of_directory(&slashed(relative)))
+    }
+
     /// Stamps Repository Provenance onto one Item.
     ///
     /// Only a project-scope Item whose adapter left the Provenance undetermined
@@ -116,6 +156,9 @@ impl Provenances {
     /// left alone as well, because `.git` is never tracked by the repository it
     /// belongs to and "placed by hand" would be the wrong thing to say about
     /// a file that arrived with a clone.
+    ///
+    /// A tree Item is a directory, and the index tracks files only, so it is
+    /// the repository's when the index tracks anything below it.
     pub fn stamp_item(&self, item: &mut Item) {
         if item.provenance != Provenance::Unknown || item.kind == Kind::RepositoryMetadata {
             return;
@@ -123,7 +166,11 @@ impl Provenances {
         let Scope::Project(root) = item.scope.clone() else {
             return;
         };
-        if let Some(provenance) = self.of(&root, &item.path) {
+        let stamped = match item.shape {
+            Shape::Tree => self.of_directory(&root, &item.path),
+            _ => self.of(&root, &item.path),
+        };
+        if let Some(provenance) = stamped {
             item.provenance = provenance;
         }
     }
@@ -267,6 +314,67 @@ mod tests {
         provenances().stamp(&mut enumeration);
         assert_eq!(enumeration.items[0].provenance.as_str(), "repository");
         assert_eq!(enumeration.items[1].provenance.as_str(), "manual");
+    }
+
+    /// The index holds files and never the directories above them, so a skill
+    /// folder that came with the clone is Repository Provenance only once a
+    /// directory is looked up as the directory it is.
+    #[test]
+    fn a_tree_is_the_repositorys_when_the_index_tracks_a_file_below_it() {
+        let mut provenances = Provenances::new();
+        provenances.insert(
+            PathBuf::from("/src/demo"),
+            RepositoryProvenance::new(
+                "c0ffee",
+                [
+                    ".claude/skills/deploy/SKILL.md".to_string(),
+                    ".claude/skills/deploy/scripts/run.sh".to_string(),
+                ],
+            ),
+        );
+
+        let mut tree = Item::tree(
+            "claude-code",
+            Scope::Project(PathBuf::from("/src/demo")),
+            Kind::Skill,
+            ".claude/skills/deploy",
+            PathBuf::from("/src/demo/.claude/skills/deploy"),
+            Provenance::Unknown,
+            Activation::Active,
+            crate::item::Tree::default(),
+        );
+        provenances.stamp_item(&mut tree);
+        assert_eq!(
+            tree.provenance,
+            Provenance::Repository {
+                commit: "c0ffee".to_string()
+            }
+        );
+
+        let mut own = Item::tree(
+            "claude-code",
+            Scope::Project(PathBuf::from("/src/demo")),
+            Kind::Skill,
+            ".claude/skills/notes",
+            PathBuf::from("/src/demo/.claude/skills/notes"),
+            Provenance::Unknown,
+            Activation::Active,
+            crate::item::Tree::default(),
+        );
+        provenances.stamp_item(&mut own);
+        assert_eq!(own.provenance, Provenance::Manual);
+    }
+
+    /// A directory whose name only begins like a tracked one is not that
+    /// directory: `deploy-old` is not below `deploy`.
+    #[test]
+    fn a_directory_that_only_shares_a_prefix_with_a_tracked_path_is_not_tracked() {
+        let repository =
+            RepositoryProvenance::new("c0ffee", [".claude/skills/deploy/SKILL.md".to_string()]);
+        assert!(repository.tracks_under(".claude/skills/deploy"));
+        assert!(repository.tracks_under(".claude/skills"));
+        assert!(!repository.tracks_under(".claude/skills/deploy-old"));
+        assert!(!repository.tracks_under(".claude/skills/deploy/SKILL.md"));
     }
 
     #[test]

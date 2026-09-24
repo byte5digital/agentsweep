@@ -276,11 +276,13 @@ fn fired_heuristic_of(meta: &RuleMeta, hit: &RuleHit) -> FiredHeuristic {
     }
 }
 
-/// Findings read in Rule order, with the Item's own Band Finding last.
+/// Findings read in Rule order, with the Item's own Band Finding last. A
+/// Problem never reaches this: it belongs to no Item and the Scan appends it.
 fn order(finding: &Finding) -> (u8, i64) {
     match finding.source {
         Source::Rule(id) => (0, id),
         Source::Score(score) => (1, score),
+        Source::Problem(_) => (2, 0),
     }
 }
 

@@ -212,6 +212,42 @@ pub enum ProblemReason {
     Unsupported,
 }
 
+impl ProblemReason {
+    /// The spelling a Finding's Source carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProblemReason::Unreadable => "unreadable",
+            ProblemReason::Unparseable => "unparseable",
+            ProblemReason::Unsupported => "unsupported",
+        }
+    }
+
+    /// The developer-facing one line of the Finding the core makes from it.
+    pub fn title(self) -> &'static str {
+        match self {
+            ProblemReason::Unreadable => "A Surface that could not be read",
+            ProblemReason::Unparseable => "A Surface that could not be parsed",
+            ProblemReason::Unsupported => "A Surface that could not be checked fully",
+        }
+    }
+
+    /// The one sentence the Simple Posture shows. It says what was not done,
+    /// never that anything is wrong.
+    pub fn plain(self) -> &'static str {
+        match self {
+            ProblemReason::Unreadable => {
+                "AgentSweep could not read this, so it has not been checked."
+            }
+            ProblemReason::Unparseable => {
+                "AgentSweep could not make sense of this file, so it has not been checked."
+            }
+            ProblemReason::Unsupported => {
+                "This is too large for AgentSweep to check all the way through."
+            }
+        }
+    }
+}
+
 /// One path an adapter could not turn into an Item. The core makes an
 /// informational Exposure Finding from it.
 #[derive(Clone, Debug)]

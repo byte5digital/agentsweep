@@ -190,7 +190,8 @@ pub struct ScanReport {
 impl ScanReport {
     /// True when nothing was found, which for a Folder Scan is the answer
     /// "safe to open". The Ambiguous Band is not a Finding and does not
-    /// change the answer.
+    /// change the answer; a Problem is one, so a Surface that could not be
+    /// read all the way through never counts as clear (spec section 3.3).
     pub fn is_clear(&self) -> bool {
         self.findings.is_empty()
     }
@@ -224,6 +225,11 @@ pub fn scan_enumeration(
         report.findings.extend(assessment.findings.iter().cloned());
         report.assessments.push(assessment);
     }
+    // A path that never became an Item was never scanned, and the core says so
+    // rather than letting silence pass for an all-clear (spec section 3.3).
+    report
+        .findings
+        .extend(enumeration.problems.iter().map(Finding::of_problem));
     Ok(report)
 }
 
@@ -296,6 +302,34 @@ mod tests {
         assert_eq!(findings[0].source, Source::Rule(1));
         assert!(findings[0].on_probation());
         assert!(!findings[0].matches.is_empty());
+    }
+
+    /// Spec section 3.3: the core makes an informational Exposure Finding from
+    /// a Problem, so a tree too large to check fully never counts as clear.
+    #[test]
+    fn a_problem_is_an_informational_exposure_finding_and_the_scan_is_not_clear() {
+        let pack = RulePack::bundled().expect("the bundled pack compiles");
+        let enumeration = Enumeration {
+            items: vec![instruction_file("# demo\n")],
+            problems: vec![Problem {
+                surface: "~/.claude/skills/huge".to_string(),
+                path: PathBuf::from("/home/u/.claude/skills/huge"),
+                kind: Some(Kind::Skill),
+                reason: crate::adapter::ProblemReason::Unsupported,
+            }],
+        };
+
+        let report = scan_enumeration(&pack, &enumeration).expect("the scan runs");
+        assert_eq!(report.findings.len(), 1);
+        let finding = &report.findings[0];
+        assert_eq!(
+            finding.source,
+            Source::Problem(crate::adapter::ProblemReason::Unsupported)
+        );
+        assert_eq!(finding.category, crate::finding::Category::Exposure);
+        assert_eq!(finding.severity, crate::finding::Severity::Low);
+        assert!(finding.plain.contains("too large"), "{}", finding.plain);
+        assert!(!report.is_clear());
     }
 
     #[test]

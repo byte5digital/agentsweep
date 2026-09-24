@@ -57,15 +57,8 @@ pub fn render(root: &Path, report: &ScanReport) -> String {
         count(report.findings.len(), "Finding", "Findings")
     );
 
-    for problem in &report.problems {
-        let _ = writeln!(
-            out,
-            "\n{} could not be checked ({:?}).",
-            problem.path.display(),
-            problem.reason
-        );
-    }
-
+    // A Problem is one of the Findings below, because a path that was never
+    // read may not pass for a clean one (spec section 3.3).
     let mut current = "";
     for finding in &report.findings {
         let _ = writeln!(out);
@@ -218,7 +211,7 @@ mod tests {
             .iter()
             .filter_map(|finding| match finding.source {
                 Source::Rule(id) => Some(id),
-                Source::Score(_) => None,
+                _ => None,
             })
             .collect()
     }
@@ -321,6 +314,35 @@ mod tests {
         assert!(rendered.contains("1 Item, no Findings."), "{rendered}");
         assert!(rendered.contains("Safe to open."), "{rendered}");
         assert_eq!(exit_code(&report), 0);
+
+        fs::remove_dir_all(&root).expect("the temporary folder goes away");
+    }
+
+    /// Spec section 3.3: a Surface AgentSweep could not read all the way
+    /// through is an informational Exposure Finding, so the answer is "do not
+    /// open yet" rather than a silence that reads like an all-clear.
+    #[test]
+    fn a_surface_that_could_not_be_read_is_not_safe_to_open() {
+        let root = temporary_root("problem");
+        fs::create_dir_all(root.join(".claude")).expect("a config directory");
+        fs::write(root.join(".claude/settings.json"), b"{\"hooks\": [,,]\n")
+            .expect("a settings file nothing can parse");
+
+        let (scanned, report) = folder_scan(&root).expect("the Folder Scan runs");
+        let rendered = render(&scanned, &report);
+
+        assert!(!report.problems.is_empty(), "{rendered}");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| matches!(finding.source, Source::Problem(_))),
+            "{rendered}"
+        );
+        assert!(!report.is_clear(), "{rendered}");
+        assert!(rendered.contains("Do not open yet."), "{rendered}");
+        assert!(rendered.contains("could not"), "{rendered}");
+        assert_ne!(exit_code(&report), 0);
 
         fs::remove_dir_all(&root).expect("the temporary folder goes away");
     }

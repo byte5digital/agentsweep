@@ -90,7 +90,7 @@ fn every_planted_instruction_file_fires_its_rule() {
             .iter()
             .filter_map(|finding| match finding.source {
                 Source::Rule(id) => Some(id),
-                Source::Score(_) => None,
+                _ => None,
             })
             .collect();
         assert!(
@@ -146,7 +146,7 @@ fn a_rule_that_does_not_declare_the_kind_never_reaches_the_item() {
         .iter()
         .filter_map(|finding| match finding.source {
             Source::Rule(id) => Some(id),
-            Source::Score(_) => None,
+            _ => None,
         })
         .collect();
     assert!(

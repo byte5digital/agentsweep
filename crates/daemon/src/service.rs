@@ -442,10 +442,7 @@ impl Daemon {
                 }
             }
             Work::Change(batch) => {
-                self.publish(StateEvent::ScanStarted {
-                    trigger: Trigger::Watcher,
-                    at: Timestamp::now(),
-                });
+                let at = Timestamp::now();
                 let pooled = self.pooled_roots();
                 let run = ChangeScan {
                     machine: &self.machine,
@@ -459,7 +456,18 @@ impl Daemon {
                 }
                 .run(&batch);
                 match run {
-                    Ok(run) => self.took(run),
+                    // A batch about no Item is not a Scan, so nobody is told
+                    // one started: the start is published here rather than
+                    // before the batch is mapped, because only the mapping can
+                    // say whether there was anything to scan.
+                    Ok(None) => {}
+                    Ok(Some(run)) => {
+                        self.publish(StateEvent::ScanStarted {
+                            trigger: Trigger::Watcher,
+                            at,
+                        });
+                        self.took(run);
+                    }
                     Err(error) => say!("the Change Scan failed: {error}"),
                 }
             }
@@ -571,6 +579,9 @@ impl Daemon {
         // Only a Full Scan recomputes the watch roots, and housekeeping runs
         // behind one and behind nothing else.
         if whole {
+            // A Full Scan saw every Item there is, so an outcome it did not
+            // ask about is one for content that is no longer anywhere.
+            self.cache.sweep();
             self.follow(&run.watch_roots);
             self.compact(&run);
         }
@@ -586,14 +597,17 @@ impl Daemon {
     /// with the Scan that stopped declaring it and FSEvents keeps following a
     /// stream nobody asked about any more.
     fn follow(self: &Arc<Daemon>, roots: &WatchRoots) {
+        let mut held = self.watch.lock().expect("the watcher is not poisoned");
+        // The old one goes before the new one starts, so no batch is ever
+        // reported twice and no stream is left following a root this Scan
+        // stopped declaring.
+        *held = None;
         let weak = Arc::downgrade(self);
         let started = watcher::watch(roots, self.tuning.watch, move |decision| {
             if let Some(daemon) = weak.upgrade() {
                 daemon.noticed(decision);
             }
         });
-        let mut held = self.watch.lock().expect("the watcher is not poisoned");
-        *held = None;
         match started {
             Ok(watch) => {
                 say!(

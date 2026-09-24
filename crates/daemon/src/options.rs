@@ -34,7 +34,12 @@ Developer only, off unless asked for by name:
                            wherever it was copied to. A `system` directory
                            beside it stands in for the Managed layers.
   --key-source <memory>    Hold the chain key in this process instead of in the
-                           login Keychain. Nothing survives the run.";
+                           login Keychain. Nothing survives the run.
+  --developer-budgets      Measure the Scan budgets of the specification
+                           against this home, print them and stop. Binds no
+                           socket and starts neither the watcher nor the due
+                           check. Takes a data directory of its own and
+                           `--key-source memory`.";
 
 /// Where the chain key comes from.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -72,6 +77,8 @@ impl KeySourceChoice {
 pub enum Invocation {
     /// Run the daemon.
     Run(Box<Options>),
+    /// Measure the Scan budgets against this machine and stop.
+    Budgets(Box<Options>),
     /// Print the version and stop.
     Version,
     /// Print the usage and stop.
@@ -164,6 +171,7 @@ pub fn parse(arguments: &[String]) -> Result<Invocation, OptionsError> {
     };
     let mut data_dir: Option<PathBuf> = None;
 
+    let mut budgets = false;
     let mut rest = arguments.iter();
     while let Some(argument) = rest.next() {
         let mut value = |flag: &str| -> Result<String, OptionsError> {
@@ -174,6 +182,7 @@ pub fn parse(arguments: &[String]) -> Result<Invocation, OptionsError> {
         match argument.as_str() {
             "--help" | "-h" => return Ok(Invocation::Help),
             "--version" | "-V" => return Ok(Invocation::Version),
+            "--developer-budgets" => budgets = true,
             "--data-dir" => data_dir = Some(PathBuf::from(value("--data-dir")?)),
             "--socket" => options.socket = PathBuf::from(value("--socket")?),
             "--home" => options.home = Some(PathBuf::from(value("--home")?)),
@@ -193,7 +202,10 @@ pub fn parse(arguments: &[String]) -> Result<Invocation, OptionsError> {
         Some(named) => DataDirectory::at(named),
         None => DataDirectory::for_user().ok_or(OptionsError::NoHome)?,
     };
-    Ok(Invocation::Run(Box::new(options)))
+    match budgets {
+        true => Ok(Invocation::Budgets(Box::new(options))),
+        false => Ok(Invocation::Run(Box::new(options))),
+    }
 }
 
 #[cfg(test)]
@@ -284,7 +296,13 @@ mod tests {
     #[test]
     fn the_developer_flags_are_marked_developer_only_where_a_person_sees_them() {
         assert!(USAGE.contains("Developer only"), "{USAGE}");
-        for flag in ["--data-dir", "--socket", "--home", "--key-source"] {
+        for flag in [
+            "--data-dir",
+            "--socket",
+            "--home",
+            "--key-source",
+            "--developer-budgets",
+        ] {
             assert!(USAGE.contains(flag), "{USAGE}");
         }
         assert_eq!(KeySourceChoice::default(), KeySourceChoice::Keychain);

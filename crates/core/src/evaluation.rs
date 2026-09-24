@@ -21,7 +21,7 @@
 //! it is about, so reusing one across two Items that happen to hold the same
 //! bytes would hand the second Item the first one's Findings.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use crate::heuristics::Assessment;
@@ -102,6 +102,7 @@ impl Evaluations for NoCache {
 #[derive(Debug, Default)]
 pub struct EvaluationCache {
     held: Mutex<HashMap<EvaluationKey, Assessment>>,
+    used: Mutex<HashSet<EvaluationKey>>,
 }
 
 impl EvaluationCache {
@@ -117,6 +118,22 @@ impl EvaluationCache {
     /// in force, whatever the pack version says (spec section 6.4).
     pub fn clear(&self) {
         self.held.lock().expect("the cache is not poisoned").clear();
+        self.used.lock().expect("the cache is not poisoned").clear();
+    }
+
+    /// Keeps only what has been asked for since the last sweep.
+    ///
+    /// A Full Scan is the only caller: it saw every Item there is, so a key it
+    /// did not ask about is a key for content that is no longer anywhere, and
+    /// an Item that changes every day would otherwise leave one outcome per
+    /// day behind it for as long as the daemon runs.
+    pub fn sweep(&self) {
+        let mut used = self.used.lock().expect("the cache is not poisoned");
+        self.held
+            .lock()
+            .expect("the cache is not poisoned")
+            .retain(|key, _| used.contains(key));
+        used.clear();
     }
 
     /// How many outcomes are held.
@@ -132,14 +149,26 @@ impl EvaluationCache {
 
 impl Evaluations for EvaluationCache {
     fn lookup(&self, key: &EvaluationKey) -> Option<Assessment> {
-        self.held
+        let held = self
+            .held
             .lock()
             .expect("the cache is not poisoned")
             .get(key)
-            .cloned()
+            .cloned();
+        if held.is_some() {
+            self.used
+                .lock()
+                .expect("the cache is not poisoned")
+                .insert(key.clone());
+        }
+        held
     }
 
     fn remember(&self, key: EvaluationKey, assessment: Assessment) {
+        self.used
+            .lock()
+            .expect("the cache is not poisoned")
+            .insert(key.clone());
         self.held
             .lock()
             .expect("the cache is not poisoned")
@@ -255,6 +284,32 @@ mod tests {
             EvaluationKey::of(&one, BaselineState::Unchanged, 1, ""),
             EvaluationKey::of(&other, BaselineState::Unchanged, 1, "")
         );
+    }
+
+    /// A sweep keeps what the Scan asked about and drops what it did not, so
+    /// an Item that changes every day leaves one outcome behind rather than
+    /// one a day.
+    #[test]
+    fn a_sweep_keeps_only_what_the_last_scan_asked_about() {
+        let cache = EvaluationCache::new();
+        let yesterday = instruction_file("a.md", "# hello\n");
+        let today = instruction_file("a.md", "# hello again\n");
+        let yesterdays = EvaluationKey::of(&yesterday, BaselineState::Unchanged, 1, "");
+        let todays = EvaluationKey::of(&today, BaselineState::Changed, 1, "");
+
+        cache.remember(yesterdays.clone(), assessment(&yesterday));
+        cache.sweep();
+        assert_eq!(cache.len(), 1, "what was just asked about is kept");
+
+        cache.remember(todays.clone(), assessment(&today));
+        cache.sweep();
+        assert_eq!(cache.len(), 1);
+        assert!(cache.lookup(&yesterdays).is_none(), "yesterday is gone");
+        assert!(cache.lookup(&todays).is_some());
+
+        // A key that was only read, never written, counts as asked about.
+        cache.sweep();
+        assert_eq!(cache.len(), 1);
     }
 
     /// A pack change empties the cache, which is the seam the Rule Pack

@@ -58,7 +58,14 @@ pub struct ChangeScan<'a> {
 
 impl ChangeScan<'_> {
     /// Scans the Items behind one batch of changed paths.
-    pub fn run(&self, batch: &Batch) -> Result<ScanRun, ScanError> {
+    ///
+    /// Answers with nothing when the batch turned out to be about no Item at
+    /// all. A watched root holds more than Surfaces: an Agent writes its own
+    /// transcripts, its todo lists and its shell snapshots inside the very
+    /// directory its skills and settings live in, and none of that is an Item.
+    /// Such a batch is a Scan of nothing, and a Scan of nothing is not worth a
+    /// line in the Scan history, a state file write or an event.
+    pub fn run(&self, batch: &Batch) -> Result<Option<ScanRun>, ScanError> {
         let started_at = Timestamp::now();
         let began = std::time::Instant::now();
 
@@ -108,6 +115,10 @@ impl ChangeScan<'_> {
             .problems
             .retain(|problem| told_about(&problem.path, batch, &bootstrapped));
 
+        if survey.enumeration.items.is_empty() && survey.enumeration.problems.is_empty() {
+            return Ok(None);
+        }
+
         // Only the Findings about Items this Scan looks at may be declared
         // gone by it; the rest are not its business and are handed back as
         // they were.
@@ -137,7 +148,7 @@ impl ChangeScan<'_> {
         }
         .over(&mut survey.enumeration, began)?;
 
-        Ok(ScanRun {
+        Ok(Some(ScanRun {
             summary: judged.summary,
             standing: judged.standing,
             raised: judged.raised,
@@ -150,7 +161,7 @@ impl ChangeScan<'_> {
             events: judged.events,
             baseline: judged.baseline,
             last_compaction: judged.last_compaction,
-        })
+        }))
     }
 }
 

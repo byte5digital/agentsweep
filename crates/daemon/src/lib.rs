@@ -23,6 +23,7 @@
 
 #![warn(missing_docs)]
 
+pub mod budgets;
 pub mod change_scan;
 pub mod due;
 pub mod full_scan;

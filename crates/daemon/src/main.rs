@@ -37,6 +37,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Invocation::Budgets(options) => match agentsweep_daemon::budgets::measure(&options) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("agentsweepd: {error}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 

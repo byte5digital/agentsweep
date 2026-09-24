@@ -820,7 +820,7 @@ fn a_rescan_an_error_and_an_oversized_batch_each_run_a_full_scan() {
     let before = latest();
     daemon.daemon().noticed(Decision::Change(Batch::of([sandbox
         .home()
-        .join(".claude.json")])));
+        .join(".claude/skills/setup/SKILL.md")])));
     assert!(
         until(|| {
             let now = latest();
@@ -829,6 +829,34 @@ fn a_rescan_an_error_and_an_oversized_batch_each_run_a_full_scan() {
                 && !daemon.daemon().health().scanning
         }),
         "a batch inside the limit is a Change Scan"
+    );
+}
+
+/// A watched root holds more than Surfaces: an Agent writes its transcripts
+/// and its todo lists in the very directory its skills live in. A batch about
+/// nothing but those is a Scan of nothing, and a Scan of nothing leaves no line
+/// in the Scan history.
+#[test]
+fn a_batch_about_no_item_is_not_a_scan_at_all() {
+    let sandbox = Sandbox::with_a_planted_skill("nothing-to-scan");
+    let churn = sandbox.home().join(".claude/todos");
+    std::fs::create_dir_all(&churn).expect("a todo directory");
+    std::fs::write(churn.join("one.json"), b"[]\n").expect("a todo list");
+
+    let daemon = sandbox.start_tuned(quick());
+    let before = daemon.daemon().status().scan.expect("a Scan");
+
+    daemon
+        .daemon()
+        .noticed(Decision::Change(Batch::of([churn.join("one.json")])));
+    // Long enough for a Change Scan of this machine to have finished twice.
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert!(until(|| !daemon.daemon().health().scanning));
+
+    let after = daemon.daemon().status().scan.expect("a Scan");
+    assert_eq!(
+        after.started_at, before.started_at,
+        "nothing was recorded for a batch about no Item"
     );
 }
 
@@ -877,8 +905,9 @@ fn the_evaluation_cache_fills_and_has_a_seam_a_new_rule_pack_empties() {
     );
 
     // The first Full Scan bootstraps the Baseline, so the second sees `none`
-    // become `unchanged` and that is a key of its own. By the third the facts
-    // have settled, and a Full Scan over settled facts runs no Tier at all.
+    // become `unchanged` and that is a key of its own; the sweep behind it
+    // drops the key nothing asked about any more. By the third the facts have
+    // settled, and a Full Scan over settled facts runs no Tier at all.
     let mut client = Client::connect_at(&daemon.socket(), Role::Cli).expect("a client");
     client.scan_now().expect("a Full Scan");
     assert!(until(|| !daemon.daemon().health().scanning));
@@ -889,7 +918,7 @@ fn the_evaluation_cache_fills_and_has_a_seam_a_new_rule_pack_empties() {
     assert_eq!(
         daemon.daemon().evaluation_cache().len(),
         settled,
-        "the third Full Scan found every key it needed"
+        "the third Full Scan found every key it needed and left no more behind"
     );
 
     daemon.daemon().forget_evaluations();

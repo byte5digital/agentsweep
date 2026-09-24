@@ -326,13 +326,30 @@ pub fn current_hash(
 /// that settled on something else is never quarantined: the Finding belongs to
 /// the content it was raised on.
 pub fn compare_and_swap(host: &Host, plan: &MoveOutPlan<'_>) -> Result<(), EnforcementError> {
+    settled(plan.expected_hash, plan.contents, &mut || {
+        current_hash(host, plan.contents, plan.shape, plan.caps)
+    })
+}
+
+/// The retry of the compare-and-swap on its own, apart from where the hash
+/// comes from.
+///
+/// Content that is caught halfway through somebody else's write cannot be
+/// written on purpose, so the seam is where the hash is read: a test hands it
+/// content that settles and content that never does, and both paths are then
+/// the ones a Quarantine really takes.
+fn settled(
+    expected: &str,
+    path: &Path,
+    read: &mut dyn FnMut() -> Result<String, EnforcementError>,
+) -> Result<(), EnforcementError> {
     for _ in 0..2 {
-        if current_hash(host, plan.contents, plan.shape, plan.caps)? == plan.expected_hash {
+        if read()? == expected {
             return Ok(());
         }
     }
     Err(EnforcementError::FileIsChanging {
-        path: plan.contents.to_path_buf(),
+        path: path.to_path_buf(),
     })
 }
 
@@ -1166,6 +1183,36 @@ mod tests {
             detail: String::new(),
         };
         assert!(compare_and_swap(&bench.host, &plan).is_ok());
+    }
+
+    #[test]
+    fn content_that_settles_between_the_two_reads_is_the_content_the_finding_was_about() {
+        use std::cell::Cell;
+
+        // A file caught halfway through somebody else's write hashes to
+        // nothing in particular once and to what the enumeration saw on the
+        // read after it, and is quarantined.
+        let reads = Cell::new(0);
+        let settling = settled("settled", Path::new("/nowhere"), &mut || {
+            reads.set(reads.get() + 1);
+            Ok(match reads.get() {
+                1 => "halfway through a write".to_string(),
+                _ => "settled".to_string(),
+            })
+        });
+        assert!(settling.is_ok(), "{settling:?}");
+        assert_eq!(reads.get(), 2, "the read was not retried");
+
+        // Content that settled on something else is never quarantined, and it
+        // is read exactly once more before the action gives up.
+        let reads = Cell::new(0);
+        let error = settled("settled", Path::new("/nowhere"), &mut || {
+            reads.set(reads.get() + 1);
+            Ok("something else entirely".to_string())
+        })
+        .expect_err("a refusal");
+        assert!(matches!(error, EnforcementError::FileIsChanging { .. }));
+        assert_eq!(reads.get(), 2, "the read was retried more than once");
     }
 
     #[test]

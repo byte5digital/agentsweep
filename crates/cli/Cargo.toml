@@ -19,6 +19,9 @@ agentsweep-adapter-claude-code.workspace = true
 agentsweep-adapter-codex.workspace = true
 agentsweep-adapter-workspace.workspace = true
 agentsweep-core.workspace = true
+# The vocabulary the daemon speaks. It is not the daemon: this crate links the
+# protocol and the client, never the write side of a store (ADR 0008).
+agentsweep-ipc.workspace = true
 
 [dev-dependencies]
 # The repository the Folder Scan tests point at is written by this builder,

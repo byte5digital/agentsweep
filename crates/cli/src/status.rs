@@ -1,0 +1,332 @@
+//! `agentsweep status`: what the daemon found, as a person reads it.
+//!
+//! This is a client and nothing else. It asks the daemon over its socket and
+//! renders what comes back: one Health sentence by the precedence of spec
+//! section 6.6, the last Scan summary and the Findings that are open. It scans
+//! nothing, writes nothing and never reads a store: those are the daemon's
+//! (ADR 0008).
+//!
+//! A daemon that does not answer is not an error to print. It is Protection
+//! off, which is always shown and never implied.
+
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+
+use agentsweep_core::state::{RecordedFinding, ScanSummary};
+use agentsweep_ipc::Client;
+use agentsweep_ipc::protocol::{Role, Status};
+
+/// Asks the daemon and renders the answer.
+///
+/// The socket is the documented one unless a socket is named, which is how a
+/// hand run reaches a daemon that is not the installed one.
+pub fn status(socket: Option<&Path>) -> (String, u8) {
+    let connected = match socket {
+        Some(socket) => Client::connect_at(socket, Role::Cli),
+        None => Client::connect(Role::Cli),
+    };
+    let mut client = match connected {
+        Ok(client) => client,
+        Err(error) if error.is_unreachable() => {
+            return (render(&Status::unreachable(&error.unreachable())), 1);
+        }
+        Err(error) => return (format!("AgentSweep could not be asked: {error}\n"), 2),
+    };
+    match client.status() {
+        Ok(status) => {
+            let open = status.open().count();
+            (render(&status), if open > 0 { 1 } else { 0 })
+        }
+        Err(error) => (format!("AgentSweep could not be asked: {error}\n"), 2),
+    }
+}
+
+/// The socket a `--socket <path>` argument names, if there is one.
+pub fn socket_argument(arguments: &[String]) -> Result<Option<PathBuf>, String> {
+    match arguments {
+        [] => Ok(None),
+        [flag, path] if flag == "--socket" => Ok(Some(PathBuf::from(path))),
+        [flag] if flag == "--socket" => Err("`--socket` takes a path".to_string()),
+        [unknown, ..] => Err(format!("`{unknown}` is not an option of `status`")),
+    }
+}
+
+/// One status, as the terminal prints it.
+pub fn render(status: &Status) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{}", status.health.headline());
+    for note in status.health.notes() {
+        let _ = writeln!(out, "  {note}");
+    }
+
+    match &status.scan {
+        Some(scan) => {
+            let _ = writeln!(out);
+            let _ = writeln!(out, "{}", scan_line(scan));
+        }
+        None if !status.health.protection.is_off() => {
+            let _ = writeln!(out);
+            let _ = writeln!(out, "No Scan has finished yet.");
+        }
+        None => {}
+    }
+
+    let open: Vec<&RecordedFinding> = status.open().collect();
+    if !open.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "{}:",
+            count(open.len(), "open Finding", "open Findings")
+        );
+        let mut current = "";
+        for finding in open {
+            if finding.item_id.as_str() != current {
+                current = finding.item_id.as_str();
+                let name = Path::new(current)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let _ = writeln!(out);
+                let _ = writeln!(out, "  {} \u{b7} {}", finding.kind, name);
+                let _ = writeln!(out, "  {current}");
+            }
+            let _ = writeln!(
+                out,
+                "    {}  {}  {}  {}  {}",
+                finding.source,
+                finding.severity,
+                finding.category,
+                finding.tier,
+                probation(finding)
+            );
+            let _ = writeln!(out, "    {}", finding.plain);
+            if !finding.drift.is_empty() {
+                let _ = writeln!(out, "    {}", finding.drift);
+            }
+        }
+    }
+    out
+}
+
+/// The last Scan, on one line.
+fn scan_line(scan: &ScanSummary) -> String {
+    format!(
+        "Last {} Scan ({}) at {}: {}, {}, {} in the Ambiguous Band, {} ms, Rule Pack {}.",
+        scan.kind,
+        scan.trigger,
+        scan.started_at,
+        count(scan.items, "Item", "Items"),
+        count(scan.findings(), "Finding", "Findings"),
+        scan.ambiguous,
+        scan.duration_ms,
+        scan.rule_pack
+    )
+}
+
+/// Whether the Rule behind a Finding may act by itself yet.
+fn probation(finding: &RecordedFinding) -> &'static str {
+    match finding.status {
+        agentsweep_core::finding::RuleStatus::Probation => "on probation",
+        agentsweep_core::finding::RuleStatus::Stable => "stable",
+        agentsweep_core::finding::RuleStatus::Retired => "retired",
+    }
+}
+
+fn count(n: usize, one: &str, many: &str) -> String {
+    match n {
+        0 => format!("no {many}"),
+        1 => format!("1 {one}"),
+        _ => format!("{n} {many}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use agentsweep_core::envelope::Timestamp;
+    use agentsweep_core::finding::{Category, FindingId, FindingState, RuleStatus, Severity, Tier};
+    use agentsweep_core::health::{Health, Protection, StateFileHealth};
+    use agentsweep_core::item::{ItemId, Kind};
+    use agentsweep_core::scan_pass::ScanKind;
+    use agentsweep_core::state::Trigger;
+
+    fn moment(text: &str) -> Timestamp {
+        Timestamp::parse(text).expect("a readable moment")
+    }
+
+    fn summary() -> ScanSummary {
+        ScanSummary {
+            kind: ScanKind::Full,
+            trigger: Trigger::DaemonStart,
+            started_at: moment("2026-09-24T08:00:00.000Z"),
+            duration_ms: 812,
+            items: 17,
+            threats: 1,
+            exposures: 0,
+            clear: 15,
+            ambiguous: 1,
+            suspicious: 0,
+            rule_pack: 1,
+            engine: String::new(),
+        }
+    }
+
+    fn finding() -> RecordedFinding {
+        RecordedFinding {
+            id: FindingId::from_recorded(
+                "claude-code/user/skill/~/.claude/skills/setup|rule/0001|a",
+            ),
+            item_id: ItemId::from_recorded("claude-code/user/skill/~/.claude/skills/setup"),
+            kind: Kind::Skill,
+            source: "rule 0001".to_string(),
+            rule_id: 1,
+            category: Category::Threat,
+            severity: Severity::Critical,
+            tier: Tier::Rules,
+            status: RuleStatus::Probation,
+            state: FindingState::Open,
+            content_hash: "a".repeat(64),
+            title: "A skill that pipes a download into a shell".to_string(),
+            plain: "This skill downloads and runs a script.".to_string(),
+            file: "SKILL.md".to_string(),
+            drift: "changed since your last Scan".to_string(),
+            receipt_id: String::new(),
+            first_seen: moment("2026-09-24T08:00:00.000Z"),
+            notified_at: None,
+        }
+    }
+
+    /// A daemon that does not answer reads Protection off, which is always
+    /// shown and never implied (spec section 6.6).
+    #[test]
+    fn no_daemon_reads_protection_off() {
+        let rendered = render(&Status::unreachable("no daemon answered"));
+        assert!(rendered.starts_with("Protection is off.\n"), "{rendered}");
+        assert!(rendered.contains("no daemon answered"), "{rendered}");
+        assert!(!rendered.contains("All clear"), "{rendered}");
+    }
+
+    #[test]
+    fn a_clear_machine_reads_the_headline_and_the_last_scan() {
+        let mut health = Health::running();
+        health.items = 17;
+        health.last_full_scan = Some(moment("2026-09-24T08:00:00.812Z"));
+        let status = Status {
+            health,
+            scan: Some(summary()),
+            findings: Vec::new(),
+        };
+        let rendered = render(&status);
+        assert!(
+            rendered.starts_with("All clear, last checked"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("17 Items"), "{rendered}");
+        assert!(rendered.contains("Rule Pack 1"), "{rendered}");
+        assert!(rendered.contains("812 ms"), "{rendered}");
+        assert!(!rendered.contains("open Finding"), "{rendered}");
+    }
+
+    #[test]
+    fn an_open_finding_is_shown_with_everything_the_user_needs() {
+        let mut health = Health::running();
+        health.open_findings = 1;
+        health.last_full_scan = Some(moment("2026-09-24T08:00:00.812Z"));
+        let status = Status {
+            health,
+            scan: Some(summary()),
+            findings: vec![finding()],
+        };
+        let rendered = render(&status);
+        assert!(rendered.contains("1 Finding is open."), "{rendered}");
+        assert!(rendered.contains("1 open Finding:"), "{rendered}");
+        assert!(rendered.contains("Skill \u{b7} setup"), "{rendered}");
+        assert!(rendered.contains("rule 0001"), "{rendered}");
+        assert!(rendered.contains("critical"), "{rendered}");
+        assert!(rendered.contains("on probation"), "{rendered}");
+        assert!(
+            rendered.contains("This skill downloads and runs a script."),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("changed since your last Scan"),
+            "{rendered}"
+        );
+    }
+
+    /// A Finding that was stopped, trusted or acknowledged is not open, so it
+    /// is not in the list of what asks something of the user.
+    #[test]
+    fn a_finding_that_no_longer_asks_anything_is_not_listed() {
+        let mut stopped = finding();
+        stopped.state = FindingState::Stopped;
+        let status = Status {
+            health: Health::running(),
+            scan: Some(summary()),
+            findings: vec![stopped],
+        };
+        let rendered = render(&status);
+        assert!(!rendered.contains("open Finding"), "{rendered}");
+    }
+
+    /// A daemon that has just started and has not finished its first Full Scan
+    /// says so rather than showing nothing.
+    #[test]
+    fn a_daemon_with_no_finished_scan_says_so() {
+        let mut health = Health::running();
+        health.scanning = true;
+        health.state_file = StateFileHealth::Missing;
+        let status = Status {
+            health,
+            scan: None,
+            findings: Vec::new(),
+        };
+        let rendered = render(&status);
+        assert!(rendered.starts_with("Checking now."), "{rendered}");
+        assert!(rendered.contains("No Scan has finished yet."), "{rendered}");
+        assert!(rendered.contains("rebuilt"), "{rendered}");
+    }
+
+    /// Protection off wins over everything, so nothing under it invites the
+    /// user to act on a Scan that never ran.
+    #[test]
+    fn protection_off_shows_no_scan_line_at_all() {
+        let status = Status {
+            health: Health {
+                protection: Protection::Off("no daemon answered".to_string()),
+                ..Health::default()
+            },
+            scan: None,
+            findings: Vec::new(),
+        };
+        assert!(!render(&status).contains("No Scan"), "{}", render(&status));
+    }
+
+    /// The whole command, against a socket nothing is listening on. It never
+    /// touches the documented socket, because the path is named.
+    #[test]
+    fn the_command_reads_protection_off_and_exits_one_when_no_daemon_answers() {
+        let nowhere = std::env::temp_dir().join(format!(
+            "agentsweep-status-nobody-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&nowhere);
+        let (rendered, code) = status(Some(&nowhere));
+        assert!(rendered.starts_with("Protection is off."), "{rendered}");
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn the_socket_option_is_the_only_one_status_takes() {
+        assert_eq!(socket_argument(&[]).expect("no option"), None);
+        assert_eq!(
+            socket_argument(&["--socket".to_string(), "/tmp/a.sock".to_string()])
+                .expect("a socket"),
+            Some(PathBuf::from("/tmp/a.sock"))
+        );
+        assert!(socket_argument(&["--socket".to_string()]).is_err());
+        assert!(socket_argument(&["--all".to_string()]).is_err());
+    }
+}

@@ -1,12 +1,14 @@
 //! The AgentSweep command line interface, binary `agentsweep`.
 //!
 //! In the bundle it is a client of the daemon; built from crates.io it is an
-//! on-demand scanner. The client commands and the Gate arrive with milestone 7
+//! on-demand scanner. The action commands and the Gate arrive with milestone 7
 //! of the build plan. What is here is `scan <dir>`, the Folder Scan, which runs
-//! entirely in this process and never reaches a daemon.
+//! entirely in this process and never reaches a daemon, and `status`, which
+//! reaches the daemon and does nothing else.
 
 mod developer;
 mod folder_scan;
+mod status;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -15,11 +17,15 @@ const USAGE: &str = "\
 AgentSweep scans the local configuration surfaces of coding agents.
 
 Usage:
+  agentsweep status       Show what AgentSweep is protecting and what it found.
   agentsweep scan <dir>   Check one folder before you open it with an agent.
   agentsweep --version    Print the version.
   agentsweep --help       Print this message.
 
 `scan` exits 0 when the folder is safe to open and 1 when it found something.
+`status` exits 0 when nothing is open, 1 when something is, and says Protection
+is off when no daemon answers. It takes `--socket <path>` to reach a daemon
+somewhere other than the documented socket.
 
 Developer only, off unless asked for by name:
   agentsweep --developer-list-items [<home>]
@@ -39,6 +45,7 @@ Developer only, off unless asked for by name:
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
+        Some("status") => status(&arguments[1..]),
         Some("scan") => scan(&arguments[1..]),
         Some("--developer-list-items") => developer_list_items(&arguments[1..]),
         Some("--developer-scan-items") => developer_scan_items(&arguments[1..]),
@@ -59,6 +66,20 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// Asks the daemon what it is protecting and what it found.
+fn status(arguments: &[String]) -> ExitCode {
+    let socket = match status::socket_argument(arguments) {
+        Ok(socket) => socket,
+        Err(reason) => {
+            eprintln!("agentsweep: {reason}\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    let (rendered, code) = status::status(socket.as_deref());
+    print!("{rendered}");
+    ExitCode::from(code)
 }
 
 fn scan(arguments: &[String]) -> ExitCode {
@@ -145,6 +166,22 @@ mod tests {
     #[test]
     fn the_usage_names_the_folder_scan_the_app_shows_in_the_developer_posture() {
         assert!(super::USAGE.contains("agentsweep scan <dir>"));
+    }
+
+    /// The one command that reaches the daemon says what it says when no
+    /// daemon answers, because Protection off is always shown.
+    #[test]
+    fn the_usage_names_status_and_what_it_says_without_a_daemon() {
+        assert!(
+            super::USAGE.contains("agentsweep status"),
+            "{}",
+            super::USAGE
+        );
+        assert!(
+            super::USAGE.contains("Protection\nis off"),
+            "{}",
+            super::USAGE
+        );
     }
 
     /// A Folder Scan runs in this process. Depending on the daemon crate would

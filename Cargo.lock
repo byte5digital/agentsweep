@@ -25,6 +25,7 @@ dependencies = [
  "agentsweep-adapter-codex",
  "agentsweep-adapter-workspace",
  "agentsweep-core",
+ "agentsweep-ipc",
 ]
 
 [[package]]

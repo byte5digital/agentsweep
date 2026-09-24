@@ -79,12 +79,27 @@ impl Daemon {
         options: &Options,
         check: Arc<dyn PeerCheck>,
     ) -> Result<Arc<Daemon>, Box<dyn Error>> {
-        let directory = options.data_dir.clone();
-        directory.create()?;
         let keys: Box<dyn KeySource + Send + Sync> = match options.key_source {
             KeySourceChoice::Keychain => Box::new(keychain()),
             KeySourceChoice::Memory => Box::new(MemoryKeySource::empty()),
         };
+        Daemon::open_with(options, check, keys)
+    }
+
+    /// The same, holding the chain key the caller handed over.
+    ///
+    /// The shipped daemon reads the login Keychain and nothing else. This is
+    /// the seam a test restarts a daemon through: a key that lives in the
+    /// process would otherwise be a different key on every start, and the
+    /// second daemon would read the chains it wrote itself as belonging to a
+    /// generation it cannot verify.
+    pub fn open_with(
+        options: &Options,
+        check: Arc<dyn PeerCheck>,
+        keys: Box<dyn KeySource + Send + Sync>,
+    ) -> Result<Arc<Daemon>, Box<dyn Error>> {
+        let directory = options.data_dir.clone();
+        directory.create()?;
 
         // Opening both chains is what turns a key that went missing into one
         // chain restart rather than into a restart per write, and it is what
@@ -526,7 +541,12 @@ impl Drop for Background {
 
 /// Opens the stores, binds the socket and runs the Full Scan every start runs.
 pub fn start(options: &Options) -> Result<Running, Box<dyn Error>> {
-    let daemon = Daemon::open(options)?;
+    start_with(options, Daemon::open(options)?)
+}
+
+/// The same for a daemon the caller opened, which is how a test starts one
+/// with a peer check and a key source of its own.
+pub fn start_with(options: &Options, daemon: Arc<Daemon>) -> Result<Running, Box<dyn Error>> {
     let listener = SocketListener::bind(&options.socket)?;
     say!(
         "{} listening on {}",

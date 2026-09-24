@@ -1028,6 +1028,57 @@ mod tests {
         assert_eq!(carried.accepted_hash, record.accepted_hash);
     }
 
+    /// Spec section 4.6.6: on a broken chain, Drift is computed against the
+    /// last verifiable prefix. Nothing after the break is read, and nothing is
+    /// bulk-accepted to paper over it.
+    #[test]
+    fn a_broken_chain_leaves_the_baseline_at_its_last_verifiable_prefix() {
+        let directory = TempDir::new().expect("a temporary data directory");
+        let data = DataDirectory::at(directory.path());
+        let keys = MemoryKeySource::holding(ChainKey::generate().expect("a key"));
+        let baseline = Baseline::in_data_directory(&data);
+
+        let first = instruction_file("# demo\n");
+        let second = mcp_entry("t", &serde_json::json!({"command": "/opt/tools/t"}));
+        {
+            let (mut writer, _) =
+                BaselineWriter::open(&baseline, &keys).expect("the Baseline opens");
+            for item in [&first, &second] {
+                writer
+                    .accept(&BaselineRecord::accepting(
+                        item,
+                        moment("2026-09-24T09:00:00.000Z"),
+                        AcceptedBy::Bootstrap,
+                    ))
+                    .expect("the record is written");
+            }
+        }
+
+        let written = std::fs::read_to_string(baseline.chain().path()).expect("a readable chain");
+        let tampered: Vec<String> = written
+            .lines()
+            .enumerate()
+            .map(|(index, line)| {
+                if index == 1 {
+                    line.replace("\"accepted_by\":\"bootstrap\"", "\"accepted_by\":\"trust\"")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect();
+        std::fs::write(
+            baseline.chain().path(),
+            format!("{}\n", tampered.join("\n")),
+        )
+        .expect("a writable chain");
+
+        let view = baseline.read(&keys).expect("the Baseline still reads");
+        assert!(matches!(view.state, ChainState::Broken { sequence: 1, .. }));
+        assert_eq!(view.len(), 1);
+        assert!(view.record(&first.id).is_some());
+        assert!(view.record(&second.id).is_none());
+    }
+
     #[test]
     fn a_later_record_supersedes_the_one_before_it() {
         let directory = TempDir::new().expect("a temporary data directory");

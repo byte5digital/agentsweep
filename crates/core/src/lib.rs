@@ -12,8 +12,12 @@
 //! the quarantine store, Receipts, Restore and Trust. Every primitive of the
 //! table of spec section 5.2 is carried out here as well: the two editors that
 //! take one entry out of a shared config file and put it back, the steps one
-//! composite takes in order, and Re-enable. The Baseline and AI Judgement
-//! arrive with their milestones.
+//! composite takes in order, and Re-enable. Beside the Event Log stands the
+//! Baseline, the second chain under the same key: Coverage, one record per
+//! Item, the known actions the Event Log accounts for, and the Scan pass that
+//! puts them in the order of spec section 6.4 and answers with what to write.
+//! The Verdict cache has its envelope and waits for AI Judgement, which
+//! arrives with its milestone.
 
 #![warn(missing_docs)]
 

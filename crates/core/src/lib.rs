@@ -6,10 +6,11 @@
 //! a Tier or a Rule.
 //!
 //! What is here so far is the first end-to-end path: the Item, the Host, the
-//! read side of the Surface Adapter contract, the view globals of the rule
-//! contract, the bundled Rule Pack, the Rule tier that runs it and the
-//! Heuristic tier that scores what it left undecided. The stores,
-//! the Baseline and AI Judgement arrive with their milestones.
+//! Surface Adapter contract, the view globals of the rule contract, the
+//! bundled Rule Pack, the Allowlist, the Rule tier that runs the pack and the
+//! Heuristic tier that scores what it left undecided, and then the Event Log,
+//! the quarantine store, Receipts, Restore and Trust. The Baseline and AI
+//! Judgement arrive with their milestones.
 
 #![warn(missing_docs)]
 

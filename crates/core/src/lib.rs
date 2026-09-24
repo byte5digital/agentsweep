@@ -17,8 +17,10 @@
 pub mod adapter;
 pub mod allowlist;
 pub mod chain;
+pub mod composite;
 pub mod derived;
 pub mod enforcement;
+pub mod entry_edit;
 pub mod envelope;
 pub mod eventlog;
 pub mod finding;

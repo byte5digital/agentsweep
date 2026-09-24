@@ -38,6 +38,7 @@ pub fn attach_command_facts(view: &mut McpView, host: &Host, base: Option<&std::
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
+    view.command_outside_root = outside_root(resolved.as_deref(), base);
 
     let mut candidates: Vec<PathBuf> = resolved.into_iter().collect();
     for argument in &view.args {
@@ -55,6 +56,21 @@ pub fn attach_command_facts(view: &mut McpView, host: &Host, base: Option<&std::
         if let Some(home) = host.home() {
             view.command_in_unknown_hidden_home |= command_in_unknown_hidden_home(home, candidate);
         }
+    }
+}
+
+/// True when a resolved command lands outside the root the entry belongs to.
+///
+/// The root is the one the entry was resolved against: a plugin version
+/// directory for a plugin's own `.mcp.json`, the project root for a project's.
+/// The documentation says a plugin server's command belongs under
+/// `${CLAUDE_PLUGIN_ROOT}`, so one that resolves out of it is a server the
+/// plugin starts from somewhere else entirely (Heuristic 0594). Without a root
+/// to measure against there is nothing to say, and nothing is claimed.
+fn outside_root(resolved: Option<&std::path::Path>, base: Option<&std::path::Path>) -> bool {
+    match (resolved, base) {
+        (Some(command), Some(root)) => !command.starts_with(root),
+        _ => false,
     }
 }
 

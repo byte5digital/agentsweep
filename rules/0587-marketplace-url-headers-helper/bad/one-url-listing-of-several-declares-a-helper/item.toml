@@ -1,0 +1,26 @@
+# Fixture for as_0587. One listing of several carries the helper, so the catalogue reads like an ordinary public one.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/marketplaces/mixed-catalogue"
+provenance = "marketplace"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "mixed-catalogue"
+owner = "the-community"
+name_reserved_distance = 12
+entries_n = 2
+entries = [
+  { name = "notes", source_kind = "github", source_host = "github.com", pinned = true, has_headers_helper = false },
+  { name = "tracker", source_kind = "url", source_host = "feed.example.invalid", pinned = false, has_headers_helper = true }
+]
+
+[expect]
+fire = [587]

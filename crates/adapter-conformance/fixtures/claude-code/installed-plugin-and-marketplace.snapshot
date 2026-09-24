@@ -20,7 +20,7 @@ item claude-code/user/plugin/notes@demo-marketplace
 item claude-code/user/mcp-server/~/.claude/plugins/cache/demo-marketplace/notes/1.2.0/.mcp.json#notes
   shape=entry scope=user provenance=plugin activation=active registered=true symlink=false size=41
   sha256=12c6871f14a9ddfe1a7afda4c3d35425410bc4bfe4a19c281e0e4dfff808aec2
-  view mcp {args=["./server.js"] args_n=1 command="node" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="notes" package="" package_version="" transport="stdio" url="" url_host=""}
+  view mcp {args=["./server.js"] args_n=1 command="node" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_outside_root=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="notes" package="" package_version="" transport="stdio" url="" url_host=""}
 item claude-code/user/plugin/notes@demo-marketplace@1.1.0
   shape=tree scope=user provenance=marketplace activation=inactive(orphaned) registered=true symlink=false size=111
   sha256=99223b26cf588f914246b3100afc59b4b02277bc103e84de8151344a2f0f1b57

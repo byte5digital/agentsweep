@@ -1,0 +1,20 @@
+# Fixture for as_0584. An inline dynamic-context span. Nothing about `git branch` is wrong; that the skill executes at load time at all is the fact.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/branch-notes"
+provenance = "manual"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "branch-notes"
+has_dynamic_context = true
+
+[expect]
+fire = [584]

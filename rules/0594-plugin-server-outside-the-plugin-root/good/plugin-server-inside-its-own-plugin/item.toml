@@ -1,0 +1,22 @@
+# Near miss: the documented shape. The command sits under the plugin root, so a plugin update replaces it.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/notes/1.2.0/.mcp.json#notes"
+provenance = "plugin"
+provenance_ref = "notes@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "notes"
+transport = "stdio"
+command = "${CLAUDE_PLUGIN_ROOT}/server.js"
+command_resolved = "/home/u/.claude/plugins/cache/community-tools/notes/1.2.0/server.js"
+command_outside_root = false
+
+[expect]
+fire = []

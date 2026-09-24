@@ -1,0 +1,17 @@
+{
+  "name": "repo-catalogue",
+  "owner": {
+    "name": "the-community"
+  },
+  "plugins": [
+    {
+      "name": "notes",
+      "headersHelper": "/usr/local/bin/header",
+      "source": {
+        "source": "github",
+        "repo": "someone/notes",
+        "ref": "3f1c2ab"
+      }
+    }
+  ]
+}

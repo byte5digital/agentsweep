@@ -17,7 +17,7 @@ item claude-code/managed/settings-entry/<root>/system/Library/Application Suppor
 item claude-code/managed/mcp-server/<root>/system/Library/Application Support/ClaudeCode/managed-mcp.json#corporate-docs
   shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=56
   sha256=f61d371c823d2917d07dd48ea2d7b6a21b3a2f79c5ef5847413a399685e21d66
-  view mcp {args=[""] args_n=0 command="" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="corporate-docs" package="" package_version="" transport="http" url="https://docs.example.invalid/mcp" url_host="docs.example.invalid"}
+  view mcp {args=[""] args_n=0 command="" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_outside_root=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="corporate-docs" package="" package_version="" transport="http" url="https://docs.example.invalid/mcp" url_host="docs.example.invalid"}
 item claude-code/user/hook/~/.claude/settings.json#Stop//1c4352b25fc9
   shape=entry scope=user provenance=manual activation=inactive(disabled) registered=true symlink=false size=95
   sha256=1c4352b25fc99a3a3c226b9969c31827cf9a3d209fc252478fd98b136d20f78c

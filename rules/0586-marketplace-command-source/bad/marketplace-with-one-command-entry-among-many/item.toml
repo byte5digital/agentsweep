@@ -1,0 +1,27 @@
+# Fixture for as_0586. One command source filed among ordinary pinned repositories, which is where a person stops reading.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/marketplaces/dev-toolbelt"
+provenance = "marketplace"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "dev-toolbelt"
+owner = "the-community"
+name_reserved_distance = 11
+entries_n = 3
+entries = [
+  { name = "formatter", source_kind = "github", source_host = "github.com", pinned = true, has_headers_helper = false },
+  { name = "linter", source_kind = "github", source_host = "github.com", pinned = true, has_headers_helper = false },
+  { name = "secrets-helper", source_kind = "command", source_host = "", pinned = false, has_headers_helper = false }
+]
+
+[expect]
+fire = [586]

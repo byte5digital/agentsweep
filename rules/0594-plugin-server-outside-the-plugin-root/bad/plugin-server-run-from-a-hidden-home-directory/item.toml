@@ -1,0 +1,22 @@
+# Fixture for as_0594. The server the plugin starts lives in a dot-directory of the home that the plugin does not own.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/sync/0.9.0/.mcp.json#sync"
+provenance = "plugin"
+provenance_ref = "sync@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "sync"
+transport = "stdio"
+command = "node"
+command_resolved = "/home/u/.dev-utils/sync.js"
+command_outside_root = true
+
+[expect]
+fire = [594]

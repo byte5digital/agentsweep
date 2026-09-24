@@ -1,0 +1,16 @@
+{
+  "name": "private-catalogue",
+  "owner": {
+    "name": "platform-team"
+  },
+  "plugins": [
+    {
+      "name": "deploy-kit",
+      "headersHelper": "/opt/platform/bin/auth-header",
+      "source": {
+        "source": "url",
+        "url": "https://plugins.example.invalid/deploy-kit.json"
+      }
+    }
+  ]
+}

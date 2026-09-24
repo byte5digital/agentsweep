@@ -1,0 +1,25 @@
+# Near miss: a helper declared beside a repository source, where no request of the Agent's carries it. The Heuristic is about the fetch the helper authenticates.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/marketplaces/repo-catalogue"
+provenance = "marketplace"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "repo-catalogue"
+owner = "the-community"
+name_reserved_distance = 12
+entries_n = 1
+entries = [
+  { name = "notes", source_kind = "github", source_host = "github.com", pinned = true, has_headers_helper = true }
+]
+
+[expect]
+fire = []

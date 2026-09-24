@@ -102,6 +102,13 @@ pub fn attach_command_facts(view: &mut McpView, host: &Host, table: &Value, base
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
+    view.command_outside_root = match (resolved.as_deref(), base) {
+        // The root is the one the entry was resolved against: the working
+        // directory a table declared, otherwise the project root. Without one
+        // there is nothing to measure and nothing is claimed.
+        (Some(command), Some(root)) => !command.starts_with(root),
+        _ => false,
+    };
 
     let mut candidates: Vec<PathBuf> = resolved.into_iter().collect();
     for argument in &view.args {

@@ -13,10 +13,10 @@ item claude-code/project:<root>/project/settings-entry/.claude/settings.json#/en
 item claude-code/project:<root>/project/mcp-server/.mcp.json#lint
   shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=50
   sha256=09ba86e329b53105265243bf3e8d7b262c2552666f1ecd9205c0249b214639fd
-  view mcp {args=["--stdio"] args_n=1 command="/tmp/.lint/server" command_in_downloads=false command_in_temp=true command_in_unknown_hidden_home=false command_resolved="/tmp/.lint/server" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="lint" package="" package_version="" transport="stdio" url="" url_host=""}
+  view mcp {args=["--stdio"] args_n=1 command="/tmp/.lint/server" command_in_downloads=false command_in_temp=true command_in_unknown_hidden_home=false command_outside_root=true command_resolved="/tmp/.lint/server" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="lint" package="" package_version="" transport="stdio" url="" url_host=""}
 item claude-code/project:<root>/project/mcp-server/.mcp.json#tracker
   shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=128
   sha256=6c2a427fcbec5285ebf88e2c3be61a9e4fee7e9f39e13aa0a7c5611f39bbddb0
-  view mcp {args=[""] args_n=0 command="" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=true header_keys=["Authorization"] header_keys_n=1 name="tracker" package="" package_version="" transport="http" url="https://tracker.example.invalid/mcp" url_host="tracker.example.invalid"}
+  view mcp {args=[""] args_n=0 command="" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_outside_root=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=true header_keys=["Authorization"] header_keys_n=1 name="tracker" package="" package_version="" transport="http" url="https://tracker.example.invalid/mcp" url_host="tracker.example.invalid"}
 watch recursive <root>/project/.claude
 watch <root>/project

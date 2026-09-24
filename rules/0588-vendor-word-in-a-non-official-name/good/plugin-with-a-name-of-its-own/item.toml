@@ -1,0 +1,23 @@
+# Near miss: a community plugin that borrows nothing, which is what almost all of them are.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/commit-helper/3.1.0"
+provenance = "marketplace"
+provenance_ref = "commit-helper@community-tools"
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "commit-helper"
+name_reserved_distance = 11
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

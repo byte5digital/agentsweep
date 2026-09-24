@@ -1,0 +1,20 @@
+# Near miss: the bytecode a skill's own script leaves behind the first time it runs. The path says who wrote it.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/csv-tidy"
+provenance = "manual"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "bytecode"
+
+[skill]
+name = "csv-tidy"
+has_dynamic_context = false
+
+[expect]
+fire = []

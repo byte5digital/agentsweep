@@ -1,0 +1,15 @@
+{
+  "name": "hosted-catalogue",
+  "owner": {
+    "name": "hosted-team"
+  },
+  "plugins": [
+    {
+      "name": "reporter",
+      "source": {
+        "source": "url",
+        "url": "https://plugins.example.invalid/reporter.json"
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+# Fixture for as_0585. The Trail of Bits shape: the payload is in the archive and SKILL.md is what a reviewer reads.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/asset-kit"
+provenance = "marketplace"
+provenance_ref = "asset-kit@community-skills"
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "archive"
+
+[skill]
+name = "asset-kit"
+has_dynamic_context = false
+
+[expect]
+fire = [585]
+files = ["assets/kit.zip"]

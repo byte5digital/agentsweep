@@ -1,0 +1,15 @@
+{
+  "name": "internal-tools",
+  "owner": {
+    "name": "platform-team"
+  },
+  "plugins": [
+    {
+      "name": "deploy-kit",
+      "source": {
+        "source": "command",
+        "command": "/opt/platform/bin/resolve-plugin"
+      }
+    }
+  ]
+}

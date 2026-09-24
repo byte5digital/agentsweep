@@ -1,0 +1,20 @@
+# Near miss: a fenced block showing a command for a person to read. No exclamation mark opens it, so nothing runs at load time.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/release-guide"
+provenance = "manual"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "release-guide"
+has_dynamic_context = false
+
+[expect]
+fire = []

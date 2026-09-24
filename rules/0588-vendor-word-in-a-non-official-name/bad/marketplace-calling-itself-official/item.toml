@@ -1,0 +1,23 @@
+# Fixture for as_0588. A catalogue that calls itself official and is twelve edits from any reserved name, so Rule 0017 leaves it alone.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/marketplaces/official-plugin-registry"
+provenance = "marketplace"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "official-plugin-registry"
+owner = "the-community"
+name_reserved_distance = 17
+entries_n = 1
+entries = [{ name = "notes", source_kind = "github", source_host = "github.com", pinned = true, has_headers_helper = false }]
+
+[expect]
+fire = [588]

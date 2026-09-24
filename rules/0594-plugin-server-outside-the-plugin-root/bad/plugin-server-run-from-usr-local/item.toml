@@ -1,0 +1,22 @@
+# Fixture for as_0594. A plugin whose server is a program somewhere else on the machine, so a plugin update never changes what starts.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/notes/1.2.0/.mcp.json#notes"
+provenance = "plugin"
+provenance_ref = "notes@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "notes"
+transport = "stdio"
+command = "/usr/local/bin/notes-server"
+command_resolved = "/usr/local/bin/notes-server"
+command_outside_root = true
+
+[expect]
+fire = [594]

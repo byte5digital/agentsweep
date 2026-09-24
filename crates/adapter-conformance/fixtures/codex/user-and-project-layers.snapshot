@@ -13,15 +13,15 @@ item codex/user/settings-entry/~/.codex/config.toml#/features/hooks
 item codex/user/mcp-server/~/.codex/config.toml#kit
   shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=55
   sha256=5e9f8702fb9ab21790ce4bd8166c3a366319267bbea566cf7baff8d661aed365
-  view mcp {args=["--stdio"] args_n=1 command="~/Downloads/kit/server" command_in_downloads=true command_in_temp=false command_in_unknown_hidden_home=false command_resolved="<root>/home/Downloads/kit/server" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="kit" package="" package_version="" transport="stdio" url="" url_host=""}
+  view mcp {args=["--stdio"] args_n=1 command="~/Downloads/kit/server" command_in_downloads=true command_in_temp=false command_in_unknown_hidden_home=false command_outside_root=false command_resolved="<root>/home/Downloads/kit/server" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="kit" package="" package_version="" transport="stdio" url="" url_host=""}
 item codex/user/mcp-server/~/.codex/config.toml#notes
   shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=73
   sha256=5adfc813283a73a64f0cdb4dcff7e8f0af7947f43a6a19763b7808a92b390d58
-  view mcp {args=["-y", "@modelcontextprotocol/server-everything"] args_n=2 command="npx" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="notes" package="@modelcontextprotocol/server-everything" package_version="" transport="stdio" url="" url_host=""}
+  view mcp {args=["-y", "@modelcontextprotocol/server-everything"] args_n=2 command="npx" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_outside_root=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="notes" package="@modelcontextprotocol/server-everything" package_version="" transport="stdio" url="" url_host=""}
 item codex/user/mcp-server/~/.codex/config.toml#tracker
   shape=entry scope=user provenance=manual activation=inactive(disabled) registered=true symlink=false size=114
   sha256=e853ac63b72746ff1d47e7c9bfca2138228e282c0d3b74d3584b60c9ae9df3c4
-  view mcp {args=[""] args_n=0 command="" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=["Authorization"] header_keys_n=1 name="tracker" package="" package_version="" transport="http" url="https://tracker.example.invalid/mcp" url_host="tracker.example.invalid"}
+  view mcp {args=[""] args_n=0 command="" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_outside_root=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=["Authorization"] header_keys_n=1 name="tracker" package="" package_version="" transport="http" url="https://tracker.example.invalid/mcp" url_host="tracker.example.invalid"}
 item codex/user/hook/~/.codex/hooks.json#PreToolUse/shell/a901168e690b
   shape=entry scope=user provenance=manual activation=inactive(stale_hook_hash) registered=true symlink=false size=115
   sha256=a901168e690b3d6a5e9d4d5813575663d2c1525300dc909041e53a66c561ed44
@@ -51,7 +51,7 @@ item codex/project:<root>/project/settings-entry/.codex/config.toml#/approval_po
 item codex/project:<root>/project/mcp-server/.codex/config.toml#boost
   shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=48
   sha256=2302f854ec8319ecafdba27f2459a56159ad12b07a4eb5a585e94d84dc1813f7
-  view mcp {args=["artisan", "boost:mcp"] args_n=2 command="php" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="boost" package="" package_version="" transport="stdio" url="" url_host=""}
+  view mcp {args=["artisan", "boost:mcp"] args_n=2 command="php" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_outside_root=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="boost" package="" package_version="" transport="stdio" url="" url_host=""}
 item codex/project:<root>/project/skill/.codex/skills/repo-skill
   shape=file scope=project provenance=unknown activation=active registered=true symlink=false size=87
   sha256=d4f86b12b98a29ee0e66ba0001ca64cd60641129ffdf4eea22218df6e89d1290

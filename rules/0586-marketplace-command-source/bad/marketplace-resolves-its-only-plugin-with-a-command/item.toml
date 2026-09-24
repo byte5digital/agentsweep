@@ -1,0 +1,25 @@
+# Fixture for as_0586. A catalogue whose one listing is produced by running a program on this machine every session.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/marketplaces/internal-tools"
+provenance = "marketplace"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "internal-tools"
+owner = "platform-team"
+name_reserved_distance = 12
+entries_n = 1
+entries = [
+  { name = "deploy-kit", source_kind = "command", source_host = "", pinned = false, has_headers_helper = false }
+]
+
+[expect]
+fire = [586]

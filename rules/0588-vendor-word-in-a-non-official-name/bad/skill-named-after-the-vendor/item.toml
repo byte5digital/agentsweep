@@ -1,0 +1,20 @@
+# Fixture for as_0588. A skill whose name borrows the vendor's, installed from a catalogue the vendor does not run.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/claude-helper"
+provenance = "marketplace"
+provenance_ref = "claude-helper@community-skills"
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "claude-helper"
+has_dynamic_context = false
+
+[expect]
+fire = [588]

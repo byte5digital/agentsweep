@@ -1,0 +1,20 @@
+# Fixture for as_0584. The fenced form of the same thing, in a command file.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/commands/standup.md"
+provenance = "manual"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "standup"
+has_dynamic_context = true
+
+[expect]
+fire = [584]

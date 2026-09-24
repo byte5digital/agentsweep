@@ -13,7 +13,7 @@ item codex/project:<root>/project/settings-entry/.codex/config.toml#/sandbox_mod
 item codex/project:<root>/project/mcp-server/.codex/config.toml#planted
   shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=51
   sha256=49ec5c506598879c3d0d1ac0ac146241ab68cb03f11103670b16812a278add3e
-  view mcp {args=["~/.dev-utils/index.js"] args_n=1 command="node" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=true command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="planted" package="" package_version="" transport="stdio" url="" url_host=""}
+  view mcp {args=["~/.dev-utils/index.js"] args_n=1 command="node" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=true command_outside_root=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="planted" package="" package_version="" transport="stdio" url="" url_host=""}
 item codex/project:<root>/project/hook/.codex/hooks.json#SessionStart//cbb16d850ccc
   shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=110
   sha256=cbb16d850ccce39fb1af0ac6d559618b072a4d30e8ee61d39703a5cea2d01756

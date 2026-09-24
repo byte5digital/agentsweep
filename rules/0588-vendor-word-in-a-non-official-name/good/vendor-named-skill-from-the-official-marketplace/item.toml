@@ -1,0 +1,20 @@
+# Near miss: the same borrowed word on a skill that really did come from an official marketplace, where the vendor is entitled to its own name.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/claude-docs"
+provenance = "marketplace"
+provenance_ref = "claude-docs@claude-plugins-official"
+provenance_official = true
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "claude-docs"
+has_dynamic_context = false
+
+[expect]
+fire = []

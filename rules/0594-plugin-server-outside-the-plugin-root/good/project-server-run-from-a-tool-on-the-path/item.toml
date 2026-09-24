@@ -1,0 +1,22 @@
+# Near miss: a project's own server started from a tool installed on the machine. It resolves outside the project and no plugin ships it, which is how most project servers start.
+[item]
+agent = "claude-code"
+kind = "McpServer"
+shape = "entry"
+scope = "user"
+path = "/src/demo/.mcp.json#docs"
+provenance = "repository"
+provenance_ref = "4b1d0ce"
+activation = "active"
+registered = true
+file_type = "text"
+
+[mcp]
+name = "docs"
+transport = "stdio"
+command = "uvx"
+command_resolved = "/home/u/.local/bin/uvx"
+command_outside_root = true
+
+[expect]
+fire = []

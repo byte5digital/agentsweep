@@ -1,0 +1,21 @@
+# Fixture for as_0589. A project whose committed permission rule is live although the Agent holds no history for the folder: something recorded trust that nobody sitting in the folder did.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "project"
+project_root = "/src/fresh-clone"
+path = "/src/fresh-clone/.claude/settings.json"
+provenance = "repository"
+provenance_ref = "4b1d0ce"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "permissions.allow.0"
+value = "Bash(make *)"
+trust_has_sessions = false
+
+[expect]
+fire = [589]

@@ -51,7 +51,7 @@ use agentsweep_core::views::{HookView, McpView, ParsedView, SettingsView};
 use serde_json::{Value, json};
 
 use crate::document::Document;
-use crate::registry::Registry;
+use crate::registry::{Record, Registry};
 use crate::settings::{DeclaredKey, Entry};
 use crate::tree::Placement;
 
@@ -366,6 +366,9 @@ struct ProjectFacts {
     disabled_mcpjson: Vec<String>,
     /// True when hooks are off for this project whatever a layer below says.
     hooks_disabled: bool,
+    /// True when Claude Code holds session history for this root, which is
+    /// what `settings.trust_has_sessions` reports (Heuristic 0589).
+    has_sessions: bool,
 }
 
 impl ClaudeCode {
@@ -457,6 +460,7 @@ impl ClaudeCode {
                     &entry,
                     Activation::Active,
                     true,
+                    false,
                 ));
             }
             self.hook_items(host, document, Scope::Managed, &facts, true, enumeration);
@@ -523,6 +527,7 @@ impl ClaudeCode {
                             &entry,
                             Activation::Active,
                             true,
+                            false,
                         ));
                     }
                     // A project file may set `disableAllHooks` back to false,
@@ -620,6 +625,31 @@ impl ClaudeCode {
         );
         self.memory_files(host, config_dir, enumeration);
         plugins::enumerate(self, host, config_dir, enabled, enumeration);
+    }
+
+    /// True when Claude Code holds session history for one project root, which
+    /// is what `settings.trust_has_sessions` reports (Heuristic 0589).
+    ///
+    /// Two records answer it and either is enough. The registry keeps the
+    /// prompts of a directory in its `projects` record, and the transcripts of
+    /// a directory live in `~/.claude/projects/<slug>`, where the slug is the
+    /// absolute path with every character that is not a letter or a digit
+    /// replaced by a dash. Both are asked because `cleanupPeriodDays` sweeps
+    /// the transcripts of a directory nobody has opened lately while the
+    /// record stays, and a directory whose prompts were cleared still has its
+    /// transcript folder. Neither says a session is running now; what is asked
+    /// is whether anyone has ever worked here.
+    fn has_sessions(&self, host: &Host, root: &Path, record: Option<&Record>) -> bool {
+        if record.is_some_and(Record::has_history) {
+            return true;
+        }
+        let Some(config_dir) = self.config_dir(host) else {
+            return false;
+        };
+        let transcripts = config_dir
+            .join(PROJECTS_DIRECTORY)
+            .join(slug_of(&root.display().to_string()));
+        host.symlink_metadata(&transcripts).is_ok()
     }
 
     /// The memory Claude Code writes for itself, one folder per project, and
@@ -794,6 +824,7 @@ impl ClaudeCode {
                     .iter()
                     .find_map(|document| document.flag("disableAllHooks"))
                     .unwrap_or(false),
+            has_sessions: self.has_sessions(host, root, record.as_ref()),
         };
 
         for document in &documents {
@@ -806,6 +837,7 @@ impl ClaudeCode {
                     &entry,
                     activation,
                     facts.registered,
+                    facts.has_sessions,
                 ));
             }
             self.hook_items(
@@ -865,6 +897,7 @@ impl ClaudeCode {
     }
 
     /// One settings key as an Item.
+    #[allow(clippy::too_many_arguments)]
     fn settings_item(
         &self,
         host: &Host,
@@ -873,9 +906,12 @@ impl ClaudeCode {
         entry: &Entry,
         activation: Activation,
         registered: bool,
+        has_sessions: bool,
     ) -> Item {
         let dotted = entry.key_path.dotted();
         let locator = format!("{}#{}", document.surface, entry.key_path.pointer());
+        let mut view = SettingsView::of(&dotted, &entry.value);
+        view.trust_has_sessions = has_sessions;
         let mut item = Item::entry(
             AGENT_ID,
             scope,
@@ -886,10 +922,7 @@ impl ClaudeCode {
             activation,
             canonical_key(&dotted, &entry.value),
         )
-        .with_view(ParsedView::Settings(SettingsView::of(
-            &dotted,
-            &entry.value,
-        )));
+        .with_view(ParsedView::Settings(view));
         item.registered = registered;
         self.note_link(host, &mut item);
         item
@@ -1262,6 +1295,15 @@ fn provenance_of(document: &Document) -> Provenance {
     }
 }
 
+/// The name Claude Code gives the transcript folder of one working directory:
+/// the absolute path with every character that is not a letter or a digit
+/// replaced by a dash (`docs/research/claude-code-surfaces.md`).
+fn slug_of(path: &str) -> String {
+    path.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 /// Whether Claude Code would honour one settings key from the layer it was
 /// found in.
 ///
@@ -1593,6 +1635,74 @@ mod tests {
         };
         assert_eq!(view.name, "notes");
         assert!(view.command_in_temp);
+    }
+
+    /// Heuristic 0589 asks whether anyone has ever worked in the project whose
+    /// configuration is being loaded. Both records answer it on their own.
+    #[test]
+    fn a_project_settings_entry_says_whether_the_agent_has_been_run_there() {
+        let machine = Machine::new("sessions");
+        machine.write(
+            "project/.claude/settings.json",
+            "{\"permissions\": {\"allow\": [\"Bash(git status)\"]}}",
+        );
+        machine.write(
+            "home/.claude.json",
+            &format!(
+                "{{\"projects\": {{\"{}\": {{\"hasTrustDialogAccepted\": true}}}}}}",
+                machine.project().display()
+            ),
+        );
+        let fresh = machine.enumerate();
+        let ParsedView::Settings(view) = &item(&fresh, "#/permissions/allow/0").view else {
+            panic!("a settings Item carries the settings view");
+        };
+        assert!(!view.trust_has_sessions);
+
+        // The prompts of the directory are in the registry record.
+        machine.write(
+            "home/.claude.json",
+            &format!(
+                "{{\"projects\": {{\"{}\": {{\"hasTrustDialogAccepted\": true, \
+                  \"history\": [{{\"display\": \"fix the build\"}}]}}}}}}",
+                machine.project().display()
+            ),
+        );
+        let worked_in = machine.enumerate();
+        let ParsedView::Settings(view) = &item(&worked_in, "#/permissions/allow/0").view else {
+            panic!("a settings Item carries the settings view");
+        };
+        assert!(view.trust_has_sessions);
+    }
+
+    /// The other half: the transcript folder, which stays when the prompts of
+    /// a directory have been swept out of the registry.
+    #[test]
+    fn a_transcript_folder_alone_says_the_agent_has_been_run_there() {
+        let machine = Machine::new("transcripts");
+        machine.write(
+            "project/.claude/settings.json",
+            "{\"permissions\": {\"allow\": [\"Bash(git status)\"]}}",
+        );
+        machine.write(
+            "home/.claude.json",
+            &format!(
+                "{{\"projects\": {{\"{}\": {{\"hasTrustDialogAccepted\": true}}}}}}",
+                machine.project().display()
+            ),
+        );
+        machine.write(
+            &format!(
+                "home/.claude/projects/{}/session.jsonl",
+                slug_of(&machine.project().display().to_string())
+            ),
+            "{}\n",
+        );
+        let enumeration = machine.enumerate();
+        let ParsedView::Settings(view) = &item(&enumeration, "#/permissions/allow/0").view else {
+            panic!("a settings Item carries the settings view");
+        };
+        assert!(view.trust_has_sessions);
     }
 
     /// Rule 0008 reads the location facts, and they have to land on the script

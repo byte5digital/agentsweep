@@ -486,6 +486,11 @@ pub struct McpView {
     pub command_in_unknown_hidden_home: bool,
     /// The resolved command is world-writable.
     pub command_world_writable: bool,
+    /// The resolved command lands outside the root the entry belongs to: the
+    /// plugin version directory for a plugin's own `.mcp.json`, the project
+    /// root for a project's. False when the entry has no root of its own or
+    /// nothing resolved.
+    pub command_outside_root: bool,
     /// The launch arguments.
     pub args: Vec<String>,
     /// The real number of arguments.
@@ -529,7 +534,7 @@ impl McpView {
     /// and `[mcp_servers.*]` alike.
     ///
     /// The facts that need the machine rather than the entry (`command_resolved`
-    /// and the four location flags) stay at their defaults here; the Surface
+    /// and the five location flags) stay at their defaults here; the Surface
     /// Adapter fills them in, because only it knows the Host.
     pub fn of(name: &str, entry: &Value) -> McpView {
         let args: Vec<String> = entry
@@ -582,6 +587,7 @@ impl McpView {
             "command_in_downloads": self.command_in_downloads,
             "command_in_unknown_hidden_home": self.command_in_unknown_hidden_home,
             "command_world_writable": self.command_world_writable,
+            "command_outside_root": self.command_outside_root,
             "args": strings(&self.args),
             "args_n": self.args_n,
             "package": self.package,

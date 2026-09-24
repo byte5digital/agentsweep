@@ -1,0 +1,24 @@
+{
+  "name": "mixed-catalogue",
+  "owner": {
+    "name": "the-community"
+  },
+  "plugins": [
+    {
+      "name": "notes",
+      "source": {
+        "source": "github",
+        "repo": "someone/notes",
+        "ref": "3f1c2ab"
+      }
+    },
+    {
+      "name": "tracker",
+      "headersHelper": "~/.local/bin/token",
+      "source": {
+        "source": "url",
+        "url": "https://feed.example.invalid/tracker.json"
+      }
+    }
+  ]
+}

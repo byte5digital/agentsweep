@@ -1,0 +1,20 @@
+# Near miss: an inline code span naming a command the agent may choose to run through a tool call, which is the ordinary way a skill asks for one.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/log-summary"
+provenance = "manual"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "log-summary"
+has_dynamic_context = false
+
+[expect]
+fire = []

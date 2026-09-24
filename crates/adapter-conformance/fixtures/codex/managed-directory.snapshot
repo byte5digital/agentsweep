@@ -9,7 +9,7 @@ item codex/managed/settings-entry/<root>/system/etc/codex/config.toml#/sandbox_m
 item codex/managed/mcp-server/<root>/system/etc/codex/config.toml#audit
   shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=52
   sha256=2873a497abae051f54a7d655500ab3b8d239d4466b46e0ffe6e2e1e5fae1ffa9
-  view mcp {args=["--stdio"] args_n=1 command="/opt/site/bin/audit" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_resolved="/opt/site/bin/audit" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="audit" package="" package_version="" transport="stdio" url="" url_host=""}
+  view mcp {args=["--stdio"] args_n=1 command="/opt/site/bin/audit" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_outside_root=false command_resolved="/opt/site/bin/audit" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="audit" package="" package_version="" transport="stdio" url="" url_host=""}
 item codex/managed/hook/<root>/system/etc/codex/hooks.json#PreToolUse/shell/3109588540fc
   shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=107
   sha256=3109588540fc7ea8879253fc2c1b2f1ff8bbb0d33258a430b7ec84f0f05011da

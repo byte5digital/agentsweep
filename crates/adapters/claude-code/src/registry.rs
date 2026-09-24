@@ -52,6 +52,20 @@ impl Record {
         self.native_trust() == "trusted"
     }
 
+    /// True when the record itself shows the directory has been worked in:
+    /// Claude Code keeps the prompts of a directory in the record's `history`,
+    /// so a record with one is a directory somebody has actually used.
+    ///
+    /// It is half of what `settings.trust_has_sessions` reports; the other
+    /// half is the transcript directory beside it, which the adapter checks,
+    /// because `cleanupPeriodDays` sweeps transcripts and the record stays.
+    pub fn has_history(&self) -> bool {
+        self.value
+            .get("history")
+            .and_then(Value::as_array)
+            .is_some_and(|entries| !entries.is_empty())
+    }
+
     /// The MCP servers that are private to this directory, in sorted order.
     pub fn servers(&self) -> Vec<(String, Value)> {
         sorted_members(&self.value, "mcpServers")
@@ -167,6 +181,21 @@ mod tests {
         assert!(records[0].is_trusted());
         assert_eq!(records[1].native_trust(), "unknown");
         assert_eq!(records[2].native_trust(), "untrusted");
+    }
+
+    /// What `settings.trust_has_sessions` reads off the record: a directory
+    /// with prompts behind it has been worked in, an empty record has not.
+    #[test]
+    fn a_record_with_prompts_behind_it_shows_the_directory_was_worked_in() {
+        let read = registry(json!({"projects": {
+            "/src/demo": {"history": [{"display": "fix the build"}]},
+            "/src/fresh": {"history": []},
+            "/src/bare": {"hasTrustDialogAccepted": true},
+        }}));
+        let records = read.records();
+        assert!(records[1].has_history(), "{:?}", records[1].root);
+        assert!(!records[0].has_history());
+        assert!(!records[2].has_history());
     }
 
     #[test]

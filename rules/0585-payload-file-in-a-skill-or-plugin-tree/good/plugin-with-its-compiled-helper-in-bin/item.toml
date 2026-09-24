@@ -1,0 +1,23 @@
+# Near miss: a compiled helper in the `bin` directory, which is where the plugin documentation says a plugin puts one. Whether its name shadows a real tool is Rule 0016's question.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/ripgrep-kit/1.0.0"
+provenance = "marketplace"
+provenance_ref = "ripgrep-kit@community-tools"
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "executable"
+
+[plugin]
+name = "ripgrep-kit"
+name_reserved_distance = 11
+bin_names = ["rg-kit"]
+bin_names_n = 1
+has_monitors = false
+
+[expect]
+fire = []

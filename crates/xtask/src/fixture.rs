@@ -17,7 +17,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use agentsweep_core::item::Kind;
+use agentsweep_core::item::{FileFacts, Kind};
 use agentsweep_core::views::Views;
 use serde_json::{Number, Value};
 
@@ -165,14 +165,42 @@ impl Fixture {
         )
     }
 
-    /// The globals for one unit. Only `item.file` changes between the units of
-    /// a tree; everything else is what `item.toml` stated.
+    /// The globals for one unit: `item.file`, and, inside a tree, the facts
+    /// that are the scanned file's own rather than the Item's.
+    ///
+    /// The core derives `file_type`, `has_rtl_script`, `whitespace_percent`
+    /// and `max_blank_run` per file of a tree, because Rule 0015 asks whether
+    /// *this* file of a skill is a native executable. Deriving them here the
+    /// same way is what lets a tree Fixture hold a binary beside a SKILL.md
+    /// and have each read as what it is; what `item.toml` states about them is
+    /// the Item's own fact, which is what a file or an entry Fixture uses.
     pub fn globals_for(&self, unit: &Unit) -> Vec<(&'static str, Value)> {
         let mut globals = self.globals.clone();
-        if let Some((_, view)) = globals.iter_mut().find(|(name, _)| *name == "item")
-            && let Some(file) = view.get_mut("file")
-        {
+        let tree = self.shape() == "tree";
+        let Some((_, view)) = globals.iter_mut().find(|(name, _)| *name == "item") else {
+            return globals;
+        };
+        if let Some(file) = view.get_mut("file") {
             *file = Value::String(unit.file.clone());
+        }
+        if tree {
+            let facts = FileFacts::of(&unit.bytes);
+            set(
+                view,
+                "file_type",
+                Value::String(facts.file_type.as_str().to_string()),
+            );
+            set(view, "has_rtl_script", Value::Bool(facts.has_rtl_script));
+            set(
+                view,
+                "whitespace_percent",
+                Value::Number(Number::from(facts.whitespace_percent)),
+            );
+            set(
+                view,
+                "max_blank_run",
+                Value::Number(Number::from(facts.max_blank_run)),
+            );
         }
         globals
     }
@@ -185,6 +213,13 @@ impl Fixture {
             .and_then(|(_, view)| view.get("shape"))
             .and_then(Value::as_str)
             .unwrap_or_default()
+    }
+}
+
+/// Sets one field of a view that the schema already defines.
+fn set(view: &mut Value, field: &str, value: Value) {
+    if let Some(slot) = view.get_mut(field) {
+        *slot = value;
     }
 }
 

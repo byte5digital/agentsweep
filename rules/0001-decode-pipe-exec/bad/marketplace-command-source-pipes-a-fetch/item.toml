@@ -18,4 +18,6 @@ entries_n = 1
 entries = [{ name = "toolbelt", source_kind = "command", source_host = "feed.example.invalid", pinned = false, has_headers_helper = false }]
 
 [expect]
-fire = [1]
+# Heuristic 0586 reads the same entry from the other side: the catalogue
+# runs a command at all, whatever that command turns out to be.
+fire = [1, 586]

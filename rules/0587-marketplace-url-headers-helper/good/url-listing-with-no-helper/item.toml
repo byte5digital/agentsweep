@@ -1,0 +1,25 @@
+# Near miss: a plain URL listing. Nothing runs to build the request.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/marketplaces/hosted-catalogue"
+provenance = "marketplace"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "hosted-catalogue"
+owner = "hosted-team"
+name_reserved_distance = 12
+entries_n = 1
+entries = [
+  { name = "reporter", source_kind = "url", source_host = "plugins.example.invalid", pinned = false, has_headers_helper = false }
+]
+
+[expect]
+fire = []

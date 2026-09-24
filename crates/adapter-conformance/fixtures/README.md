@@ -42,5 +42,12 @@ pretends to be, so Provenance in these snapshots is "manual"; the Repository
 Provenance path is covered where an index can be written, in the workspace
 adapter's own tests and in the Folder Scan's.
 
+A file an Agent writes as JSON is committed the way that Agent writes it: two
+spaces of indentation, the keys in the order they were written, one trailing
+newline. The suite quarantines one entry out of such a file and puts it back,
+and asks for the file it started with, byte for byte; a file in any other style
+would come back in the style AgentSweep writes and the case would fail for a
+reason that is about the fixture rather than about the adapter.
+
 Record a snapshot by running the suite once with `AGENTSWEEP_UPDATE_SNAPSHOTS=1`
 and reading the result before committing it.

@@ -9,8 +9,11 @@
 //! Surface Adapter contract, the view globals of the rule contract, the
 //! bundled Rule Pack, the Allowlist, the Rule tier that runs the pack and the
 //! Heuristic tier that scores what it left undecided, and then the Event Log,
-//! the quarantine store, Receipts, Restore and Trust. The Baseline and AI
-//! Judgement arrive with their milestones.
+//! the quarantine store, Receipts, Restore and Trust. Every primitive of the
+//! table of spec section 5.2 is carried out here as well: the two editors that
+//! take one entry out of a shared config file and put it back, the steps one
+//! composite takes in order, and Re-enable. The Baseline and AI Judgement
+//! arrive with their milestones.
 
 #![warn(missing_docs)]
 

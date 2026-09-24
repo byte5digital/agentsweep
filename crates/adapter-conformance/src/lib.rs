@@ -19,11 +19,12 @@
 //! change for that; if it does, the adapter contract is what is wrong.
 //!
 //! The other half of the contract is what an adapter does rather than what it
-//! reads: [`enforcement`] takes every Item of a kind the adapter declares
-//! MoveOut for out of its Surface and puts it back, on the copy. It writes a
-//! quarantine store, which only the daemon may do (spec section 6.2), so it is
-//! behind this crate's `daemon` feature, and a test build is the only build
-//! that turns that on.
+//! reads: [`enforcement`] carries out every capability the adapter declares on
+//! the copy, whichever primitive it is, and then takes it back and compares
+//! the whole copy with what it held before. It writes a quarantine store,
+//! which only the daemon may do (spec section 6.2), so it is behind this
+//! crate's `daemon` feature, and a test build is the only build that turns
+//! that on.
 
 #![warn(missing_docs)]
 

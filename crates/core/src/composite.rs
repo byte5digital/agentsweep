@@ -705,4 +705,48 @@ mod tests {
         assert!(replaced.is_complete(), "{replaced:?}");
         assert_eq!(bench.read(".mcp.json"), SERVERS);
     }
+    /// Spec section 5.5: a sensitive value reaches a record as a hash and
+    /// never in the clear. The entry itself is content, so it lives in the
+    /// store beside the payload, which is where quarantined content belongs.
+    #[test]
+    fn the_token_of_a_removed_server_is_in_the_store_and_in_no_step() {
+        const TOKEN: &str = "sk-live-not-a-real-token";
+        let bench = Bench::new();
+        let written = format!(
+            "{{\n  \"mcpServers\": {{\n    \"tracker\": {{\n      \"env\": {{\n        \"API_TOKEN\": \"{TOKEN}\"\n      }}\n    }}\n  }}\n}}\n"
+        );
+        let file = bench.write(".mcp.json", &written);
+        let item = bench.item(Kind::McpServer, &file, "{\"env\":{}}");
+        let steps = [Step::RemoveEntry {
+            file: &file,
+            format: Format::Json,
+            entry: entry(&["mcpServers", "tracker"]),
+            detail: "the MCP server tracker was removed from the file".to_string(),
+        }];
+
+        let receipt = carry_out(&bench.host, &bench.store, &item, &steps).expect("a Quarantine");
+
+        // The steps are what the Event Log records, so nothing in them may
+        // hold the value.
+        for step in &receipt.steps {
+            assert!(!step.detail.contains(TOKEN), "{step:?}");
+            assert!(!step.locator.contains(TOKEN), "{step:?}");
+            assert!(!step.path.contains(TOKEN), "{step:?}");
+        }
+        assert!(!bench.read(".mcp.json").contains(TOKEN));
+        // The entry is in the store, which is where what was quarantined
+        // belongs and what a Restore puts back.
+        let kept = crate::quarantine::Store::kept(&bench.store, &receipt.id, 0).expect("the entry");
+        assert!(kept.value.expect("the entry").to_string().contains(TOKEN));
+
+        let report = crate::quarantine::replay_in_reverse(
+            &bench.host,
+            &bench.store,
+            &receipt,
+            Conflict::Refuse,
+        );
+
+        assert!(report.is_complete(), "{report:?}");
+        assert_eq!(bench.read(".mcp.json"), written);
+    }
 }

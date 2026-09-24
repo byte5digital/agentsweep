@@ -26,12 +26,21 @@ agentsweep-adapter-workspace.workspace = true
 # touches the Keychain (spec section 6.2).
 agentsweep-core = { workspace = true, features = ["daemon"] }
 agentsweep-ipc.workspace = true
+# The watcher. FSEvents and never kqueue, which is a file descriptor per file
+# and runs out at a few hundred of them (spec section 6.1). The debounce and
+# the batching are AgentSweep's own, because what the specification asks for,
+# two seconds quiet with a fifteen second maximum hold over one batch of paths,
+# is not what an event debouncer does per path.
+notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
 serde_json = "1.0.151"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The peer check of ADR 0008: whether the process on the other end of the
 # socket carries byte5's code signature. Only the daemon asks.
 core-foundation = "0.10.1"
+# Low Power Mode, read off NSProcessInfo and nothing else. The smallest
+# binding that reaches it: one class, no AppKit and no run loop.
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSProcessInfo"] }
 security-framework-sys = "2.17.0"
 
 [dev-dependencies]

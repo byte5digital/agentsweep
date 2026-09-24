@@ -21,12 +21,15 @@
 
 #![warn(missing_docs)]
 
+pub mod change_scan;
+pub mod due;
 pub mod full_scan;
 pub mod machine;
 pub mod options;
 pub mod peer_check;
 pub mod service;
 pub mod stores;
+pub mod watcher;
 
 pub use options::{Invocation, Options, OptionsError, USAGE};
 pub use service::{Background, Daemon, Running, run, start};

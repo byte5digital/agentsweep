@@ -19,8 +19,10 @@
 
 pub mod adapter;
 pub mod allowlist;
+pub mod baseline;
 pub mod chain;
 pub mod composite;
+pub mod coverage;
 pub mod derived;
 pub mod enforcement;
 pub mod entry_edit;

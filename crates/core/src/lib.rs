@@ -28,6 +28,7 @@ pub mod envelope;
 pub mod eventlog;
 pub mod finding;
 pub mod heuristics;
+pub mod hits;
 pub mod host;
 pub mod item;
 pub mod keychain;

@@ -749,4 +749,20 @@ mod tests {
         assert!(report.is_complete(), "{report:?}");
         assert_eq!(bench.read(".mcp.json"), written);
     }
+    /// Spec section 5.2: NativeDisable is never the sole primitive, only an
+    /// addition. A switch on its own leaves the code where it is, and both
+    /// Agents re-fetch a plugin after session start.
+    #[test]
+    fn a_native_disable_is_never_a_quarantines_only_step() {
+        for row in crate::adapter::ELIGIBILITY {
+            let disables = row
+                .primitives
+                .contains(&crate::adapter::Primitive::NativeDisable);
+            assert!(
+                !disables || row.primitives.len() > 1,
+                "{} is switched off and nothing else",
+                row.kind
+            );
+        }
+    }
 }

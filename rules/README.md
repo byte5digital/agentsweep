@@ -117,17 +117,20 @@ item      agent, kind, shape (file|tree|entry), scope (managed|user|project), pr
           activation (active|inactive|unknown), activation_reason, registered, size, is_symlink,
           baseline (unchanged|changed|added|none, see below; heuristics 0580, 0581),
           provenance_official (true when provenance is an official marketplace; heuristic 0583),
-          link_target (heuristic 0568), file_type (text|executable|binary|archive|office|bytecode|image|unknown), has_rtl_script,
+          link_target (heuristic 0568),
+          file_type (text|executable|binary|archive|office|bytecode|image|unknown;
+                     rules 0014, 0015, heuristic 0585), has_rtl_script,
           whitespace_percent, max_blank_run (rule 0011),
           file (relative path within a tree, set per file scanned)
 mcp       name, transport (stdio|http|sse), command, command_resolved, command_in_temp,
           command_in_downloads, command_in_unknown_hidden_home, command_world_writable,
+          command_outside_root (heuristic 0594),
           args[], args_n, package, package_version, url, url_host, env_keys[], env_keys_n,
           header_keys[], header_keys_n, has_literal_authorization
 hook      event, matcher, type, command, command_resolved, command_file_type (rule 0014), url
 settings  key_path (dotted, array index as .N), value (string form), value_host,
           trust_has_sessions (heuristic 0589)
-skill     name, allowed_tools[], allowed_tools_n, has_dynamic_context
+skill     name, allowed_tools[], allowed_tools_n, has_dynamic_context (heuristic 0584)
 plugin    name, name_reserved_distance, bin_names[], bin_names_n, has_monitors        (rules 0016, 0017)
 marketplace  name, owner, name_reserved_distance,
           entries[] {name, source_kind (github|git|url|command|local), source_host, pinned, has_headers_helper},
@@ -140,7 +143,11 @@ repo      exec_keys[] {key, value, value_outside_repo}, exec_keys_n, gitdir_outs
 
 ExecPolicy, Workflow, InstructionFile and Generic have no view: rules on them are byte rules. A field is added only together with the first rule that reads it; fields tagged with a rule id above were decided with the v1 rule list (wayfinder ticket "Initial rule corpus: the v1 list") and land with that rule.
 
-`file_type` `executable` means a native executable (Mach-O, PE, ELF, a `.node` addon); `binary` is any other non-text file that is not an archive, office document, bytecode or image. `name_reserved_distance` is the edit distance from the name to the nearest reserved marketplace name (`claude-code-marketplace`, `claude-plugins-official`, `anthropic-plugins`, `agent-skills`). `trust_has_sessions` is true when the Agent holds session history for the project a trust entry names.
+`file_type` `executable` means a native executable (Mach-O, PE, ELF, a `.node` addon); `binary` is any other non-text file that is not an archive, office document, bytecode or image. An office document written as a ZIP container, which is what the newer formats are, reads as `archive`, and every rule that asks about one asks about both. Inside a tree the field is the scanned file's own, not the tree's, which is how rule 0015 asks whether *this* file of a skill is a native executable. `name_reserved_distance` is the edit distance from the name to the nearest reserved marketplace name (`claude-code-marketplace`, `claude-plugins-official`, `anthropic-plugins`, `agent-skills`).
+
+`trust_has_sessions` is true when the Agent holds session history for the project the entry is about: the project a `projects.<path>` key names, and otherwise the project a Project-scope entry belongs to. Claude Code answers it from the prompts its registry keeps for a directory and from the transcript folder `~/.claude/projects/<slug>` beside them, Codex from a session log recorded with that working directory. Neither Agent's trust table is an Item of its own, because its keys are absolute paths that no content hash can carry from one machine to the next, so heuristic 0589 reads the field on the configuration the trust made live rather than on the trust record.
+
+`mcp.command_outside_root` is true when the resolved command lands outside the root the entry was read from: the plugin version directory for a plugin's own `.mcp.json`, the project root or a declared working directory for a project's. It is false when the entry has no root of its own, such as a user-scope server, and when nothing resolved.
 
 `item.baseline` compares the Item with the hash AgentSweep last accepted for it. `unchanged`: equal. `changed`: different. `added`: first seen on a Surface that was already covered, not yet accepted. `none`: first seen when its Surface was not covered yet (first Scan, a project new to the Agent's registry, a newly installed Agent), or scanned without the daemon (pre-open scan, standalone CLI); never Drift. Known actions (AgentSweep's own writes, content that carries Trust, an Acknowledge) are applied before rules run, so such content reads `unchanged`. The accepted hash advances only when a Scan leaves the Item without an open Finding, so `changed` and `added` persist while a Finding on the Item is open and a Score that includes them stays stable. Rules never raise the "was that you?" Drift Finding; the core does (ADR 0007).
 

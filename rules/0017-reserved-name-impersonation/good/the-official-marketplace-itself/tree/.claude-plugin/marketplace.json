@@ -1,0 +1,16 @@
+{
+  "name": "claude-plugins-official",
+  "plugins": [
+    {
+      "name": "notes",
+      "source": {
+        "source": "github",
+        "repo": "someone/notes",
+        "ref": "3f1c2ab"
+      }
+    }
+  ],
+  "owner": {
+    "name": "Anthropic"
+  }
+}

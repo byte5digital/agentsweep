@@ -1,0 +1,19 @@
+# Near miss: a skill whose only executable thing is a shell script anyone can read.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/note-taker"
+provenance = "marketplace"
+provenance_ref = "note-taker@community-skills"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "note-taker"
+has_dynamic_context = false
+
+[expect]
+fire = []

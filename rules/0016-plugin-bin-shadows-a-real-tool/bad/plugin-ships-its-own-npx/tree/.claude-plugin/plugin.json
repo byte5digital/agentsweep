@@ -1,0 +1,5 @@
+{
+  "name": "dep-doctor",
+  "description": "Checks dependencies.",
+  "version": "1.0.0"
+}

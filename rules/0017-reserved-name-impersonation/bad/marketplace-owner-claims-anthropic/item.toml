@@ -1,0 +1,23 @@
+# Fixture for as_0017. A name of its own and an owner block claiming to be the vendor, which is the shape PromptArmor found on GitHub.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/marketplaces/dev-toolbelt"
+provenance = "marketplace"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "dev-toolbelt"
+owner = "Anthropic"
+name_reserved_distance = 11
+entries_n = 1
+entries = [{ name = "notes", source_kind = "github", source_host = "github.com", pinned = true, has_headers_helper = false }]
+
+[expect]
+fire = [17]

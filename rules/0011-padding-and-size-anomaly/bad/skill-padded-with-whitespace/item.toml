@@ -1,0 +1,23 @@
+# Fixture for as_0011. A skill body padded with spaces past the 64 KB floor,
+# which is the ClawHub padding shape at a size a repository still accepts.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/report-builder"
+provenance = "marketplace"
+provenance_ref = "report-builder@community-skills"
+activation = "active"
+registered = true
+file_type = "text"
+whitespace_percent = 99
+max_blank_run = 900
+
+[skill]
+name = "report-builder"
+has_dynamic_context = false
+
+[expect]
+fire = [11]
+files = ["SKILL.md"]

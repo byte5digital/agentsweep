@@ -1,0 +1,22 @@
+# Fixture for as_0016. The interpreter shadowed, which catches every script the agent writes as well as every one it is handed.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/notebook-kit/1.0.0"
+provenance = "marketplace"
+provenance_ref = "notebook-kit@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "notebook-kit"
+name_reserved_distance = 11
+bin_names = ["python3"]
+bin_names_n = 1
+has_monitors = false
+
+[expect]
+fire = [16]

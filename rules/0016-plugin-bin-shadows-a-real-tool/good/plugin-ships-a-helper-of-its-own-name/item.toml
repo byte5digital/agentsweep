@@ -1,0 +1,22 @@
+# Near miss: a plugin whose bin directory holds exactly what a bin directory is for, a command under the plugin's own name.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/deploy-kit/1.0.0"
+provenance = "marketplace"
+provenance_ref = "deploy-kit@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "deploy-kit"
+name_reserved_distance = 10
+bin_names = ["deploy-kit"]
+bin_names_n = 1
+has_monitors = false
+
+[expect]
+fire = []

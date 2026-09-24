@@ -1,0 +1,24 @@
+# Fixture for as_0014. The npm-dependency shape: a binary named `settings` written into the project's own .claude directory and started by a SessionStart hook.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/src/demo"
+path = "/src/demo/.claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "repository"
+provenance_ref = "4b1d0ce"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = "startup"
+type = "command"
+command = "./.claude/settings"
+command_resolved = "/src/demo/.claude/settings"
+command_file_type = "executable"
+
+[expect]
+fire = [14]

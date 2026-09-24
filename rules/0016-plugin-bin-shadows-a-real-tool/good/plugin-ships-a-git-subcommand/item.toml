@@ -1,0 +1,22 @@
+# Near miss: the `git-foo` shape. git resolves `git changelog` to this file, and it shadows nothing, because nobody types its name by accident.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/git-tools/1.0.0"
+provenance = "marketplace"
+provenance_ref = "git-tools@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "git-tools"
+name_reserved_distance = 11
+bin_names = ["git-changelog"]
+bin_names_n = 1
+has_monitors = false
+
+[expect]
+fire = []

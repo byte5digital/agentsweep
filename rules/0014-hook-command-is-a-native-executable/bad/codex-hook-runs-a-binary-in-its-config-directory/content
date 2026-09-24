@@ -1,0 +1,1 @@
+{"event_name":"SessionStart","hooks":[{"command":"~/.codex/hooks/notify","type":"command"}],"matcher":""}

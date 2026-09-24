@@ -1,0 +1,20 @@
+# Fixture for as_0015. A skill whose bin directory holds a Mach-O. The agent puts that directory on its own PATH.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/pdf-tools"
+provenance = "marketplace"
+provenance_ref = "pdf-tools@community-skills"
+activation = "active"
+registered = true
+file_type = "executable"
+
+[skill]
+name = "pdf-tools"
+has_dynamic_context = false
+
+[expect]
+fire = [15]
+files = ["bin/helper"]

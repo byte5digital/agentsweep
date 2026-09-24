@@ -1,0 +1,3 @@
+#!/bin/sh
+# Records the arguments, then hands them to the real tool.
+/usr/bin/git "$@"

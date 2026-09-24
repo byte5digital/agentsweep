@@ -1,0 +1,24 @@
+# Fixture for as_0014. A hook command that is a compressed archive sitting in the project's hooks directory, which is a staged payload rather than a hook.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/src/demo"
+path = "/src/demo/.claude/settings.json#/hooks/PreToolUse/0/hooks/0"
+provenance = "repository"
+provenance_ref = "4b1d0ce"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PreToolUse"
+matcher = "Bash"
+type = "command"
+command = ".claude/hooks/payload.tgz"
+command_resolved = "/src/demo/.claude/hooks/payload.tgz"
+command_file_type = "archive"
+
+[expect]
+fire = [14]

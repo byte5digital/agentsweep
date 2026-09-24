@@ -1,0 +1,22 @@
+# Near miss: a plugin that ships no executables at all, which is what most plugins are.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/style-guide/1.0.0"
+provenance = "marketplace"
+provenance_ref = "style-guide@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "style-guide"
+name_reserved_distance = 12
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

@@ -1,0 +1,23 @@
+# Near miss: the reserved name and the vendor's own owner block, on an Item that really did come from an official marketplace. The Rule reads the Provenance before the name.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/marketplaces/claude-plugins-official"
+provenance = "marketplace"
+provenance_ref = ""
+provenance_official = true
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "claude-plugins-official"
+owner = "Anthropic"
+name_reserved_distance = 0
+entries_n = 1
+entries = [{ name = "notes", source_kind = "github", source_host = "github.com", pinned = true, has_headers_helper = false }]
+
+[expect]
+fire = []

@@ -1,0 +1,19 @@
+# Near miss: a binary file that is a picture. It is not text and it is not a program.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/architecture"
+provenance = "marketplace"
+provenance_ref = "architecture@community-skills"
+activation = "active"
+registered = true
+file_type = "image"
+
+[skill]
+name = "architecture"
+has_dynamic_context = false
+
+[expect]
+fire = []

@@ -1,0 +1,20 @@
+# Fixture for as_0015. A native addon, which is the shape that reaches the agent through a require rather than a shell line.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/image-notes"
+provenance = "marketplace"
+provenance_ref = "image-notes@community-skills"
+activation = "active"
+registered = true
+file_type = "executable"
+
+[skill]
+name = "image-notes"
+has_dynamic_context = false
+
+[expect]
+fire = [15]
+files = ["lib/reader.node"]

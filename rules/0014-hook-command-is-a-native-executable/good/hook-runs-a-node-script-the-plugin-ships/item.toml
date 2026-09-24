@@ -1,0 +1,23 @@
+# Near miss: a plugin hook that runs a Node script the plugin ships. It sits inside a configuration directory and it is still source anyone can read.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/formatter/1.4.0/hooks/hooks.json#/hooks/PostToolUse/0/hooks/0"
+provenance = "plugin"
+provenance_ref = "formatter@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "PostToolUse"
+matcher = "Edit"
+type = "command"
+command = "node ${CLAUDE_PLUGIN_ROOT}/scripts/format.js"
+command_resolved = "/home/u/.claude/plugins/cache/community-tools/formatter/1.4.0/scripts/format.js"
+command_file_type = "text"
+
+[expect]
+fire = []

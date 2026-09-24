@@ -1,0 +1,23 @@
+# Near miss: twelve edits from the nearest reserved name. Mentioning Claude is how half the community names itself, and it is Heuristic 0588's business.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/marketplaces/awesome-claude-plugins"
+provenance = "marketplace"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "awesome-claude-plugins"
+owner = "the-community"
+name_reserved_distance = 12
+entries_n = 1
+entries = [{ name = "notes", source_kind = "github", source_host = "github.com", pinned = true, has_headers_helper = false }]
+
+[expect]
+fire = []

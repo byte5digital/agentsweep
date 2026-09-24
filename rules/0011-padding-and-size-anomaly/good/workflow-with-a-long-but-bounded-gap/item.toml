@@ -1,0 +1,18 @@
+# Near miss: nine hundred blank lines, which is a generated file with a gap in
+# it rather than a payload pushed out of sight. The limb starts above a
+# thousand.
+[item]
+agent = "claude-code"
+kind = "Workflow"
+shape = "file"
+scope = "user"
+path = ".claude/workflows/release.js"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+whitespace_percent = 94
+max_blank_run = 900
+
+[expect]
+fire = []

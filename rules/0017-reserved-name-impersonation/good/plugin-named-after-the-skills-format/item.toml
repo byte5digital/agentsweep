@@ -1,0 +1,23 @@
+# Near miss: six edits from `agent-skills`. A name built on a format's name is not a name pretending to be the format's home.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/agent-skills-extra/1.0.0"
+provenance = "marketplace"
+provenance_ref = "agent-skills-extra@community-tools"
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "agent-skills-extra"
+name_reserved_distance = 6
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

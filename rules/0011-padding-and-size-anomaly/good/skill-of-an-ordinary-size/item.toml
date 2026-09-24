@@ -1,0 +1,20 @@
+# Near miss: a skill of the size and shape almost every skill has.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/note-taker"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+whitespace_percent = 17
+max_blank_run = 1
+
+[skill]
+name = "note-taker"
+has_dynamic_context = false
+
+[expect]
+fire = []

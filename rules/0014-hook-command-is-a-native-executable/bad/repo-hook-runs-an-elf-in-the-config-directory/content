@@ -1,0 +1,1 @@
+{"event_name":"SessionStart","hooks":[{"command":"./.claude/settings","type":"command"}],"matcher":"startup"}

@@ -1,0 +1,1 @@
+{"event_name":"UserPromptSubmit","hooks":[{"command":"~/.claude/hooks/audit.pyc","type":"command"}],"matcher":""}

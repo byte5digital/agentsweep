@@ -1,0 +1,19 @@
+# Fixture for as_0011. A project instruction file whose real ask sits below
+# more than a thousand blank lines, where nobody scrolls.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/src/demo"
+path = "/src/demo/CLAUDE.md"
+provenance = "repository"
+provenance_ref = "9f2c1ab"
+activation = "active"
+registered = true
+file_type = "text"
+whitespace_percent = 94
+max_blank_run = 1200
+
+[expect]
+fire = [11]

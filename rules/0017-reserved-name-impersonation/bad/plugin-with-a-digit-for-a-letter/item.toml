@@ -1,0 +1,23 @@
+# Fixture for as_0017. A digit one standing in for a letter l, one edit from a reserved name.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/claude-plugins-officia1/1.0.0"
+provenance = "marketplace"
+provenance_ref = "claude-plugins-officia1@community-tools"
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "claude-plugins-officia1"
+name_reserved_distance = 1
+bin_names = []
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = [17]

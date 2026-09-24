@@ -1,0 +1,20 @@
+# Fixture for as_0015. A binary filed among the scripts, where a reviewer reads the shell script beside it and stops.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/log-reader"
+provenance = "marketplace"
+provenance_ref = "log-reader@community-skills"
+activation = "active"
+registered = true
+file_type = "executable"
+
+[skill]
+name = "log-reader"
+has_dynamic_context = false
+
+[expect]
+fire = [15]
+files = ["scripts/parse"]

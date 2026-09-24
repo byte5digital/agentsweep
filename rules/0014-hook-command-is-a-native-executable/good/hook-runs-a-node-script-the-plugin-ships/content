@@ -1,0 +1,1 @@
+{"event_name":"PostToolUse","hooks":[{"command":"node ${CLAUDE_PLUGIN_ROOT}/scripts/format.js","type":"command"}],"matcher":"Edit"}

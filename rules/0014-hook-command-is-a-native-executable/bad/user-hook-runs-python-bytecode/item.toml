@@ -1,0 +1,22 @@
+# Fixture for as_0014. Compiled bytecode in the user's own hooks directory: the source it was built from is not there to read.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/UserPromptSubmit/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "UserPromptSubmit"
+matcher = ""
+type = "command"
+command = "~/.claude/hooks/audit.pyc"
+command_resolved = "/home/u/.claude/hooks/audit.pyc"
+command_file_type = "bytecode"
+
+[expect]
+fire = [14]

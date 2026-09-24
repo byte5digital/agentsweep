@@ -1036,8 +1036,21 @@ fn classify(bytes: &[u8]) -> FileType {
     {
         return FileType::Image;
     }
+    // The compound file the older Office formats are written in. The newer
+    // ones are ZIP containers and are reported as an archive, which is the
+    // same answer for every Rule that reads this field.
+    if bytes.starts_with(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") {
+        return FileType::Office;
+    }
     if !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok() {
         return FileType::Text;
+    }
+    // Interpreter bytecode. A Python `.pyc` opens with a four-byte version
+    // magic whose last two bytes are a carriage return and a newline, and a
+    // WebAssembly module with its own. Both are asked after text, so a file
+    // that merely happens to begin that way and reads as text stays text.
+    if (bytes.len() >= 16 && bytes[2..4] == *b"\r\n") || bytes.starts_with(b"\0asm") {
+        return FileType::Bytecode;
     }
     FileType::Binary
 }
@@ -1110,6 +1123,23 @@ mod tests {
             FileType::Executable
         );
         assert_eq!(classify(&[0x01, 0x00, 0x02]), FileType::Binary);
+    }
+
+    /// The two kinds `rules/README.md` names that no magic number reached
+    /// before: what a skill hides a payload in (Rules 0015 and 0585).
+    #[test]
+    fn bytecode_and_an_office_document_are_classified_as_their_own_kinds() {
+        let mut pyc = vec![0x6f, 0x0d, 0x0d, 0x0a];
+        pyc.extend_from_slice(&[0u8; 20]);
+        assert_eq!(classify(&pyc), FileType::Bytecode);
+        assert_eq!(classify(b"\0asm\x01\0\0\0"), FileType::Bytecode);
+        assert_eq!(
+            classify(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1rest"),
+            FileType::Office
+        );
+        // A text file that happens to carry a carriage return where a `.pyc`
+        // carries its magic is still text.
+        assert_eq!(classify(b"ab\r\ncdefghijklmnopqrstuvwxyz"), FileType::Text);
     }
 
     #[test]

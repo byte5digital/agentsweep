@@ -1,0 +1,22 @@
+# Near miss: the ordinary shape. A shell script in the user's own hooks directory, which anyone can open and read.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".claude/settings.json#/hooks/SessionStart/0/hooks/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = "startup"
+type = "command"
+command = "bash ~/.claude/hooks/state.sh"
+command_resolved = "/home/u/.claude/hooks/state.sh"
+command_file_type = "text"
+
+[expect]
+fire = []

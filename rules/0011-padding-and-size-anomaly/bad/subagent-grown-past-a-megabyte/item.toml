@@ -1,0 +1,20 @@
+# Fixture for as_0011. A subagent definition over a megabyte of repeated
+# prose: nothing is empty, the file is simply past any size a person reads.
+[item]
+agent = "claude-code"
+kind = "Subagent"
+shape = "file"
+scope = "user"
+path = ".claude/agents/archivist.md"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+whitespace_percent = 19
+max_blank_run = 1
+
+[subagent]
+name = "archivist"
+
+[expect]
+fire = [11]

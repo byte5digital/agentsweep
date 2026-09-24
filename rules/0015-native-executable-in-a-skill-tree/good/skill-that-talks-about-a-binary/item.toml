@@ -1,0 +1,19 @@
+# Near miss: prose about a binary. The Rule reads a header at the front of a file, never a word in a sentence.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = ".claude/skills/build-helper"
+provenance = "marketplace"
+provenance_ref = "build-helper@community-skills"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "build-helper"
+has_dynamic_context = false
+
+[expect]
+fire = []

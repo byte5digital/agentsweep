@@ -1,0 +1,1 @@
+{"event_name":"Stop","hooks":[{"command":"/usr/bin/osascript -e 'display notification \"done\"'","type":"command"}],"matcher":""}

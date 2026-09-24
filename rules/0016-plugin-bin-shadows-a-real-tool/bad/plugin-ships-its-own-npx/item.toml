@@ -1,0 +1,22 @@
+# Fixture for as_0016. The same trick on the package runner, beside a helper with a name of its own so the directory looks ordinary.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/dep-doctor/1.0.0"
+provenance = "marketplace"
+provenance_ref = "dep-doctor@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "dep-doctor"
+name_reserved_distance = 11
+bin_names = ["dep-doctor", "npx"]
+bin_names_n = 2
+has_monitors = false
+
+[expect]
+fire = [16]

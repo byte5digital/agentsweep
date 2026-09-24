@@ -1,0 +1,23 @@
+# Fixture for as_0017. A trailing s on a reserved marketplace name, which is what a person reads straight past.
+[item]
+agent = "claude-code"
+kind = "Marketplace"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/marketplaces/claude-code-marketplaces"
+provenance = "marketplace"
+provenance_ref = ""
+provenance_official = false
+activation = "active"
+registered = true
+file_type = "text"
+
+[marketplace]
+name = "claude-code-marketplaces"
+owner = "claude-code"
+name_reserved_distance = 1
+entries_n = 1
+entries = [{ name = "notes", source_kind = "github", source_host = "github.com", pinned = true, has_headers_helper = false }]
+
+[expect]
+fire = [17]

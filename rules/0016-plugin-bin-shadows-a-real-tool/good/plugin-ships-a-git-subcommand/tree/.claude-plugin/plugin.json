@@ -1,0 +1,5 @@
+{
+  "name": "git-tools",
+  "description": "Adds a git subcommand.",
+  "version": "1.0.0"
+}

@@ -1,0 +1,22 @@
+# Fixture for as_0014. The same shape on the other Agent: an opaque binary in ~/.codex started on every session.
+[item]
+agent = "codex"
+kind = "Hook"
+shape = "entry"
+scope = "user"
+path = ".codex/hooks.json#/hooks/SessionStart/0"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "SessionStart"
+matcher = ""
+type = "command"
+command = "~/.codex/hooks/notify"
+command_resolved = "/home/u/.codex/hooks/notify"
+command_file_type = "executable"
+
+[expect]
+fire = [14]

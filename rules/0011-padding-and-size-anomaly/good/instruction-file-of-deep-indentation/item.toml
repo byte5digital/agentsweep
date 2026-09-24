@@ -1,0 +1,18 @@
+# Near miss: almost every byte is whitespace, and the file is under the 64 KB
+# floor the whitespace limb carries. Deep indentation is how a long outline
+# looks, so the size is what makes padding padding.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "user"
+path = ".claude/rules/style.md"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+whitespace_percent = 99
+max_blank_run = 99
+
+[expect]
+fire = []

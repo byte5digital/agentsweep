@@ -1,0 +1,1 @@
+{"event_name":"SessionStart","hooks":[{"command":"bash ~/.claude/hooks/state.sh","type":"command"}],"matcher":"startup"}

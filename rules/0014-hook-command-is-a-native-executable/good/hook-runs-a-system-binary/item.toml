@@ -1,0 +1,24 @@
+# Near miss: a native executable, and one that lives where tools live. What the Rule is about is a binary in a configuration directory, not every binary.
+[item]
+agent = "claude-code"
+kind = "Hook"
+shape = "entry"
+scope = "project"
+project_root = "/src/demo"
+path = "/src/demo/.claude/settings.json#/hooks/Stop/0/hooks/0"
+provenance = "repository"
+provenance_ref = "4b1d0ce"
+activation = "active"
+registered = true
+file_type = "text"
+
+[hook]
+event = "Stop"
+matcher = ""
+type = "command"
+command = "/usr/bin/osascript -e 'display notification \"done\"'"
+command_resolved = "/usr/bin/osascript"
+command_file_type = "executable"
+
+[expect]
+fire = []

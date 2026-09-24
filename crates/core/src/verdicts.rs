@@ -54,7 +54,9 @@ pub struct CachedVerdict {
 }
 
 impl CachedVerdict {
-    /// The payload a record carries.
+    /// The payload a record carries. Only a writer needs it, and only the
+    /// daemon may hold one.
+    #[cfg(feature = "daemon")]
     fn to_payload(&self) -> Value {
         let mut map = Map::new();
         map.insert("engine".to_string(), Value::from(self.engine.as_str()));
@@ -101,6 +103,7 @@ struct SealedRecord {
 }
 
 impl SealedRecord {
+    #[cfg(feature = "daemon")]
     fn seal(epoch: u64, recorded_at: Timestamp, payload: Value, key: &ChainKey) -> SealedRecord {
         let mut sealed = SealedRecord {
             epoch,

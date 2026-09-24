@@ -16,23 +16,29 @@ use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
 use agentsweep_core::finding::{Finding, FiredHeuristic, RuleStatus};
 use agentsweep_core::heuristics::Band;
 use agentsweep_core::host::Host;
+#[cfg(test)]
+use agentsweep_core::item::BaselineState;
 use agentsweep_core::item::TreeCaps;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::{ScanReport, scan_enumeration};
 
 /// Runs a Folder Scan over one directory and returns what it found.
 pub fn folder_scan(directory: &Path) -> Result<(PathBuf, ScanReport), Box<dyn Error>> {
-    folder_scan_under(directory, TreeCaps::default())
+    let (root, _, report) = folder_scan_under(directory, TreeCaps::default())?;
+    Ok((root, report))
 }
 
 /// The same Folder Scan with the caps every tree is read under given rather
-/// than taken from the core. Only a test asks for smaller ones, which is how
-/// the answer on a tree too large to check fully is proven without writing a
-/// tree of ten thousand files.
+/// than taken from the core, answering with the Items it enumerated as well.
+///
+/// Only a test asks for smaller caps, which is how the answer on a tree too
+/// large to check fully is proven without writing a tree of ten thousand
+/// files, and only a test looks at the Items, which is how it is proven that
+/// every one of them reads `item.baseline` as `none`.
 fn folder_scan_under(
     directory: &Path,
     caps: TreeCaps,
-) -> Result<(PathBuf, ScanReport), Box<dyn Error>> {
+) -> Result<(PathBuf, Enumeration, ScanReport), Box<dyn Error>> {
     let root = directory.canonicalize()?;
     if !root.is_dir() {
         return Err(format!("{} is not a folder", root.display()).into());
@@ -58,7 +64,7 @@ fn folder_scan_under(
 
     let pack = RulePack::bundled()?;
     let report = scan_enumeration(&pack, &enumeration)?;
-    Ok((root, report))
+    Ok((root, enumeration, report))
 }
 
 /// Renders the result of a Folder Scan for the terminal. Matched text is never
@@ -109,8 +115,18 @@ pub fn render(root: &Path, report: &ScanReport) -> String {
         let _ = writeln!(out, "Do not open yet.");
     }
     let _ = writeln!(out, "Nothing was recorded.");
+    let _ = writeln!(out, "{DRIFT_UNAVAILABLE}");
     out
 }
+
+/// What a Scan that reaches no daemon can say about Drift.
+///
+/// The Baseline is the daemon's, and this pass never asks it anything, so
+/// every Item reads `item.baseline` as `none` and no Item here has changed or
+/// appeared as far as this process can tell. Saying so is the point: silence
+/// would read as "nothing changed" (spec section 6.2).
+pub const DRIFT_UNAVAILABLE: &str =
+    "Drift unavailable: this scan reaches no daemon, so nothing is compared with a Baseline.";
 
 /// The Heuristics that fired on the Item, under the Finding they belong to:
 /// the evidence of a Suspicious Finding, and what was also noticed under a
@@ -334,6 +350,35 @@ mod tests {
         fs::remove_dir_all(&root).expect("the temporary folder goes away");
     }
 
+    /// Spec section 6.2: a Scan that reaches no daemon reads `item.baseline`
+    /// as `none` for every Item and says that Drift is unavailable, rather
+    /// than letting silence pass for "nothing changed".
+    #[test]
+    fn a_folder_scan_says_that_drift_is_unavailable() {
+        let root = temporary_root("drift");
+        fs::write(root.join("CLAUDE.md"), b"# demo\n\nRun the tests.\n")
+            .expect("a clean instruction file");
+        fs::create_dir_all(root.join(".claude/skills/helper")).expect("a skill directory");
+        fs::write(root.join(".claude/skills/helper/SKILL.md"), b"# helper\n")
+            .expect("a clean skill");
+
+        let (scanned, report) = folder_scan(&root).expect("the Folder Scan runs");
+        let rendered = render(&scanned, &report);
+
+        assert!(rendered.contains("Drift unavailable"), "{rendered}");
+        assert!(rendered.contains("Nothing was recorded."), "{rendered}");
+
+        // Every Item this pass yields carries `none`, which is never Drift.
+        let (_, enumeration, _) =
+            folder_scan_under(&root, TreeCaps::default()).expect("the Folder Scan runs again");
+        assert!(enumeration.items.len() >= 2, "{rendered}");
+        for item in &enumeration.items {
+            assert_eq!(item.baseline, BaselineState::None, "{}", item.id);
+        }
+
+        fs::remove_dir_all(&root).expect("the temporary folder goes away");
+    }
+
     /// Spec section 3.3: a Surface AgentSweep could not read all the way
     /// through is an informational Exposure Finding, so the answer is "do not
     /// open yet" rather than a silence that reads like an all-clear.
@@ -386,7 +431,7 @@ mod tests {
             max_files: 4,
             ..TreeCaps::default()
         };
-        let (scanned, report) = folder_scan_under(&root, caps).expect("the Folder Scan runs");
+        let (scanned, _, report) = folder_scan_under(&root, caps).expect("the Folder Scan runs");
         let rendered = render(&scanned, &report);
 
         assert!(rules(&report).is_empty(), "{rendered}");

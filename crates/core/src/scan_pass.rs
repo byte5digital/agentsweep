@@ -284,6 +284,15 @@ impl<'a> ScanPass<'a> {
 
     /// How one Item compares with the Baseline, and what stands behind it.
     fn decide(&self, item: &Item) -> Decision {
+        // A Scan that records nothing compares nothing either: every Item of a
+        // Folder Scan reads `none`, whatever it was handed (spec section 6.2).
+        if !self.kind.records() {
+            return Decision {
+                state: BaselineState::None,
+                known: None,
+                first_sight: true,
+            };
+        }
         let held = self.baseline.record(&item.id);
         let covered = self
             .baseline
@@ -929,6 +938,37 @@ mod tests {
         for item in &enumeration.items {
             assert_eq!(item.baseline, BaselineState::None);
         }
+    }
+
+    /// Even handed a Baseline that knows the folder well, a Folder Scan reads
+    /// `none`: it records nothing, so it compares nothing.
+    #[test]
+    fn a_folder_scan_reads_none_against_a_baseline_that_knows_the_items() {
+        let host = FakeHost::new();
+        host.instruction_file("# demo\n");
+        let daemon = Daemon::new();
+        daemon.scan(&host, "2026-09-24T09:00:00.000Z");
+
+        host.instruction_file("# demo\n\nAnd something else.\n");
+        let data = daemon.data();
+        let view = Baseline::in_data_directory(&data)
+            .read(&daemon.keys)
+            .expect("the Baseline reads");
+        assert_eq!(view.len(), 1);
+
+        let trusted = TrustTable::rebuild(&[]);
+        let known = KnownActions::none();
+        let mut enumeration = host.enumerate();
+        let outcome = ScanPass {
+            kind: ScanKind::Folder,
+            ..ScanPass::full(&daemon.pack, &view, &plan(), &trusted, &known)
+        }
+        .over(&mut enumeration)
+        .expect("the pass runs");
+
+        assert_eq!(state_of(&outcome, "CLAUDE.md"), BaselineState::None);
+        assert!(outcome.advances.is_empty());
+        assert!(outcome.coverage.is_empty());
     }
 
     /// Heuristics 0580 and 0581 read `item.baseline` and match no bytes at

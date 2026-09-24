@@ -10,10 +10,12 @@
 //! the chains and the Keychain-backed key source exist in this binary and in
 //! no other.
 
+use agentsweep_core::baseline::{Baseline, BaselineWriter};
 use agentsweep_core::chain::{ChainError, ChainState};
 use agentsweep_core::eventlog::{EventLog, EventLogWriter};
 use agentsweep_core::keychain::{KeySource, LoginKeychain};
 use agentsweep_core::paths::DataDirectory;
+use agentsweep_core::verdicts::{CacheError, VerdictCache, VerdictCacheWriter};
 
 /// The key source the daemon uses: the item in the user's login Keychain.
 /// Building it touches nothing; the Keychain is read on the first load.
@@ -34,6 +36,27 @@ fn open_the_event_log(
     keys: &dyn KeySource,
 ) -> Result<(EventLogWriter, ChainState), ChainError> {
     EventLogWriter::open(&EventLog::in_data_directory(directory), keys)
+}
+
+/// The same for the Baseline, the second chain under the same key. A Scan pass
+/// decides what to accept and this binary is the only one that can write it
+/// down.
+#[allow(dead_code)]
+fn open_the_baseline(
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+) -> Result<(BaselineWriter, ChainState), ChainError> {
+    BaselineWriter::open(&Baseline::in_data_directory(directory), keys)
+}
+
+/// And for the Verdict cache, which is not a chain and so has nothing to
+/// verify first: a record that does not verify later is a cache miss.
+#[allow(dead_code)]
+fn open_the_verdict_cache(
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+) -> Result<VerdictCacheWriter, CacheError> {
+    VerdictCacheWriter::open(&VerdictCache::in_data_directory(directory), keys)
 }
 
 fn main() {
@@ -88,6 +111,69 @@ mod tests {
         assert_eq!(view.state, ChainState::Intact);
         assert_eq!(view.events.len(), 1);
         assert_eq!(view.events[0].event.action, Action::GateRegistered);
+    }
+
+    /// The Baseline is the same primitive as the Event Log, written by the
+    /// same one binary. Milestone 5 built the records; milestone 6 opens the
+    /// chain at start, and this is the boundary it will open it through.
+    #[test]
+    fn the_daemon_writes_the_baseline_and_reads_it_back() {
+        use agentsweep_core::baseline::{AcceptedBy, BaselineRecord};
+        use agentsweep_core::coverage::{CoverageKey, CoverageRecord};
+        use agentsweep_core::envelope::Timestamp;
+        use agentsweep_core::item::{Activation, Item, Kind, Provenance, Scope};
+
+        let temporary = tempfile::TempDir::new().expect("a temporary directory");
+        let directory = DataDirectory::at(temporary.path());
+        let keys = MemoryKeySource::empty();
+        let at = Timestamp::now();
+
+        let item = Item::file(
+            "claude-code",
+            Scope::User,
+            Kind::InstructionFile,
+            "~/.claude/CLAUDE.md",
+            temporary.path().join("CLAUDE.md"),
+            Provenance::Manual,
+            Activation::Active,
+            b"# demo\n".to_vec(),
+        );
+        let record = BaselineRecord::accepting(&item, at, AcceptedBy::Bootstrap);
+
+        let (mut writer, state) = open_the_baseline(&directory, &keys).expect("an open Baseline");
+        assert_eq!(state, ChainState::Intact);
+        writer
+            .cover(&CoverageRecord::new(
+                CoverageKey::of("claude-code", &Scope::User, Kind::InstructionFile),
+                at,
+            ))
+            .expect("written coverage");
+        writer.accept(&record).expect("an accepted hash");
+
+        let view = Baseline::in_data_directory(&directory)
+            .read(&keys)
+            .expect("a readable Baseline");
+        assert_eq!(view.state, ChainState::Intact);
+        assert_eq!(view.record(&item.id), Some(&record));
+        assert!(
+            view.coverage()
+                .covers("claude-code", &Scope::User, Kind::InstructionFile)
+        );
+    }
+
+    /// The Verdict cache is empty until AI Judgement, and its writer is the
+    /// daemon's alone all the same.
+    #[test]
+    fn the_daemon_is_the_only_writer_of_the_verdict_cache() {
+        let temporary = tempfile::TempDir::new().expect("a temporary directory");
+        let directory = DataDirectory::at(temporary.path());
+        let keys = MemoryKeySource::empty();
+
+        let _writer = open_the_verdict_cache(&directory, &keys).expect("an open Verdict cache");
+        let view = VerdictCache::in_data_directory(&directory)
+            .read(&keys)
+            .expect("a readable Verdict cache");
+        assert!(view.is_empty());
     }
 
     #[test]

@@ -16,11 +16,23 @@ use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
 use agentsweep_core::finding::{Finding, FiredHeuristic, RuleStatus};
 use agentsweep_core::heuristics::Band;
 use agentsweep_core::host::Host;
+use agentsweep_core::item::TreeCaps;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::{ScanReport, scan_enumeration};
 
 /// Runs a Folder Scan over one directory and returns what it found.
 pub fn folder_scan(directory: &Path) -> Result<(PathBuf, ScanReport), Box<dyn Error>> {
+    folder_scan_under(directory, TreeCaps::default())
+}
+
+/// The same Folder Scan with the caps every tree is read under given rather
+/// than taken from the core. Only a test asks for smaller ones, which is how
+/// the answer on a tree too large to check fully is proven without writing a
+/// tree of ten thousand files.
+fn folder_scan_under(
+    directory: &Path,
+    caps: TreeCaps,
+) -> Result<(PathBuf, ScanReport), Box<dyn Error>> {
     let root = directory.canonicalize()?;
     if !root.is_dir() {
         return Err(format!("{} is not a folder", root.display()).into());
@@ -36,7 +48,11 @@ pub fn folder_scan(directory: &Path) -> Result<(PathBuf, ScanReport), Box<dyn Er
 
     let mut enumeration = Enumeration::default();
     enumeration.extend(workspace.enumerate(&host, roots));
-    enumeration.extend(ClaudeCode::new().enumerate(&host, roots));
+    enumeration.extend(
+        ClaudeCode::new()
+            .with_tree_caps(caps)
+            .enumerate(&host, roots),
+    );
     enumeration.extend(Codex::new().enumerate(&host, roots));
     provenances.stamp(&mut enumeration);
 
@@ -342,6 +358,48 @@ mod tests {
         assert!(!report.is_clear(), "{rendered}");
         assert!(rendered.contains("Do not open yet."), "{rendered}");
         assert!(rendered.contains("could not"), "{rendered}");
+        assert_ne!(exit_code(&report), 0);
+
+        fs::remove_dir_all(&root).expect("the temporary folder goes away");
+    }
+
+    /// Spec section 3.3: a tree over the caps is the Problem "too large to
+    /// check fully" and never counts as clear. The folder holds nothing else
+    /// wrong, so the size alone has to be what keeps the answer from being an
+    /// all-clear.
+    #[test]
+    fn a_tree_too_large_to_check_fully_is_not_safe_to_open() {
+        let root = temporary_root("too-large");
+        let skill = root.join(".claude/skills/asset-pack");
+        fs::create_dir_all(&skill).expect("a skill folder");
+        fs::write(
+            skill.join("SKILL.md"),
+            b"---\nname: asset-pack\ndescription: Ships the project assets.\n---\n\nCopy what is here into the project.\n",
+        )
+        .expect("a skill body");
+        for index in 0..8 {
+            fs::write(skill.join(format!("asset-{index}.txt")), b"an asset\n")
+                .expect("an asset file");
+        }
+
+        let caps = TreeCaps {
+            max_files: 4,
+            ..TreeCaps::default()
+        };
+        let (scanned, report) = folder_scan_under(&root, caps).expect("the Folder Scan runs");
+        let rendered = render(&scanned, &report);
+
+        assert!(rules(&report).is_empty(), "{rendered}");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| matches!(finding.source, Source::Problem(_))),
+            "{rendered}"
+        );
+        assert!(!report.is_clear(), "{rendered}");
+        assert!(rendered.contains("Do not open yet."), "{rendered}");
+        assert!(rendered.contains("too large"), "{rendered}");
         assert_ne!(exit_code(&report), 0);
 
         fs::remove_dir_all(&root).expect("the temporary folder goes away");

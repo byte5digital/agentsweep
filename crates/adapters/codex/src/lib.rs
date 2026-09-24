@@ -1088,12 +1088,12 @@ impl SurfaceAdapter for Codex {
     /// Puts the Item back by replaying its Receipt in reverse.
     fn restore(
         &self,
-        _host: &Host,
+        host: &Host,
         store: &dyn Store,
         receipt: &Receipt,
         conflict: Conflict,
     ) -> RestoreReport {
-        quarantine::replay_in_reverse(store, receipt, conflict)
+        quarantine::replay_in_reverse(host, store, receipt, conflict)
     }
 }
 

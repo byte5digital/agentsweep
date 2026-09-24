@@ -371,12 +371,12 @@ mod tests {
         }
         fn restore(
             &self,
-            _host: &Host,
+            host: &Host,
             store: &dyn Store,
             receipt: &Receipt,
             conflict: Conflict,
         ) -> RestoreReport {
-            replay_in_reverse(store, receipt, conflict)
+            replay_in_reverse(host, store, receipt, conflict)
         }
     }
 

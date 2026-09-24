@@ -198,6 +198,13 @@ pub enum EnforcementError {
         /// The one sentence that says why.
         reason: String,
     },
+    /// One entry of a shared config file could not be taken out or put back.
+    Edit {
+        /// The file the entry sits in.
+        path: PathBuf,
+        /// The one sentence that says why.
+        reason: String,
+    },
     /// The store itself could not be written.
     Store(io::Error),
     /// The Event Log could not be read or appended to, so nothing may be
@@ -218,6 +225,9 @@ impl fmt::Display for EnforcementError {
                 write!(f, "{kind} cannot be {} by this adapter", primitive.as_str())
             }
             EnforcementError::NotEligible { reason } => f.write_str(reason),
+            EnforcementError::Edit { path, reason } => {
+                write!(f, "{}: {reason}", path.display())
+            }
             EnforcementError::Store(error) => write!(f, "the quarantine store: {error}"),
             EnforcementError::Log(error) => write!(f, "the Event Log: {error}"),
         }
@@ -289,6 +299,33 @@ pub trait Store {
     /// permission bits it had. The step it returns carries the outcome.
     fn move_back(&self, receipt: &ReceiptId, step: &ReceiptStep, conflict: Conflict)
     -> ReceiptStep;
+
+    /// Writes one file of a Surface whole: a temp file beside it, fsynced and
+    /// renamed over it (spec section 5.3).
+    ///
+    /// It is on the store rather than in the adapter because the daemon is the
+    /// one process that writes a Surface (spec section 6.2), and the store is
+    /// how an adapter reaches it.
+    fn rewrite(&self, path: &Path, text: &str) -> Result<(), EnforcementError>;
+
+    /// Keeps what one step took out of a shared file, under the step's place
+    /// in the Receipt, so that Restore can put it back.
+    ///
+    /// The entry is content and may hold sensitive values, so it lives here
+    /// beside the payload and never in the Event Log, which carries the hash
+    /// of a sensitive value and nothing else (spec section 5.5).
+    fn keep(
+        &self,
+        receipt: &ReceiptId,
+        slot: usize,
+        kept: &crate::entry_edit::Kept,
+    ) -> Result<(), EnforcementError>;
+
+    /// What one step kept, absent when the store no longer holds it.
+    fn kept(&self, receipt: &ReceiptId, slot: usize) -> Option<crate::entry_edit::Kept>;
+
+    /// Forgets what one step kept, once it is back where it came from.
+    fn forget(&self, receipt: &ReceiptId, slot: usize);
 }
 
 /// The hash the content at a path has right now, taken the way the enumeration
@@ -452,27 +489,30 @@ impl RestoreReport {
     }
 }
 
-/// Replays a Receipt in reverse, asking the store to put every payload back.
+/// Replays a Receipt in reverse: every payload back where it came from, every
+/// entry back into the file it was taken out of, every commented line in force
+/// again.
 ///
-/// A step of a primitive this does not know is reported failed rather than
-/// silently dropped: a partial Restore says per step what happened, and the
-/// user interface says what to do about the ones that did not.
+/// What one step does to the file system is [`crate::composite::reverse`], so
+/// a Receipt rebuilt from the Event Log alone is enough to undo a composite
+/// (spec section 5.3), and every step says for itself whether it was ok,
+/// skipped or failed.
 pub fn replay_in_reverse(
+    host: &Host,
     store: &dyn Store,
     receipt: &Receipt,
     conflict: Conflict,
 ) -> RestoreReport {
     let mut steps = Vec::with_capacity(receipt.steps.len());
-    for step in receipt.steps.iter().rev() {
-        let replayed = match step.primitive {
-            crate::eventlog::Primitive::MoveOut => store.move_back(&receipt.id, step, conflict),
-            _ => ReceiptStep {
-                outcome: Outcome::Failed,
-                detail: "this step cannot be put back yet".to_string(),
-                ..step.clone()
-            },
-        };
-        steps.push(replayed);
+    for (slot, step) in receipt.steps.iter().enumerate().rev() {
+        steps.push(crate::composite::reverse(
+            host,
+            store,
+            &receipt.id,
+            slot,
+            step,
+            conflict,
+        ));
     }
     RestoreReport::of(steps)
 }
@@ -489,6 +529,44 @@ mod disk {
     use std::path::{Path, PathBuf};
 
     use serde_json::{Map, Value};
+
+    /// What the file a step took an entry out of is called in the store, by
+    /// the step's place in the Receipt.
+    pub(super) fn kept_file(slot: usize) -> String {
+        format!("entry-{slot}")
+    }
+
+    /// Writes one file whole, the way spec section 5.3 asks for: a temp file
+    /// in the same directory, fsynced, renamed over the original.
+    ///
+    /// The rename is what makes the write atomic for whoever reads the file:
+    /// an Agent reading a config layer sees either all of the old file or all
+    /// of the new one, never a half-written one. The temp file is in the same
+    /// directory so that the rename cannot cross a volume.
+    pub(super) fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
+        use std::io::Write as _;
+
+        let directory = path.parent().unwrap_or(Path::new("."));
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let temporary = directory.join(format!(".{name}.agentsweep"));
+        {
+            let mut file = std::fs::File::create(&temporary)?;
+            file.write_all(text.as_bytes())?;
+            file.sync_all()?;
+        }
+        if let Ok(metadata) = std::fs::symlink_metadata(path) {
+            // The file keeps the permission bits it had: a settings file that
+            // was only the user's readable stays that way.
+            set_mode(&temporary, mode_of(&metadata) as u32);
+        }
+        match std::fs::rename(&temporary, path) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _ = std::fs::remove_file(&temporary);
+                Err(error)
+            }
+        }
+    }
 
     /// The file beside a payload that remembers the permission bits the
     /// payload had on the Surface.
@@ -678,8 +756,8 @@ pub use store::QuarantineStore;
 #[cfg(feature = "daemon")]
 mod store {
     use super::disk::{
-        BESIDE_SUFFIX, MODES_FILE, PAYLOAD, apply_modes, copy_across, crosses_volumes, modes_below,
-        remove, rename, strip_executable_bits,
+        BESIDE_SUFFIX, MODES_FILE, PAYLOAD, apply_modes, copy_across, crosses_volumes, kept_file,
+        modes_below, remove, rename, strip_executable_bits, write_atomically,
     };
     use super::{
         Conflict, EnforcementError, MoveOutPlan, ReceiptId, Store, compare_and_swap, current_hash,
@@ -926,6 +1004,35 @@ mod store {
             };
             replayed
         }
+
+        fn rewrite(&self, path: &Path, text: &str) -> Result<(), EnforcementError> {
+            write_atomically(path, text).map_err(EnforcementError::Store)
+        }
+
+        fn keep(
+            &self,
+            receipt: &ReceiptId,
+            slot: usize,
+            kept: &crate::entry_edit::Kept,
+        ) -> Result<(), EnforcementError> {
+            let directory = self.receipt_directory(receipt);
+            std::fs::create_dir_all(&directory).map_err(EnforcementError::Store)?;
+            std::fs::write(directory.join(kept_file(slot)), kept.to_bytes())
+                .map_err(EnforcementError::Store)
+        }
+
+        fn kept(&self, receipt: &ReceiptId, slot: usize) -> Option<crate::entry_edit::Kept> {
+            let path = self.receipt_directory(receipt).join(kept_file(slot));
+            crate::entry_edit::Kept::parse(&std::fs::read(path).ok()?)
+        }
+
+        fn forget(&self, receipt: &ReceiptId, slot: usize) {
+            let directory = self.receipt_directory(receipt);
+            let _ = std::fs::remove_file(directory.join(kept_file(slot)));
+            // The Receipt's own directory goes when the last thing in it does,
+            // so the store and the manifest rebuilt from the Event Log agree.
+            let _ = std::fs::remove_dir(directory);
+        }
     }
 
     impl QuarantineStore {
@@ -1062,7 +1169,7 @@ mod tests {
         assert_eq!(std::fs::read(&payload).expect("the payload"), before);
         assert_eq!(receipt.result(), Outcome::Ok);
 
-        let report = replay_in_reverse(&bench.store, &receipt, Conflict::Refuse);
+        let report = replay_in_reverse(&bench.host, &bench.store, &receipt, Conflict::Refuse);
 
         assert!(report.is_complete(), "{report:?}");
         assert_eq!(std::fs::read(&item.path).expect("the file"), before);
@@ -1101,7 +1208,7 @@ mod tests {
             "#!/bin/sh\necho hi\n"
         );
 
-        let report = replay_in_reverse(&bench.store, &receipt, Conflict::Refuse);
+        let report = replay_in_reverse(&bench.host, &bench.store, &receipt, Conflict::Refuse);
 
         assert!(report.is_complete(), "{report:?}");
         assert_eq!(mode(&helper), 0o755);
@@ -1139,7 +1246,7 @@ mod tests {
         );
         assert!(receipt.steps[0].detail.contains("its target"));
 
-        let report = replay_in_reverse(&bench.store, &receipt, Conflict::Refuse);
+        let report = replay_in_reverse(&bench.host, &bench.store, &receipt, Conflict::Refuse);
 
         assert!(report.is_complete(), "{report:?}");
         assert!(
@@ -1222,13 +1329,13 @@ mod tests {
         let receipt = quarantine(&bench, &item).expect("a Quarantine");
         std::fs::write(&item.path, "# whatever came after\n").expect("a new file");
 
-        let refused = replay_in_reverse(&bench.store, &receipt, Conflict::Refuse);
+        let refused = replay_in_reverse(&bench.host, &bench.store, &receipt, Conflict::Refuse);
         assert_eq!(refused.result, Outcome::Failed);
         assert!(refused.conflicted);
         assert_eq!(refused.steps[0].outcome, Outcome::Failed);
         assert!(refused.steps[0].detail.contains("restore beside it"));
 
-        let beside = replay_in_reverse(&bench.store, &receipt, Conflict::Beside);
+        let beside = replay_in_reverse(&bench.host, &bench.store, &receipt, Conflict::Beside);
         assert!(beside.is_complete(), "{beside:?}");
         assert_eq!(
             std::fs::read_to_string(bench.path("CLAUDE.md.restored")).expect("the restored file"),
@@ -1243,7 +1350,7 @@ mod tests {
         let item = bench.file_item("OTHER.md", "# demo\n");
         let receipt = quarantine(&bench, &item).expect("a Quarantine");
         std::fs::write(&item.path, "# whatever came after\n").expect("a new file");
-        let replaced = replay_in_reverse(&bench.store, &receipt, Conflict::Replace);
+        let replaced = replay_in_reverse(&bench.host, &bench.store, &receipt, Conflict::Replace);
         assert!(replaced.is_complete(), "{replaced:?}");
         assert_eq!(
             std::fs::read_to_string(&item.path).expect("the restored file"),
@@ -1258,7 +1365,7 @@ mod tests {
         let receipt = quarantine(&bench, &item).expect("a Quarantine");
         std::fs::remove_file(bench.store.payload_of(&receipt.id)).expect("a lost payload");
 
-        let report = replay_in_reverse(&bench.store, &receipt, Conflict::Refuse);
+        let report = replay_in_reverse(&bench.host, &bench.store, &receipt, Conflict::Refuse);
 
         assert_eq!(report.result, Outcome::Skipped);
         assert_eq!(report.steps[0].outcome, Outcome::Skipped);
@@ -1276,7 +1383,7 @@ mod tests {
                 "/somewhere/settings.json",
             ));
 
-        let report = replay_in_reverse(&bench.store, &receipt, Conflict::Refuse);
+        let report = replay_in_reverse(&bench.host, &bench.store, &receipt, Conflict::Refuse);
 
         assert_eq!(report.steps.len(), 2);
         assert_eq!(
@@ -1287,9 +1394,17 @@ mod tests {
             report.steps[1].primitive,
             crate::eventlog::Primitive::MoveOut
         );
-        assert_eq!(report.steps[0].outcome, Outcome::Failed);
+        // Nothing was kept in the store for the invented step, so it is
+        // skipped rather than failed: its precondition is gone, and a partial
+        // Restore says so per step (spec section 5.4).
+        assert_eq!(report.steps[0].outcome, Outcome::Skipped);
+        assert!(
+            report.steps[0].detail.contains("no longer holds"),
+            "{:?}",
+            report.steps[0]
+        );
         assert_eq!(report.steps[1].outcome, Outcome::Ok);
-        assert_eq!(report.result, Outcome::Failed);
+        assert_eq!(report.result, Outcome::Ok);
     }
 
     #[cfg(unix)]
@@ -1308,7 +1423,7 @@ mod tests {
         let payload = bench.store.payload_of(&receipt.id);
         assert_eq!(mode(&payload.join("bin/helper")) & 0o111, 0);
 
-        let report = replay_in_reverse(&bench.store, &receipt, Conflict::Refuse);
+        let report = replay_in_reverse(&bench.host, &bench.store, &receipt, Conflict::Refuse);
 
         assert!(report.is_complete(), "{report:?}");
         assert_eq!(mode(&helper), 0o755);

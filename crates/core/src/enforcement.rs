@@ -257,6 +257,58 @@ mod writer {
             Ok(report)
         }
 
+        /// Switches a quarantined plugin back on without giving it its old
+        /// version back, which is the one-click Re-enable of spec section 5.4.
+        ///
+        /// Only the native disable step is reversed. The version that was
+        /// quarantined stays in the store, because what is being re-enabled is
+        /// the newer one on disk: both Agents re-fetch plugins after session
+        /// start, and the switch is the half of the composite that survives
+        /// the re-fetch. Nothing flips by itself; whether the newer version
+        /// carries a Threat Finding is the Scan's answer, and the caller hands
+        /// the version it found clean.
+        pub fn re_enable(
+            &mut self,
+            host: &Host,
+            entry: &QuarantineEntry,
+            fixed: &Item,
+        ) -> Result<RestoreReport, EnforcementError> {
+            let refuse = |reason: &str| EnforcementError::NotEligible {
+                reason: reason.to_string(),
+            };
+            let receipt = Receipt::from_entry(entry).ok_or_else(|| {
+                refuse("the Event Log does not describe a Receipt that can be replayed")
+            })?;
+            if receipt.kind != Kind::Plugin || fixed.kind != Kind::Plugin {
+                return Err(refuse("only a plugin is re-enabled without being restored"));
+            }
+            if !entry.natively_disabled {
+                return Err(refuse("this plugin is not switched off by AgentSweep"));
+            }
+            if fixed.content_hash == receipt.content_hash {
+                return Err(refuse(
+                    "that is the version that was quarantined, not a newer one",
+                ));
+            }
+
+            let report = crate::composite::replay_only(
+                host,
+                &self.store,
+                &receipt,
+                crate::eventlog::Primitive::NativeDisable,
+                Conflict::Replace,
+            );
+
+            let mut event = Event::new(Action::ReEnable, Actor::User)
+                .about(&receipt.item_id, receipt.kind, &receipt.content_hash)
+                .noting("fixed_version", fixed.content_hash.as_str());
+            event.receipt_id = receipt.id.to_string();
+            event.steps = report.steps.clone();
+            event.result = report.result;
+            self.writer.append(&event)?;
+            Ok(report)
+        }
+
         /// Records that this content of this kind is safe, wherever it
         /// appears. Trust is bound to the hash and never expires by itself.
         pub fn trust(
@@ -320,10 +372,19 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    static KINDS: &[Kind] = &[Kind::InstructionFile, Kind::Skill, Kind::McpServer];
+    static KINDS: &[Kind] = &[
+        Kind::InstructionFile,
+        Kind::Skill,
+        Kind::McpServer,
+        Kind::Plugin,
+    ];
     static CAPABILITIES: &[(Kind, &[Primitive])] = &[
         (Kind::InstructionFile, &[Primitive::MoveOut]),
         (Kind::Skill, &[Primitive::MoveOut]),
+        (
+            Kind::Plugin,
+            &[Primitive::NativeDisable, Primitive::MoveOut],
+        ),
     ];
     static SURFACES: &[Surface] = &[];
     static DESCRIPTOR: Descriptor = Descriptor {
@@ -359,6 +420,9 @@ mod tests {
             item: &Item,
             primitives: &[Primitive],
         ) -> Result<Receipt, EnforcementError> {
+            if item.kind == Kind::Plugin {
+                return plugin_composite(host, store, item, primitives);
+            }
             if primitives != [Primitive::MoveOut] {
                 return Err(EnforcementError::Unsupported {
                     kind: item.kind,
@@ -378,6 +442,49 @@ mod tests {
         ) -> RestoreReport {
             replay_in_reverse(host, store, receipt, conflict)
         }
+    }
+
+    /// The plugin composite the eligibility table asks for: the Agent's own
+    /// switch off first, then the version directory out.
+    fn plugin_composite(
+        host: &Host,
+        store: &dyn Store,
+        item: &Item,
+        primitives: &[Primitive],
+    ) -> Result<Receipt, EnforcementError> {
+        use crate::composite::{Step, carry_out};
+        use crate::entry_edit::{EntryPath, Format};
+        use crate::quarantine::MoveOutPlan;
+
+        if primitives != [Primitive::NativeDisable, Primitive::MoveOut] {
+            return Err(EnforcementError::Unsupported {
+                kind: item.kind,
+                primitive: primitives.first().copied().unwrap_or(Primitive::MoveOut),
+            });
+        }
+        let settings = item
+            .path
+            .parent()
+            .unwrap_or(&item.path)
+            .join("settings.json");
+        let steps = [
+            Step::NativeDisable {
+                file: &settings,
+                format: Format::Json,
+                entry: EntryPath::of(&["enabledPlugins", item.locator()]),
+                value: serde_json::Value::Bool(false),
+                detail: "the plugin was switched off in the Agent's own settings".to_string(),
+            },
+            Step::MoveOut(MoveOutPlan {
+                source: &item.path,
+                contents: &item.path,
+                shape: item.shape,
+                expected_hash: &item.content_hash,
+                caps: TreeCaps::default(),
+                detail: String::new(),
+            }),
+        ];
+        carry_out(host, store, item, &steps)
     }
 
     struct Bench {
@@ -407,6 +514,34 @@ mod tests {
             Enforcement::open(&self.directory, &self.keys)
                 .expect("an open store and log")
                 .0
+        }
+
+        /// A plugin version directory with a switch of its own in a settings
+        /// file beside it, which is what the composite needs to flip.
+        fn plugin(&self, name: &str, content: &str) -> Item {
+            let root = self.surface.path().join(name);
+            std::fs::create_dir_all(&root).expect("a version directory");
+            std::fs::write(root.join("plugin.json"), content).expect("a manifest");
+            std::fs::write(
+                self.surface.path().join("settings.json"),
+                format!("{{\n  \"enabledPlugins\": {{\n    \"{name}\": true\n  }}\n}}\n"),
+            )
+            .expect("a settings file");
+            Item::tree(
+                "demo",
+                Scope::User,
+                Kind::Plugin,
+                name,
+                root.clone(),
+                Provenance::Manual,
+                Activation::Active,
+                crate::item::Tree::of(&self.host, &root, TreeCaps::default()),
+            )
+        }
+
+        fn settings(&self) -> String {
+            std::fs::read_to_string(self.surface.path().join("settings.json"))
+                .expect("the settings file")
         }
 
         fn item(&self, name: &str, content: &str) -> Item {
@@ -719,5 +854,109 @@ mod tests {
                 .events
                 .is_empty()
         );
+    }
+    /// Acceptance of ticket 16: Re-enable reverses only the disable step and
+    /// leaves the old version in the store (spec section 5.4).
+    #[test]
+    fn re_enable_switches_the_plugin_back_on_and_leaves_the_old_version_in_the_store() {
+        let bench = Bench::new();
+        let mut enforcement = bench.enforcement();
+        let item = bench.plugin("notes@demo", "{\"name\":\"notes\"}\n");
+        let before = bench.settings();
+        enforcement
+            .quarantine(&Moves, &bench.host, &item, &cause(Actor::Auto))
+            .expect("a Quarantine");
+        assert!(bench.settings().contains("\"notes@demo\": false"));
+        assert!(!item.path.exists());
+        let entry = only_entry(&enforcement);
+        assert!(entry.natively_disabled);
+        let fixed = Item::tree(
+            "demo",
+            Scope::User,
+            Kind::Plugin,
+            "notes@demo",
+            item.path.clone(),
+            Provenance::Manual,
+            Activation::Active,
+            crate::item::Tree::default(),
+        );
+
+        let report = enforcement
+            .re_enable(&bench.host, &entry, &fixed)
+            .expect("a Re-enable");
+
+        assert!(report.is_complete(), "{report:?}");
+        assert_eq!(report.steps.len(), 1);
+        assert_eq!(bench.settings(), before);
+        // The version that was quarantined stays where it is: what was
+        // re-enabled is the newer one on disk.
+        assert!(!item.path.exists());
+        let entry = only_entry(&enforcement);
+        assert!(!entry.natively_disabled);
+        assert!(entry.has_payload());
+        assert_eq!(
+            enforcement
+                .read()
+                .expect("a readable log")
+                .events
+                .last()
+                .expect("the Re-enable")
+                .event
+                .action,
+            crate::eventlog::Action::ReEnable
+        );
+    }
+
+    #[test]
+    fn re_enable_refuses_what_is_not_a_plugin_switched_off_by_a_newer_version() {
+        let bench = Bench::new();
+        let mut enforcement = bench.enforcement();
+        let plugin = bench.plugin("notes@demo", "{\"name\":\"notes\"}\n");
+        enforcement
+            .quarantine(&Moves, &bench.host, &plugin, &cause(Actor::Auto))
+            .expect("a Quarantine");
+        let entry = only_entry(&enforcement);
+
+        // The version that was quarantined is not a fixed one.
+        let error = enforcement
+            .re_enable(&bench.host, &entry, &plugin)
+            .expect_err("a refusal");
+        assert!(error.to_string().contains("not a newer one"), "{error}");
+
+        // Nothing but a plugin is ever re-enabled on its own.
+        let file = bench.item("CLAUDE.md", "# demo\n");
+        let error = enforcement
+            .re_enable(&bench.host, &entry, &file)
+            .expect_err("a refusal");
+        assert!(error.to_string().contains("only a plugin"), "{error}");
+    }
+
+    /// Acceptance of ticket 16: an entry whose file changed since the
+    /// Quarantine is re-inserted into the current file rather than written
+    /// over it (spec section 5.4).
+    #[test]
+    fn a_composite_puts_the_switch_back_into_a_settings_file_that_changed_since() {
+        let bench = Bench::new();
+        let mut enforcement = bench.enforcement();
+        let item = bench.plugin("notes@demo", "{\"name\":\"notes\"}\n");
+        enforcement
+            .quarantine(&Moves, &bench.host, &item, &cause(Actor::Auto))
+            .expect("a Quarantine");
+        let entry = only_entry(&enforcement);
+        let changed = bench
+            .settings()
+            .replace("}\n}\n", "},\n  \"model\": \"opus\"\n}\n");
+        std::fs::write(bench.surface.path().join("settings.json"), &changed)
+            .expect("a settings file somebody else wrote");
+
+        let report = enforcement
+            .restore(&Moves, &bench.host, &entry, Conflict::Refuse)
+            .expect("a Restore");
+
+        assert!(report.is_complete(), "{report:?}");
+        let after = bench.settings();
+        assert!(after.contains("\"model\": \"opus\""), "{after}");
+        assert!(after.contains("\"notes@demo\": true"), "{after}");
+        assert!(item.path.join("plugin.json").is_file());
     }
 }

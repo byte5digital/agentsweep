@@ -433,6 +433,7 @@ mod tests {
 
     use agentsweep_core::adapter::{Descriptor, Detection, Enumeration, ProjectRegistration};
     use agentsweep_core::quarantine::{EnforcementError, Receipt};
+    use agentsweep_core::views::ParsedView;
 
     use std::path::PathBuf;
 
@@ -628,5 +629,205 @@ mod tests {
             "{:?}",
             report.violations
         );
+    }
+    /// A bench over one case of one adapter: the copy, a store beside it and
+    /// the Items the adapter enumerates on it.
+    struct Bench {
+        copy: fixtures::Copy,
+        _scratch: fixtures::Scratch,
+        store: QuarantineStore,
+        host: Host,
+        items: Vec<Item>,
+    }
+
+    impl Bench {
+        fn of(adapter: &dyn SurfaceAdapter, case: &str) -> Bench {
+            let copy = fixtures::Copy::of(adapter.descriptor().agent, case);
+            let scratch = fixtures::Scratch::new("store");
+            let host = copy.host();
+            let store =
+                QuarantineStore::open(&DataDirectory::at(scratch.path())).expect("an open store");
+            let items = adapter.enumerate(&host, host.project_roots()).items;
+            Bench {
+                copy,
+                _scratch: scratch,
+                store,
+                host,
+                items,
+            }
+        }
+
+        fn item(&self, kind: Kind, locator: &str) -> Item {
+            self.items
+                .iter()
+                .find(|item| item.kind == kind && item.locator().contains(locator))
+                .unwrap_or_else(|| panic!("no {kind} at {locator}"))
+                .clone()
+        }
+    }
+
+    /// Spec section 5.2: the script a hook entry points at is moved with the
+    /// entry when it sits inside a scanned Surface root.
+    #[test]
+    fn a_hook_entry_takes_the_script_inside_the_surface_with_it_and_gives_it_back() {
+        let adapter = Wrapping::inner();
+        let bench = Bench::of(&adapter, "user-and-project-entries");
+        let item = bench.item(Kind::Hook, "SessionStart");
+        let ParsedView::Hook(view) = &item.view else {
+            panic!("a hook carries a hook view");
+        };
+        let script = PathBuf::from(&view.command_resolved);
+        assert!(script.is_file(), "{}", script.display());
+        let before = std::fs::read(&script).expect("the script");
+
+        let receipt = adapter
+            .enforce(
+                &bench.host,
+                &bench.store,
+                &item,
+                eligibility(item.kind).primitives,
+            )
+            .expect("a Quarantine");
+
+        assert!(!script.exists(), "the script the hook ran is still there");
+        assert_eq!(receipt.steps.len(), 2, "{:?}", receipt.steps);
+        assert_eq!(
+            receipt.steps[0].primitive,
+            agentsweep_core::eventlog::Primitive::RemoveEntry
+        );
+        assert_eq!(
+            receipt.steps[1].primitive,
+            agentsweep_core::eventlog::Primitive::MoveOut
+        );
+
+        let report = adapter.restore(&bench.host, &bench.store, &receipt, Conflict::Refuse);
+
+        assert!(report.is_complete(), "{report:?}");
+        assert_eq!(std::fs::read(&script).expect("the script"), before);
+    }
+
+    /// Spec section 5.4: an entry whose file changed since the Quarantine is
+    /// re-inserted into the current file rather than written over it.
+    #[test]
+    fn an_entry_goes_back_into_a_file_that_changed_since_the_quarantine() {
+        let adapter = Wrapping::inner();
+        let bench = Bench::of(&adapter, "user-and-project-entries");
+        let item = bench.item(Kind::McpServer, ".mcp.json#boost");
+        let receipt = adapter
+            .enforce(
+                &bench.host,
+                &bench.store,
+                &item,
+                eligibility(item.kind).primitives,
+            )
+            .expect("a Quarantine");
+        let written = std::fs::read_to_string(&item.path).expect("the file");
+        assert!(!written.contains("boost"), "{written}");
+
+        // Somebody else writes another server into the same file.
+        let mut value: serde_json::Value = serde_json::from_str(&written).expect("a config file");
+        value["mcpServers"]["fresh"] = serde_json::json!({"command": "php"});
+        std::fs::write(
+            &item.path,
+            serde_json::to_string_pretty(&value).expect("a config file") + "\n",
+        )
+        .expect("the file somebody else wrote");
+
+        let report = adapter.restore(&bench.host, &bench.store, &receipt, Conflict::Refuse);
+
+        assert!(report.is_complete(), "{report:?}");
+        let after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&item.path).expect("the file"))
+                .expect("a config file");
+        assert_eq!(after["mcpServers"]["fresh"]["command"], "php");
+        assert_eq!(after["mcpServers"]["boost"]["command"], "php");
+        let names: Vec<&str> = after["mcpServers"]
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(names, ["boost", "tracker", "fresh"]);
+        assert!(!bench.copy.root().display().to_string().is_empty());
+    }
+
+    /// Acceptance of ticket 16: RemoveEntry on a Codex config layer leaves the
+    /// comments and the formatting of every untouched line where they were.
+    #[test]
+    fn removing_a_codex_server_leaves_every_comment_and_untouched_line_alone() {
+        let adapter = agentsweep_adapter_codex::Codex::new();
+        let bench = Bench::of(&adapter, "user-and-project-layers");
+        let item = bench.item(Kind::McpServer, "config.toml#kit");
+        let before = std::fs::read_to_string(&item.path).expect("the layer");
+
+        adapter
+            .enforce(
+                &bench.host,
+                &bench.store,
+                &item,
+                eligibility(item.kind).primitives,
+            )
+            .expect("a Quarantine");
+
+        let after = std::fs::read_to_string(&item.path).expect("the layer");
+        assert!(!after.contains("[mcp_servers.kit]"), "{after}");
+        assert!(!after.contains("~/Downloads/kit/server"), "{after}");
+        for kept in [
+            "# A sanitised user layer. Nothing here is a real endpoint or a real token.",
+            "model = \"gpt-5-codex\"",
+            "[features]",
+            "[mcp_servers.notes]",
+            "args = [\"-y\", \"@modelcontextprotocol/server-everything\"]",
+            "[mcp_servers.tracker.env_http_headers]",
+        ] {
+            assert!(after.contains(kept), "{kept} is gone from\n{after}");
+        }
+        // The layer is the layer it was with one table taken out of it, to the
+        // byte: nothing else was re-spelled, re-ordered or re-indented.
+        let table =
+            "[mcp_servers.kit]\ncommand = \"~/Downloads/kit/server\"\nargs = [\"--stdio\"]\n\n";
+        assert!(before.contains(table), "{before}");
+        assert_eq!(after, before.replace(table, ""));
+    }
+
+    /// Acceptance of ticket 16: RemoveEntry on a Claude Code settings file
+    /// leaves every other key in the order it was written.
+    #[test]
+    fn removing_a_claude_code_settings_key_leaves_the_other_keys_in_order() {
+        let adapter = Wrapping::inner();
+        let bench = Bench::of(&adapter, "user-and-project-entries");
+        let item = bench.item(Kind::SettingsEntry, "settings.json#/statusLine");
+        let before: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&item.path).expect("the file"))
+                .expect("a settings file");
+        let names = |value: &serde_json::Value| -> Vec<String> {
+            value
+                .as_object()
+                .expect("an object")
+                .keys()
+                .cloned()
+                .collect()
+        };
+
+        adapter
+            .enforce(
+                &bench.host,
+                &bench.store,
+                &item,
+                eligibility(item.kind).primitives,
+            )
+            .expect("a Quarantine");
+
+        let written = std::fs::read_to_string(&item.path).expect("the file");
+        let after: serde_json::Value = serde_json::from_str(&written).expect("a settings file");
+        assert_eq!(
+            names(&after),
+            names(&before)
+                .into_iter()
+                .filter(|name| name != "statusLine")
+                .collect::<Vec<_>>()
+        );
+        assert!(written.starts_with("{\n  \"$schema\""), "{written}");
+        assert!(written.ends_with("}\n"), "{written}");
     }
 }

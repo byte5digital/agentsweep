@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use agentsweep_adapter_conformance::fixtures;
 use agentsweep_core::chain::ChainState;
 use agentsweep_core::enforcement::Enforcement;
 use agentsweep_core::envelope::Timestamp;
@@ -18,6 +19,8 @@ use agentsweep_core::item::Kind;
 use agentsweep_core::keychain::{ChainKey, KeyError, KeySource, MemoryKeySource};
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::state::{StateFile, Trigger};
+use agentsweep_daemon::full_scan::{self, Unwatched};
+use agentsweep_daemon::machine::Machine;
 use agentsweep_daemon::options::{KeySourceChoice, Options};
 use agentsweep_daemon::service::{self, Background, Daemon};
 use agentsweep_ipc::peer::{Nobody, Peer, PeerCheck, SameUser, this_user};
@@ -127,10 +130,16 @@ impl Sandbox {
     }
 
     fn options(&self) -> Options {
+        self.options_over(self.home())
+    }
+
+    /// The same over a home somewhere else, which is how a conformance
+    /// fixture becomes the machine the daemon scans.
+    fn options_over(&self, home: PathBuf) -> Options {
         Options {
             data_dir: self.data(),
             socket: self.socket(),
-            home: Some(self.home()),
+            home: Some(home),
             key_source: KeySourceChoice::Memory,
         }
     }
@@ -544,5 +553,58 @@ fn the_health_names_when_the_machine_was_last_checked() {
         status.health.headline().contains(&at.to_string()),
         "{}",
         status.health.headline()
+    );
+}
+
+/// A Full Scan pools the project roots an Agent's own registry lists and
+/// enumerates the Items of every adapter at each of them (spec section 6.4).
+///
+/// The machine is one of the conformance fixtures, copied to a temporary
+/// directory that names itself in its own registry, so the Scan reads a home
+/// laid out the way a real installation is and nothing of the machine the
+/// suite runs on.
+#[test]
+fn a_full_scan_pools_the_project_roots_the_registry_lists() {
+    let fixture = fixtures::Copy::of("claude-code", "user-and-project-entries");
+    let sandbox = Sandbox::empty("pooled-roots");
+    let machine = Machine::named(fixture.root().join("home"));
+
+    let run = full_scan::run(
+        &machine,
+        &sandbox.data(),
+        &sandbox.keys,
+        &[],
+        Trigger::DaemonStart,
+        &Unwatched,
+    )
+    .expect("a Full Scan");
+
+    assert_eq!(
+        run.roots,
+        vec![fixture.project().to_path_buf()],
+        "the project the registry names is pooled"
+    );
+    assert!(
+        run.agents
+            .iter()
+            .any(|(agent, found)| agent == "claude-code" && *found),
+        "{:?}",
+        run.agents
+    );
+    assert!(run.summary.items > 1, "{:?}", run.summary);
+
+    // The watch roots are recomputed by every Full Scan, and the pooled root
+    // is among them.
+    assert!(
+        run.watch_roots
+            .all()
+            .any(|root| root.starts_with(fixture.project())),
+        "the pooled root is watched"
+    );
+    assert!(
+        run.standing
+            .iter()
+            .all(|found| !found.finding.item_id.as_str().is_empty()),
+        "every Finding names its Item"
     );
 }

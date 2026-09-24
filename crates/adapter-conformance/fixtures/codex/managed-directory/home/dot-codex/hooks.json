@@ -1,7 +1,14 @@
 {
   "hooks": {
     "SessionStart": [
-      {"hooks": [{"type": "command", "command": "bash ~/.codex/hooks/mine.sh"}]}
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.codex/hooks/mine.sh"
+          }
+        ]
+      }
     ]
   }
 }

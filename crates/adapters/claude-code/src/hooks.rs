@@ -13,13 +13,19 @@ use serde_json::Value;
 
 use crate::document::Document;
 
-/// One hook handler, with the event and the matcher it is registered under.
+/// One hook handler, with the event and the matcher it is registered under and
+/// where in the file it was written.
 #[derive(Clone, Debug)]
 pub struct Handler {
     /// The event that fires it.
     pub event: String,
     /// The matcher it is registered under, empty when the group declares none.
     pub matcher: String,
+    /// The position of the group within the event. Not part of the identity;
+    /// what a Quarantine needs to say which handler to drop out of the file.
+    pub group_index: usize,
+    /// The position of the handler within the group, for the same reason.
+    pub handler_index: usize,
     /// The handler itself, as it is written.
     pub handler: Value,
 }
@@ -32,7 +38,7 @@ pub fn handlers(document: &Document) -> Vec<Handler> {
         let Some(groups) = groups.as_array() else {
             continue;
         };
-        for group in groups {
+        for (group_index, group) in groups.iter().enumerate() {
             let matcher = group
                 .get("matcher")
                 .and_then(Value::as_str)
@@ -41,10 +47,12 @@ pub fn handlers(document: &Document) -> Vec<Handler> {
             let Some(handlers) = group.get("hooks").and_then(Value::as_array) else {
                 continue;
             };
-            for handler in handlers {
+            for (handler_index, handler) in handlers.iter().enumerate() {
                 found.push(Handler {
                     event: event.clone(),
                     matcher: matcher.clone(),
+                    group_index,
+                    handler_index,
                     handler: handler.clone(),
                 });
             }

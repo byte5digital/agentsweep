@@ -1,11 +1,24 @@
-//! The enforcement half of the contract: MoveOut and Restore on a temporary
-//! copy, for every kind an adapter declares it can move out.
+//! The enforcement half of the contract: every capability an adapter declares,
+//! carried out and taken back on a temporary copy.
 //!
 //! A declared capability that does not work is worse than none, so the suite
-//! carries out the real thing: it quarantines each Item of a MoveOut kind into
-//! a store of its own, checks that the Surface no longer holds it and that the
-//! payload carries no executable bit, and then restores it and compares the
+//! does the real thing to every Item of every kind an adapter declares a
+//! primitive for: it quarantines the Item with the primitives the eligibility
+//! table of spec section 5.2 names, checks that the Agent would no longer load
+//! what the Finding was about, and then restores it and compares the whole
 //! Surface with what it held before, byte for byte and mode for mode.
+//!
+//! The comparison is over the whole fixture copy rather than the Item's own
+//! path, because a composite touches more than one file: a plugin is switched
+//! off in the Agent's settings before its directory moves, and a hook entry
+//! takes the script it points at with it. Anything either of them left behind
+//! is a difference somewhere in the copy.
+//!
+//! What "the Agent would no longer load it" means is asked of the adapter
+//! rather than of the file system: the case is enumerated again, and the Item
+//! must be gone from it or carry another content hash. That is the one
+//! question every primitive answers the same way, whether the Item was moved
+//! out, dropped from a shared file or commented out where it lay.
 //!
 //! Nothing here touches the real machine. The Surface is the fixture copy and
 //! the quarantine store is a scratch directory beside it, both removed when
@@ -19,16 +32,17 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use agentsweep_core::adapter::{Primitive, SurfaceAdapter, eligibility};
+use agentsweep_core::eventlog::Outcome;
 use agentsweep_core::host::Host;
-use agentsweep_core::item::{Item, Kind, Scope};
+use agentsweep_core::item::{Item, ItemId, Kind, Scope};
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::quarantine::{Conflict, QuarantineStore, Store};
 
 use crate::{Report, fixtures};
 
 /// Every case of one adapter, quarantined and restored, and then the question
-/// the cases together answer: does every kind the adapter declares MoveOut for
-/// have a case that proves it?
+/// the cases together answer: is every capability the adapter declares
+/// exercised by a case?
 ///
 /// A capability that is declared and never exercised is the one thing a static
 /// table cannot catch, and it is worse than no capability at all: the core
@@ -39,40 +53,51 @@ pub fn check(adapter: &dyn SurfaceAdapter, report: &mut Report) {
     for case in fixtures::cases(agent) {
         exercised.extend(check_case(adapter, &case, report));
     }
-    for kind in moves_out(adapter) {
-        if !exercised.contains(&kind) {
+    for (kind, primitive) in declared(adapter) {
+        if !exercised.contains(&(kind, primitive)) {
             report.note(
                 agent,
                 "-",
                 "quarantine",
-                format!("{kind} declares MoveOut and no case has one to move out"),
+                format!(
+                    "{kind} declares {} and no case carries it out",
+                    primitive.as_str()
+                ),
             );
         }
     }
 }
 
-/// The kinds one adapter has to be able to move out: the ones it declares
-/// MoveOut for whose whole Quarantine is that one primitive. A composite kind
-/// waits for the primitives its other steps need.
-pub fn moves_out(adapter: &dyn SurfaceAdapter) -> Vec<Kind> {
-    adapter
-        .descriptor()
-        .kinds
-        .iter()
-        .copied()
-        .filter(|kind| eligibility(*kind).primitives == [Primitive::MoveOut])
-        .filter(|kind| {
-            adapter
-                .descriptor()
-                .capabilities_for(*kind)
-                .contains(&Primitive::MoveOut)
-        })
-        .collect()
+/// Every capability one adapter declares, as the pairs a case has to carry
+/// out.
+pub fn declared(adapter: &dyn SurfaceAdapter) -> Vec<(Kind, Primitive)> {
+    let descriptor = adapter.descriptor();
+    let mut pairs = Vec::new();
+    for kind in descriptor.kinds {
+        for primitive in descriptor.capabilities_for(*kind) {
+            pairs.push((*kind, *primitive));
+        }
+    }
+    pairs
 }
 
-/// Quarantines and restores every Item of one case that declares MoveOut, and
-/// answers with the kinds it got to.
-pub fn check_case(adapter: &dyn SurfaceAdapter, case: &str, report: &mut Report) -> Vec<Kind> {
+/// The kinds one adapter says it can take out of its Surface at all.
+pub fn enforces(adapter: &dyn SurfaceAdapter) -> Vec<Kind> {
+    let mut kinds: Vec<Kind> = declared(adapter)
+        .into_iter()
+        .map(|(kind, _)| kind)
+        .collect();
+    kinds.dedup();
+    kinds
+}
+
+/// Quarantines and restores every Item of one case whose kind the adapter
+/// declares a primitive for, and answers with the capabilities it got to.
+pub fn check_case(
+    adapter: &dyn SurfaceAdapter,
+    case: &str,
+    report: &mut Report,
+) -> Vec<(Kind, Primitive)> {
     let agent = adapter.descriptor().agent;
     let copy = fixtures::Copy::of(agent, case);
     let scratch = fixtures::Scratch::new("store");
@@ -88,82 +113,176 @@ pub fn check_case(adapter: &dyn SurfaceAdapter, case: &str, report: &mut Report)
 
     let enumeration = adapter.enumerate(&host, host.project_roots());
     let mut exercised = Vec::new();
-    let movable = moves_out(adapter);
+    let kinds = enforces(adapter);
     for item in &enumeration.items {
         // A Managed Item is read-only for AgentSweep whatever its kind, so the
         // suite never asks an adapter to touch one.
-        if item.scope == Scope::Managed || !movable.contains(&item.kind) {
+        if item.scope == Scope::Managed || !kinds.contains(&item.kind) {
             continue;
         }
-        if round_trip(adapter, case, &host, &store, item, report) {
-            exercised.push(item.kind);
-        }
+        exercised.extend(round_trip(
+            adapter, case, &copy, &host, &store, item, report,
+        ));
     }
-    exercised.sort_by_key(|kind| kind.as_str());
+    exercised.sort_by_key(|(kind, primitive)| (kind.as_str(), primitive.as_str()));
     exercised.dedup();
     exercised
 }
 
-/// One Item out of its Surface and back again.
+/// One Item out of its Surface and back again, with the whole copy compared
+/// before and after.
 fn round_trip(
     adapter: &dyn SurfaceAdapter,
     case: &str,
+    copy: &fixtures::Copy,
     host: &Host,
     store: &QuarantineStore,
     item: &Item,
     report: &mut Report,
-) -> bool {
+) -> Vec<(Kind, Primitive)> {
     let agent = adapter.descriptor().agent;
-    let before = Snapshot::of(&item.path);
-    if before.is_empty() {
-        report.note(
-            agent,
-            case,
+    let wrong = |report: &mut Report, check: &str, detail: String| {
+        report.note(agent, case, check, detail);
+    };
+    let before = Snapshot::of(copy.root());
+    if Snapshot::of(&item.path).is_empty() {
+        wrong(
+            report,
             "quarantine",
             format!("{} is not on the Surface to begin with", item.id),
         );
-        return false;
+        return Vec::new();
     }
 
     let primitives = eligibility(item.kind).primitives;
     let receipt = match adapter.enforce(host, store, item, primitives) {
         Ok(receipt) => receipt,
         Err(error) => {
-            report.note(
-                agent,
-                case,
+            wrong(
+                report,
                 "quarantine",
-                format!("{} declares MoveOut and refused it: {error}", item.id),
+                format!(
+                    "{} declares {} and refused it: {error}",
+                    item.id,
+                    primitives
+                        .iter()
+                        .map(|primitive| primitive.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" then ")
+                ),
             );
-            return false;
+            return Vec::new();
         }
     };
 
     let mut whole = true;
-    let wrong = |report: &mut Report, check: &str, detail: String| {
-        report.note(agent, case, check, detail);
-    };
-    if std::fs::symlink_metadata(&item.path).is_ok() {
+    // What the Agent would load is the adapter's own answer, so the case is
+    // read again and the Item has to be gone from it or to have changed.
+    if let Some(found) = enumerated(adapter, host, &item.id)
+        && found == item.content_hash
+    {
         wrong(
             report,
             "quarantine",
-            format!("{} is still on the Surface after MoveOut", item.id),
+            format!("{} is still on the Surface after the Quarantine", item.id),
         );
         whole = false;
     }
-    let payload = store.payload_of(&receipt.id);
-    if std::fs::symlink_metadata(&payload).is_err() {
+    for primitive in primitives {
+        if !receipt
+            .steps
+            .iter()
+            .any(|step| Primitive::of_recorded(step.primitive) == *primitive)
+        {
+            wrong(
+                report,
+                "quarantine",
+                format!(
+                    "the Receipt of {} has no {} step",
+                    item.id,
+                    primitive.as_str()
+                ),
+            );
+            whole = false;
+        }
+    }
+    whole &= moved_out_cleanly(agent, case, store, item, &receipt, report);
+
+    let restored = adapter.restore(host, store, &receipt, Conflict::Refuse);
+    if !restored.is_complete() {
         wrong(
             report,
+            "restore",
+            format!("{} did not come back whole: {:?}", item.id, restored.steps),
+        );
+        return Vec::new();
+    }
+    let after = Snapshot::of(copy.root());
+    if after != before {
+        wrong(
+            report,
+            "restore",
+            format!(
+                "the Surface came back different after {}: {}",
+                item.id,
+                after.against(&before)
+            ),
+        );
+        return Vec::new();
+    }
+    match enumerated(adapter, host, &item.id) {
+        Some(hash) if hash == item.content_hash => {}
+        _ => {
+            wrong(
+                report,
+                "restore",
+                format!("{} is not enumerated again after the Restore", item.id),
+            );
+            return Vec::new();
+        }
+    }
+    if !whole {
+        return Vec::new();
+    }
+    receipt
+        .steps
+        .iter()
+        .filter(|step| step.outcome == Outcome::Ok)
+        .map(|step| (item.kind, Primitive::of_recorded(step.primitive)))
+        .collect()
+}
+
+/// What the store holds for every MoveOut step of one Receipt: a payload, with
+/// no executable bit left on it and nothing of the Item's name in its path.
+fn moved_out_cleanly(
+    agent: &str,
+    case: &str,
+    store: &QuarantineStore,
+    item: &Item,
+    receipt: &agentsweep_core::quarantine::Receipt,
+    report: &mut Report,
+) -> bool {
+    if !receipt.steps.iter().any(|step| {
+        Primitive::of_recorded(step.primitive) == Primitive::MoveOut && step.outcome == Outcome::Ok
+    }) {
+        return true;
+    }
+    let mut whole = true;
+    let payload = store.payload_of(&receipt.id);
+    if std::fs::symlink_metadata(&payload).is_err() {
+        report.note(
+            agent,
+            case,
             "quarantine",
             format!("{} left no payload in the store", item.id),
         );
-        whole = false;
+        return false;
     }
     for (name, entry) in &Snapshot::of(&payload).entries {
         if entry.mode & 0o111 != 0 && !entry.is_dir && !entry.is_link {
-            wrong(
-                report,
+            report.note(
+                agent,
+                case,
                 "quarantine",
                 format!("the payload of {} keeps {name:?} executable", item.id),
             );
@@ -175,46 +294,26 @@ fn round_trip(
     // taken out (spec section 5.1).
     let name = item.path.file_name().unwrap_or_default().to_string_lossy();
     if payload.display().to_string().contains(name.as_ref()) {
-        wrong(
-            report,
+        report.note(
+            agent,
+            case,
             "quarantine",
             format!("the store names the payload of {} after the Item", item.id),
         );
         whole = false;
     }
-    let path = item.path.display().to_string();
-    if !receipt.steps.iter().any(|step| step.path == path) {
-        wrong(
-            report,
-            "quarantine",
-            format!("no step of the Receipt of {} names its path", item.id),
-        );
-        whole = false;
-    }
-
-    let restored = adapter.restore(host, store, &receipt, Conflict::Refuse);
-    if !restored.is_complete() {
-        wrong(
-            report,
-            "restore",
-            format!("{} did not come back whole: {:?}", item.id, restored.steps),
-        );
-        return false;
-    }
-    let after = Snapshot::of(&item.path);
-    if after != before {
-        wrong(
-            report,
-            "restore",
-            format!(
-                "{} came back different: {}",
-                item.id,
-                after.against(&before)
-            ),
-        );
-        return false;
-    }
     whole
+}
+
+/// The content hash one Item has in the case as it stands now, absent when the
+/// adapter no longer enumerates it.
+fn enumerated(adapter: &dyn SurfaceAdapter, host: &Host, id: &ItemId) -> Option<String> {
+    adapter
+        .enumerate(host, host.project_roots())
+        .items
+        .into_iter()
+        .find(|item| item.id == *id)
+        .map(|item| item.content_hash)
 }
 
 /// What one path holds: the bytes and the permission bits of everything below
@@ -396,8 +495,11 @@ mod tests {
     /// The case every MoveOut kind of the Claude Code adapter appears in.
     const CASE: &str = "user-skills-and-commands";
 
+    /// Acceptance of ticket 16: every capability every adapter declares is
+    /// carried out on a temporary copy and taken back, and the Surface is
+    /// byte for byte what it was.
     #[test]
-    fn every_kind_the_agent_adapters_declare_move_out_for_has_a_case_that_proves_it() {
+    fn every_capability_the_adapters_declare_has_a_case_that_carries_it_out() {
         for adapter in adapters() {
             let mut report = Report::default();
             check(adapter.as_ref(), &mut report);
@@ -410,23 +512,41 @@ mod tests {
         }
 
         // The check is worth something only if there is anything to exercise,
-        // so the two Agent adapters name what it got to.
+        // so the three adapters name what it got to.
         assert_eq!(
-            moves_out(&Wrapping::inner()),
+            declared(&Wrapping::inner()),
             vec![
-                Kind::InstructionFile,
-                Kind::Skill,
-                Kind::Subagent,
-                Kind::Workflow
+                (Kind::InstructionFile, Primitive::MoveOut),
+                (Kind::Skill, Primitive::MoveOut),
+                (Kind::Plugin, Primitive::NativeDisable),
+                (Kind::Plugin, Primitive::MoveOut),
+                (Kind::Marketplace, Primitive::RemoveEntry),
+                (Kind::Marketplace, Primitive::MoveOut),
+                (Kind::McpServer, Primitive::RemoveEntry),
+                (Kind::Hook, Primitive::RemoveEntry),
+                (Kind::SettingsEntry, Primitive::RemoveEntry),
+                (Kind::Subagent, Primitive::MoveOut),
+                (Kind::Workflow, Primitive::MoveOut),
             ]
         );
         assert_eq!(
-            moves_out(&agentsweep_adapter_codex::Codex::new()),
-            vec![Kind::InstructionFile, Kind::Skill, Kind::ExecPolicy]
+            declared(&agentsweep_adapter_codex::Codex::new()),
+            vec![
+                (Kind::InstructionFile, Primitive::MoveOut),
+                (Kind::Skill, Primitive::MoveOut),
+                (Kind::McpServer, Primitive::RemoveEntry),
+                (Kind::Hook, Primitive::RemoveEntry),
+                (Kind::SettingsEntry, Primitive::RemoveEntry),
+                (Kind::ExecPolicy, Primitive::MoveOut),
+            ]
         );
-        // The reference adapter neutralises in place and moves nothing out, so
-        // it is exempt rather than silently passing.
-        assert!(moves_out(&agentsweep_adapter_workspace::Workspace::new()).is_empty());
+        assert_eq!(
+            declared(&agentsweep_adapter_workspace::Workspace::new()),
+            vec![
+                (Kind::RepositoryMetadata, Primitive::NeutraliseInPlace),
+                (Kind::EnvFile, Primitive::NeutraliseInPlace),
+            ]
+        );
     }
 
     #[test]
@@ -440,7 +560,7 @@ mod tests {
             report
                 .violations
                 .iter()
-                .any(|violation| violation.contains("declares MoveOut and refused it")),
+                .any(|violation| violation.contains("and refused it")),
             "{:?}",
             report.violations
         );
@@ -504,7 +624,7 @@ mod tests {
             report
                 .violations
                 .iter()
-                .any(|violation| violation.contains("no case has one to move out")),
+                .any(|violation| violation.contains("no case carries it out")),
             "{:?}",
             report.violations
         );

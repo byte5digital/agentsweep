@@ -38,6 +38,7 @@
 #![warn(missing_docs)]
 
 pub mod document;
+pub mod enforce;
 pub mod hooks;
 pub mod mcp;
 pub mod registry;
@@ -51,8 +52,7 @@ use agentsweep_core::adapter::{
 };
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{
-    Activation, FileFacts, InactiveReason, Item, ItemId, Kind, Provenance, Scope, TreeCaps,
-    canonical_entry,
+    Activation, FileFacts, InactiveReason, Item, ItemId, Kind, Provenance, Scope, canonical_entry,
 };
 use agentsweep_core::quarantine::{
     self, Conflict, EnforcementError, Receipt, RestoreReport, Store,
@@ -1082,7 +1082,7 @@ impl SurfaceAdapter for Codex {
         item: &Item,
         primitives: &[Primitive],
     ) -> Result<Receipt, EnforcementError> {
-        quarantine::move_out_only(host, store, item, TreeCaps::default(), primitives)
+        enforce::enforce(self, host, store, item, primitives)
     }
 
     /// Puts the Item back by replaying its Receipt in reverse.
@@ -1109,7 +1109,7 @@ fn configs(layers: &[Layer]) -> Vec<Document> {
 /// The nearest ancestor of a path that is a Codex or an agent-neutral
 /// configuration directory, which are the directories that are watched with
 /// everything below them.
-fn config_directory_of(path: &Path) -> Option<PathBuf> {
+pub(crate) fn config_directory_of(path: &Path) -> Option<PathBuf> {
     let mut current = path.parent();
     while let Some(directory) = current {
         if directory.file_name() == Some(PROJECT_DIRECTORY.as_ref())
@@ -1124,7 +1124,7 @@ fn config_directory_of(path: &Path) -> Option<PathBuf> {
 
 /// The file an Item would really run, when it is the kind of Item that runs
 /// one.
-fn resolved_command_of(item: &Item) -> Option<&Path> {
+pub(crate) fn resolved_command_of(item: &Item) -> Option<&Path> {
     let resolved = match &item.view {
         ParsedView::Hook(view) => &view.command_resolved,
         ParsedView::Mcp(view) => &view.command_resolved,
@@ -1185,7 +1185,7 @@ fn disabled_skills(config: &Document) -> Vec<String> {
 /// The canonical form of one config key: the key and its value, unless the key
 /// names one element of a list, which has no name of its own and whose place is
 /// already in the id.
-fn canonical_key(dotted: &str, value: &Value) -> Vec<u8> {
+pub(crate) fn canonical_key(dotted: &str, value: &Value) -> Vec<u8> {
     let last = dotted.rsplit('.').next().unwrap_or_default();
     if !last.is_empty() && last.chars().all(|c| c.is_ascii_digit()) {
         return canonical_entry(value);

@@ -9,10 +9,10 @@ item claude-code/user/marketplace/demo-marketplace
   file README.md 40 scanned text
   view marketplace {entries=[{has_headers_helper=false name="notes" pinned=true source_host="github.com" source_kind="github"}, {has_headers_helper=false name="inside" pinned=false source_host="" source_kind="local"}] entries_n=2 name="demo-marketplace" name_reserved_distance=8 owner="Demo Tools"}
 item claude-code/user/plugin/notes@demo-marketplace
-  shape=tree scope=user provenance=marketplace activation=active registered=true symlink=false size=468
-  sha256=679b2327861dca0af03b1670c874e78b3408df4652d6c32d44de8bba70a7f4c8
+  shape=tree scope=user provenance=marketplace activation=active registered=true symlink=false size=484
+  sha256=3915827524ff0bb289aaacf494cd8e64e21127609b0b675a4eb78317103b8606
   file .claude-plugin/plugin.json 165 scanned text
-  file .mcp.json 102 scanned text
+  file .mcp.json 118 scanned text
   file bin/npx 48 scanned text
   file monitors/monitors.json 107 scanned text
   file server.js 46 scanned text

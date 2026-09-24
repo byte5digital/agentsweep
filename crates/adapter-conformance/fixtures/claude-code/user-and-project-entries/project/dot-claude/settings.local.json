@@ -1,6 +1,10 @@
 {
   "permissions": {
-    "allow": ["Bash(php artisan *)"]
+    "allow": [
+      "Bash(php artisan *)"
+    ]
   },
-  "enabledMcpjsonServers": ["boost"]
+  "enabledMcpjsonServers": [
+    "boost"
+  ]
 }

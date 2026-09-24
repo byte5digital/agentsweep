@@ -24,6 +24,7 @@
 #![warn(missing_docs)]
 
 pub mod document;
+pub mod enforce;
 pub mod files;
 pub mod hooks;
 pub mod mcp;
@@ -347,7 +348,7 @@ pub struct ClaudeCode {
     /// The caps every tree is read under. They are the core's defaults unless
     /// a test asks for smaller ones, which is how the behaviour of a tree too
     /// large to check fully is proven without writing a large tree.
-    caps: TreeCaps,
+    pub(crate) caps: TreeCaps,
 }
 
 /// What the registry and the layers of one project root say about it, which is
@@ -1180,9 +1181,10 @@ impl SurfaceAdapter for ClaudeCode {
     /// a symbolic link moves as a link and its target is left where it is
     /// (spec section 5.2).
     ///
-    /// A plugin and a marketplace are composites and every other kind this
-    /// adapter yields is an entry, so both wait for the entry primitives and
-    /// are refused here rather than half carried out.
+    /// An MCP server, a hook handler and a settings key are entries in a file
+    /// this Agent shares with everything else it reads there; a plugin and a
+    /// marketplace are composites. Where each of them lands is
+    /// [`enforce::enforce`].
     fn enforce(
         &self,
         host: &Host,
@@ -1190,7 +1192,7 @@ impl SurfaceAdapter for ClaudeCode {
         item: &Item,
         primitives: &[Primitive],
     ) -> Result<Receipt, EnforcementError> {
-        quarantine::move_out_only(host, store, item, self.caps, primitives)
+        enforce::enforce(self, host, store, item, primitives)
     }
 
     /// Puts the Item back by replaying its Receipt in reverse.
@@ -1245,7 +1247,7 @@ fn enabled_plugins(layers: &[Document]) -> plugins::Enabled {
 /// The nearest ancestor of a path that is a Claude Code configuration
 /// directory, which is the one directory of this adapter that is watched with
 /// everything below it.
-fn config_directory_of(path: &Path) -> Option<PathBuf> {
+pub(crate) fn config_directory_of(path: &Path) -> Option<PathBuf> {
     let mut current = path.parent();
     while let Some(directory) = current {
         if directory.file_name() == Some(".claude".as_ref()) {
@@ -1258,7 +1260,7 @@ fn config_directory_of(path: &Path) -> Option<PathBuf> {
 
 /// The file an Item would really run, when it is the kind of Item that runs
 /// one.
-fn resolved_command_of(item: &Item) -> Option<&Path> {
+pub(crate) fn resolved_command_of(item: &Item) -> Option<&Path> {
     let resolved = match &item.view {
         ParsedView::Hook(view) => &view.command_resolved,
         ParsedView::Mcp(view) => &view.command_resolved,
@@ -1273,7 +1275,7 @@ fn resolved_command_of(item: &Item) -> Option<&Path> {
 /// The canonical form of one settings key: the key and its value, unless the
 /// key names one element of a list, which has no name of its own and whose
 /// place is already in the id.
-fn canonical_key(dotted: &str, value: &Value) -> Vec<u8> {
+pub(crate) fn canonical_key(dotted: &str, value: &Value) -> Vec<u8> {
     let last = dotted.rsplit('.').next().unwrap_or_default();
     if !last.is_empty() && last.chars().all(|c| c.is_ascii_digit()) {
         return canonical_entry(value);

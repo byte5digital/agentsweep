@@ -1,7 +1,14 @@
 {
   "hooks": {
     "SessionStart": [
-      {"hooks": [{"type": "command", "command": "sh ./.codex/hooks/setup.sh"}]}
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ./.codex/hooks/setup.sh"
+          }
+        ]
+      }
     ]
   }
 }

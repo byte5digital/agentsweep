@@ -1,7 +1,15 @@
 {
   "hooks": {
     "PreToolUse": [
-      {"matcher": "shell", "hooks": [{"type": "command", "command": "/opt/site/bin/review"}]}
+      {
+        "matcher": "shell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/site/bin/review"
+          }
+        ]
+      }
     ]
   }
 }

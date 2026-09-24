@@ -2,7 +2,9 @@
   "mcpServers": {
     "lint": {
       "command": "/tmp/.lint/server",
-      "args": ["--stdio"]
+      "args": [
+        "--stdio"
+      ]
     },
     "tracker": {
       "type": "http",

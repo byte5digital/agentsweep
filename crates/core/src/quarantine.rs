@@ -375,7 +375,12 @@ pub fn compare_and_swap(host: &Host, plan: &MoveOutPlan<'_>) -> Result<(), Enfor
 /// written on purpose, so the seam is where the hash is read: a test hands it
 /// content that settles and content that never does, and both paths are then
 /// the ones a Quarantine really takes.
-fn settled(
+///
+/// A Surface Adapter reaches it for an entry Item. What the enumeration hashed
+/// there is the canonical entry rather than the file, and finding the entry
+/// again in the file as it stands is the adapter's, so the adapter hands the
+/// hash it read and gets the same one retry every MoveOut gets.
+pub fn settled(
     expected: &str,
     path: &Path,
     read: &mut dyn FnMut() -> Result<String, EnforcementError>,

@@ -18,6 +18,7 @@
 
 pub mod env;
 pub mod git;
+pub mod neutralise;
 pub mod repository;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -31,6 +32,7 @@ use agentsweep_core::adapter::{
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{Activation, Item, Kind, Provenance, Scope, Shape};
 use agentsweep_core::provenance::Provenances;
+use agentsweep_core::quarantine::{Conflict, EnforcementError, Receipt, RestoreReport, Store};
 use agentsweep_core::views::{EnvView, ParsedView, RepoView};
 
 use crate::git::Layout;
@@ -513,6 +515,30 @@ impl SurfaceAdapter for Workspace {
         }
         roots.sort();
         roots
+    }
+
+    /// Both kinds this adapter yields are neutralised where they lie and
+    /// neither is ever quarantined automatically (spec section 5.2). Which
+    /// lines go is [`neutralise::enforce`].
+    fn enforce(
+        &self,
+        host: &Host,
+        store: &dyn Store,
+        item: &Item,
+        primitives: &[Primitive],
+    ) -> Result<Receipt, EnforcementError> {
+        neutralise::enforce(host, store, item, primitives)
+    }
+
+    /// Switches every line one Receipt commented out back on.
+    fn restore(
+        &self,
+        host: &Host,
+        store: &dyn Store,
+        receipt: &Receipt,
+        conflict: Conflict,
+    ) -> RestoreReport {
+        agentsweep_core::quarantine::replay_in_reverse(host, store, receipt, conflict)
     }
 }
 

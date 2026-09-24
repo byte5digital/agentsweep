@@ -2,18 +2,27 @@
   "mcpServers": {
     "notes": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-everything"]
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-everything"
+      ]
     }
   },
   "projects": {
     "{{project}}": {
       "hasTrustDialogAccepted": true,
-      "enabledMcpjsonServers": ["boost"],
-      "disabledMcpjsonServers": ["tracker"],
+      "enabledMcpjsonServers": [
+        "boost"
+      ],
+      "disabledMcpjsonServers": [
+        "tracker"
+      ],
       "mcpServers": {
         "scratch": {
           "command": "node",
-          "args": ["~/.dev-utils/index.js"]
+          "args": [
+            "~/.dev-utils/index.js"
+          ]
         }
       }
     }

@@ -551,6 +551,31 @@ impl Item {
         self
     }
 
+    /// The locator half of the Item's id: everything after the agent, the
+    /// Scope and the kind (spec section 3.3).
+    ///
+    /// It is taken back off the id rather than kept beside it, because the id
+    /// is the one thing that is written down. A Scope segment holds a project
+    /// root and a locator holds slashes and hashes of its own, so the split is
+    /// the prefix the Item's own three parts make and never a guess at where
+    /// the separators are.
+    pub fn locator(&self) -> &str {
+        let prefix = ItemId::new(&self.agent, &self.scope, self.kind, "");
+        self.id
+            .as_str()
+            .strip_prefix(prefix.as_str())
+            .unwrap_or_default()
+    }
+
+    /// What one entry Item's locator says about where inside its file the
+    /// entry sits: everything after the `#`, empty for a file or a tree.
+    pub fn inside_file(&self) -> &str {
+        self.locator()
+            .split_once('#')
+            .map(|(_, inside)| inside)
+            .unwrap_or_default()
+    }
+
     /// Records that the Item was reached through a symbolic link: the identity
     /// stays the link's location on the Surface and the content came from the
     /// target (spec section 3.3).
@@ -1105,6 +1130,38 @@ mod tests {
             id.as_str(),
             "claude-code/project:/src/demo/instruction-file/CLAUDE.md"
         );
+    }
+
+    /// A project root and an entry's key path both hold slashes, so the
+    /// locator is taken back off the id by the prefix the Item's own parts
+    /// make rather than by counting separators.
+    #[test]
+    fn an_entry_item_says_where_inside_its_file_it_sits() {
+        let item = Item::entry(
+            "claude-code",
+            Scope::Project(PathBuf::from("/src/demo")),
+            Kind::SettingsEntry,
+            ".claude/settings.json#/permissions/allow/0",
+            PathBuf::from("/src/demo/.claude/settings.json"),
+            Provenance::Unknown,
+            Activation::Active,
+            b"\"Bash(*)\"".to_vec(),
+        );
+        assert_eq!(item.locator(), ".claude/settings.json#/permissions/allow/0");
+        assert_eq!(item.inside_file(), "/permissions/allow/0");
+
+        let file = Item::file(
+            "claude-code",
+            Scope::User,
+            Kind::InstructionFile,
+            "CLAUDE.md",
+            PathBuf::from("/home/u/.claude/CLAUDE.md"),
+            Provenance::Manual,
+            Activation::Active,
+            b"# demo\n".to_vec(),
+        );
+        assert_eq!(file.locator(), "CLAUDE.md");
+        assert_eq!(file.inside_file(), "");
     }
 
     #[test]

@@ -4,7 +4,11 @@
     "SessionStart": [
       {
         "hooks": [
-          {"type": "command", "command": "bash ~/.codex/hooks/session-start.sh", "timeout": 10}
+          {
+            "type": "command",
+            "command": "bash ~/.codex/hooks/session-start.sh",
+            "timeout": 10
+          }
         ]
       }
     ],
@@ -12,7 +16,10 @@
       {
         "matcher": "shell",
         "hooks": [
-          {"type": "command", "command": "bash ~/.codex/hooks/guard.sh"}
+          {
+            "type": "command",
+            "command": "bash ~/.codex/hooks/guard.sh"
+          }
         ]
       }
     ]

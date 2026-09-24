@@ -46,6 +46,7 @@ version = "0.1.0"
 dependencies = [
  "agentsweep-adapter-claude-code",
  "agentsweep-adapter-codex",
+ "agentsweep-adapter-conformance",
  "agentsweep-adapter-workspace",
  "agentsweep-core",
  "serde_json",

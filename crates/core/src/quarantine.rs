@@ -379,6 +379,30 @@ pub fn move_out_item(
     )
 }
 
+/// The whole of one Quarantine of a kind whose only primitive is MoveOut.
+///
+/// Both Agent adapters enforce a file or a tree this way, so what an adapter
+/// carries is which Items take one and the caps its trees were read under.
+/// A kind whose row asks for anything else is refused here rather than half
+/// carried out.
+pub fn move_out_only(
+    host: &Host,
+    store: &dyn Store,
+    item: &Item,
+    caps: TreeCaps,
+    primitives: &[Primitive],
+) -> Result<Receipt, EnforcementError> {
+    if primitives != [Primitive::MoveOut] {
+        return Err(EnforcementError::Unsupported {
+            kind: item.kind,
+            primitive: primitives.first().copied().unwrap_or(Primitive::MoveOut),
+        });
+    }
+    let receipt = store.begin()?;
+    let step = move_out_item(host, store, &receipt, item, caps)?;
+    Ok(Receipt::new(receipt, item).with(step))
+}
+
 /// What one Restore did, step by reversed step.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RestoreReport {

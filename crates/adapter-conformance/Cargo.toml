@@ -15,3 +15,13 @@ agentsweep-adapter-claude-code.workspace = true
 agentsweep-adapter-codex.workspace = true
 agentsweep-adapter-workspace.workspace = true
 serde_json = "1.0.151"
+
+[features]
+# The quarantine store is written by the daemon alone (spec section 6.2), so
+# the enforcement half of the suite exists only behind this feature. The
+# dev-dependency below turns it on for a test build of this crate and for
+# nothing else, exactly as the core does for its own write side.
+daemon = ["agentsweep-core/daemon"]
+
+[dev-dependencies]
+agentsweep-adapter-conformance = { path = ".", features = ["daemon"] }

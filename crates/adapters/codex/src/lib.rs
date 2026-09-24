@@ -51,7 +51,11 @@ use agentsweep_core::adapter::{
 };
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{
-    Activation, FileFacts, InactiveReason, Item, ItemId, Kind, Provenance, Scope, canonical_entry,
+    Activation, FileFacts, InactiveReason, Item, ItemId, Kind, Provenance, Scope, TreeCaps,
+    canonical_entry,
+};
+use agentsweep_core::quarantine::{
+    self, Conflict, EnforcementError, Receipt, RestoreReport, Store,
 };
 use agentsweep_core::views::{HookView, McpView, ParsedView, SettingsView, SkillView};
 use serde_json::{Value, json};
@@ -1065,6 +1069,31 @@ impl SurfaceAdapter for Codex {
             .filter(|item| item.path == path || resolved_command_of(item) == Some(path))
             .map(|item| item.id.clone())
             .collect()
+    }
+
+    /// An instruction file, a skill and an execution policy are one file or
+    /// one directory, so one MoveOut is the whole Quarantine, exactly as it is
+    /// for the other Agent. Every other kind this adapter yields is an entry
+    /// and waits for the entry primitives.
+    fn enforce(
+        &self,
+        host: &Host,
+        store: &dyn Store,
+        item: &Item,
+        primitives: &[Primitive],
+    ) -> Result<Receipt, EnforcementError> {
+        quarantine::move_out_only(host, store, item, TreeCaps::default(), primitives)
+    }
+
+    /// Puts the Item back by replaying its Receipt in reverse.
+    fn restore(
+        &self,
+        _host: &Host,
+        store: &dyn Store,
+        receipt: &Receipt,
+        conflict: Conflict,
+    ) -> RestoreReport {
+        quarantine::replay_in_reverse(store, receipt, conflict)
     }
 }
 

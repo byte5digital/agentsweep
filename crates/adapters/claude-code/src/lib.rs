@@ -44,6 +44,9 @@ use agentsweep_core::item::{
     Activation, FileFacts, InactiveReason, Item, ItemId, Kind, Provenance, Scope, Shape, TreeCaps,
     canonical_entry,
 };
+use agentsweep_core::quarantine::{
+    self, Conflict, EnforcementError, Receipt, RestoreReport, Store,
+};
 use agentsweep_core::views::{HookView, McpView, ParsedView, SettingsView};
 use serde_json::{Value, json};
 
@@ -1137,6 +1140,35 @@ impl SurfaceAdapter for ClaudeCode {
             })
             .map(|item| item.id.clone())
             .collect()
+    }
+
+    /// A skill, a subagent, a workflow or an instruction file is one file or
+    /// one directory, so one MoveOut is the whole Quarantine. A skill that is
+    /// a symbolic link moves as a link and its target is left where it is
+    /// (spec section 5.2).
+    ///
+    /// A plugin and a marketplace are composites and every other kind this
+    /// adapter yields is an entry, so both wait for the entry primitives and
+    /// are refused here rather than half carried out.
+    fn enforce(
+        &self,
+        host: &Host,
+        store: &dyn Store,
+        item: &Item,
+        primitives: &[Primitive],
+    ) -> Result<Receipt, EnforcementError> {
+        quarantine::move_out_only(host, store, item, self.caps, primitives)
+    }
+
+    /// Puts the Item back by replaying its Receipt in reverse.
+    fn restore(
+        &self,
+        _host: &Host,
+        store: &dyn Store,
+        receipt: &Receipt,
+        conflict: Conflict,
+    ) -> RestoreReport {
+        quarantine::replay_in_reverse(store, receipt, conflict)
     }
 }
 

@@ -184,6 +184,41 @@ impl Drop for Copy {
     }
 }
 
+/// A temporary directory of its own, beside the copies and removed with them.
+///
+/// The enforcement half of the suite needs somewhere that is not the Surface
+/// to put a quarantine store, and it may no more be the real data directory
+/// than a fixture tree may be the real home.
+#[derive(Debug)]
+pub struct Scratch {
+    path: PathBuf,
+}
+
+impl Scratch {
+    /// A directory nothing else is using.
+    pub fn new(purpose: &str) -> Scratch {
+        let path = std::env::temp_dir().join(format!(
+            "agentsweep-conformance-{purpose}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("a scratch directory");
+        Scratch { path }
+    }
+
+    /// Where it is.
+    pub fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 fn copy_tree(source: &Path, destination: &Path) {
     fs::create_dir_all(destination).expect("a temporary copy of a fixture tree");
     let entries = fs::read_dir(source)

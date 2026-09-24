@@ -17,9 +17,18 @@
 //! `fixtures/<agent id>/<case>/` and record the first snapshot by running the
 //! suite once with `AGENTSWEEP_UPDATE_SNAPSHOTS=1`. Nothing in the core has to
 //! change for that; if it does, the adapter contract is what is wrong.
+//!
+//! The other half of the contract is what an adapter does rather than what it
+//! reads: [`enforcement`] takes every Item of a kind the adapter declares
+//! MoveOut for out of its Surface and puts it back, on the copy. It writes a
+//! quarantine store, which only the daemon may do (spec section 6.2), so it is
+//! behind this crate's `daemon` feature, and a test build is the only build
+//! that turns that on.
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "daemon")]
+pub mod enforcement;
 pub mod fixtures;
 
 use std::collections::BTreeMap;
@@ -91,6 +100,8 @@ pub fn check(adapter: &dyn SurfaceAdapter) -> Report {
     if report.cases.is_empty() {
         report.note(agent, "-", "fixtures", "the adapter has no fixture case");
     }
+    #[cfg(feature = "daemon")]
+    enforcement::check(adapter, &mut report);
     report
 }
 

@@ -41,6 +41,7 @@ pub mod quarantine;
 pub mod rules;
 pub mod scan;
 pub mod user_rules;
+pub mod verdicts;
 pub mod views;
 
 /// The machine-readable name of the product. AgentSweep in prose and UI,

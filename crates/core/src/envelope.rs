@@ -373,7 +373,7 @@ impl Envelope {
 /// enable. A hash chain cannot rest on that: the same record has to yield the
 /// same bytes in every build, or an honest record would read as a tampered
 /// one.
-fn canonical(value: &Value) -> Vec<u8> {
+pub(crate) fn canonical(value: &Value) -> Vec<u8> {
     let mut bytes = Vec::new();
     write_canonical(value, &mut bytes);
     bytes
@@ -429,7 +429,7 @@ fn is_hash(text: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn hex_to_bytes(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn hex_to_bytes(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) {
         return None;
     }
@@ -439,7 +439,7 @@ fn hex_to_bytes(text: &str) -> Option<Vec<u8>> {
 }
 
 /// HMAC-SHA256 over the bytes, lower-case hex.
-fn hmac_sha256_hex(key: &ChainKey, bytes: &[u8]) -> String {
+pub(crate) fn hmac_sha256_hex(key: &ChainKey, bytes: &[u8]) -> String {
     use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
 
@@ -456,7 +456,7 @@ fn hmac_sha256_hex(key: &ChainKey, bytes: &[u8]) -> String {
 }
 
 /// True when the tag is the one this key produces, compared in constant time.
-fn hmac_sha256_verify(key: &ChainKey, bytes: &[u8], tag: &[u8]) -> bool {
+pub(crate) fn hmac_sha256_verify(key: &ChainKey, bytes: &[u8], tag: &[u8]) -> bool {
     use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
 

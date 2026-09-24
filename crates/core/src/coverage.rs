@@ -18,7 +18,7 @@
 //! for every kind the adapter yields, not only for the kinds that happened to
 //! produce an Item.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
@@ -153,9 +153,13 @@ impl CoveragePlan {
 }
 
 /// The coverage the Baseline holds, as one read of the chain left it.
+///
+/// Each stretch keeps the moment it was first covered, because compaction
+/// writes the coverage afresh and a Surface is not newly covered for having
+/// been written down again.
 #[derive(Clone, Debug, Default)]
 pub struct Coverage {
-    keys: BTreeSet<CoverageKey>,
+    keys: BTreeMap<CoverageKey, Timestamp>,
 }
 
 impl Coverage {
@@ -165,25 +169,39 @@ impl Coverage {
         Coverage::default()
     }
 
-    /// Takes one record into the coverage.
+    /// Takes one record into the coverage. The first moment a stretch was
+    /// covered is the one that stands.
     pub fn record(&mut self, record: &CoverageRecord) {
-        self.keys.insert(record.key.clone());
+        self.keys
+            .entry(record.key.clone())
+            .or_insert(record.covered_at);
+    }
+
+    /// When this stretch was first covered, if it is covered at all.
+    pub fn covered_at(&self, key: &CoverageKey) -> Option<Timestamp> {
+        self.keys.get(key).copied()
     }
 
     /// True when this adapter, Scope and kind were already covered, which is
     /// what makes an Item first seen now `added` rather than `none`.
     pub fn covers(&self, agent: &str, scope: &Scope, kind: Kind) -> bool {
-        self.keys.contains(&CoverageKey::of(agent, scope, kind))
+        self.keys.contains_key(&CoverageKey::of(agent, scope, kind))
     }
 
     /// True when this stretch of Surface is covered.
     pub fn holds(&self, key: &CoverageKey) -> bool {
-        self.keys.contains(key)
+        self.keys.contains_key(key)
+    }
+
+    /// Everything that is covered, with the moment each stretch was first
+    /// covered.
+    pub fn stretches(&self) -> impl Iterator<Item = (&CoverageKey, Timestamp)> {
+        self.keys.iter().map(|(key, at)| (key, *at))
     }
 
     /// Everything that is covered.
     pub fn keys(&self) -> impl Iterator<Item = &CoverageKey> {
-        self.keys.iter()
+        self.keys.keys()
     }
 
     /// How many stretches of Surface are covered.

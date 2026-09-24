@@ -793,7 +793,7 @@ impl BaselineView {
 pub const ABSENT_FOR: i64 = 90 * 86_400_000;
 
 /// What compaction keeps.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Retention {
     /// How long a record of an Item that is gone is kept, in milliseconds.
     pub absent_for: i64,
@@ -807,13 +807,26 @@ pub struct Retention {
     pub referenced: BTreeSet<ItemId>,
 }
 
+impl Default for Retention {
+    /// Everything a root still in a registry holds, and every record of an
+    /// Item that has been gone for less than ninety days. A retention that
+    /// names no live root drops every project record, so the roots are always
+    /// worth naming.
+    fn default() -> Retention {
+        Retention {
+            absent_for: ABSENT_FOR,
+            live_roots: BTreeSet::new(),
+            referenced: BTreeSet::new(),
+        }
+    }
+}
+
 impl Retention {
     /// What to keep, given the roots that are still registered.
     pub fn of(live_roots: BTreeSet<String>) -> Retention {
         Retention {
-            absent_for: ABSENT_FOR,
             live_roots,
-            referenced: BTreeSet::new(),
+            ..Retention::default()
         }
     }
 
@@ -868,9 +881,13 @@ impl CompactionPlan {
     /// so the daemon can say what a compaction would drop before it runs one.
     pub fn of(view: &BaselineView, retention: &Retention, at: Timestamp) -> CompactionPlan {
         let mut plan = CompactionPlan::default();
-        for key in view.coverage().keys() {
+        // A stretch of Surface keeps the moment it was first covered: writing
+        // it down again is not covering it again.
+        for (key, covered_at) in view.coverage().stretches() {
             match retention.covers(key) {
-                true => plan.coverage.push(CoverageRecord::new(key.clone(), at)),
+                true => plan
+                    .coverage
+                    .push(CoverageRecord::new(key.clone(), covered_at)),
                 false => plan.uncovered.push(key.clone()),
             }
         }

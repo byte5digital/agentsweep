@@ -16,8 +16,10 @@
 //! Baseline, the second chain under the same key: Coverage, one record per
 //! Item, the known actions the Event Log accounts for, and the Scan pass that
 //! puts them in the order of spec section 6.4 and answers with what to write.
-//! The Verdict cache has its envelope and waits for AI Judgement, which
-//! arrives with its milestone.
+//! On top of it sits Drift: the question "was that you?" where spec section
+//! 4.6.5 says to ask it, the Acknowledge that answers it, and the compaction
+//! that keeps the Baseline chain from growing for ever. The Verdict cache has
+//! its envelope and waits for AI Judgement, which arrives with its milestone.
 
 #![warn(missing_docs)]
 

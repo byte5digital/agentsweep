@@ -297,6 +297,112 @@ impl TrustTable {
     }
 }
 
+/// Why a change to an Item needs no question.
+///
+/// ADR 0007 keeps the list closed and never infers who wrote a file: there is
+/// no time window after an Agent session and no guess at the writing process.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KnownAction {
+    /// AgentSweep wrote the content itself: a Quarantine, a Restore, a
+    /// re-enforce, a Re-enable or a Gate registration.
+    Write,
+    /// The user said the change was their own doing.
+    Acknowledge,
+}
+
+impl KnownAction {
+    /// What the Baseline records as having moved the accepted hash.
+    pub fn accepted_by(self) -> crate::baseline::AcceptedBy {
+        match self {
+            KnownAction::Write => crate::baseline::AcceptedBy::AgentsweepWrite,
+            KnownAction::Acknowledge => crate::baseline::AcceptedBy::Acknowledge,
+        }
+    }
+}
+
+/// One known action, with the Event Log record behind it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StandsBehind {
+    /// Which known action it was.
+    pub action: KnownAction,
+    /// Where in the Event Log it sits, which the Baseline record names.
+    pub event: String,
+}
+
+/// The changes AgentSweep already knows the reason for, rebuilt from the Event
+/// Log.
+///
+/// A Scan applies these before the Rules run, so content AgentSweep wrote
+/// itself or the user acknowledged reads `unchanged` and never raises the "was
+/// that you?" question (spec section 4.6.3). Trust is the third known action
+/// and lives in [`TrustTable`], because it is bound to a content hash and a
+/// kind rather than to one Item.
+///
+/// An action is remembered by the content hash it names, never by the path it
+/// touched: knowing that AgentSweep once wrote a file is not knowing that the
+/// bytes there now are the ones it wrote.
+#[derive(Clone, Debug, Default)]
+pub struct KnownActions {
+    by_item: BTreeMap<ItemId, BTreeMap<String, StandsBehind>>,
+}
+
+impl KnownActions {
+    /// Nothing is known, which is what a Scan without an Event Log runs
+    /// against.
+    pub fn none() -> KnownActions {
+        KnownActions::default()
+    }
+
+    /// Rebuilds the known actions from the Event Log.
+    pub fn rebuild(events: &[RecordedEvent]) -> KnownActions {
+        let mut known = KnownActions::default();
+        for recorded in events {
+            let action = match recorded.event.action {
+                Action::Quarantine
+                | Action::Restore
+                | Action::ReEnable
+                | Action::ReEnforce
+                | Action::GateRegistered => KnownAction::Write,
+                Action::Acknowledge => KnownAction::Acknowledge,
+                _ => continue,
+            };
+            let Some(item_id) = recorded.event.item_id.clone() else {
+                continue;
+            };
+            let event = recorded.sequence.to_string();
+            let mut hashes = vec![recorded.event.content_hash.clone()];
+            if let Some(left) = recorded.event.detail.get(crate::eventlog::LEFT_HASH) {
+                hashes.push(left.clone());
+            }
+            for hash in hashes.into_iter().filter(|hash| !hash.is_empty()) {
+                known.by_item.entry(item_id.clone()).or_default().insert(
+                    hash,
+                    StandsBehind {
+                        action,
+                        event: event.clone(),
+                    },
+                );
+            }
+        }
+        known
+    }
+
+    /// The known action behind this content of this Item, if there is one.
+    pub fn stands_behind(&self, item_id: &ItemId, content_hash: &str) -> Option<&StandsBehind> {
+        self.by_item.get(item_id)?.get(content_hash)
+    }
+
+    /// How many Items carry a known action.
+    pub fn len(&self) -> usize {
+        self.by_item.len()
+    }
+
+    /// True when no change has a known reason behind it.
+    pub fn is_empty(&self) -> bool {
+        self.by_item.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,5 +660,78 @@ mod tests {
                 .expect("a readable store")
                 .agrees()
         );
+    }
+
+    /// ADR 0007's closed list: AgentSweep's own writes and the user's
+    /// Acknowledge, and nothing else.
+    #[test]
+    fn only_agentsweeps_own_writes_and_an_acknowledge_are_known_actions() {
+        let hash = "b".repeat(64);
+        let events = recorded(vec![
+            Event::new(Action::Quarantine, Actor::Auto).about(&item("leak"), Kind::Skill, &hash),
+            Event::new(Action::Acknowledge, Actor::User).about(
+                &item("drifted"),
+                Kind::Skill,
+                &hash,
+            ),
+            Event::new(Action::Purge, Actor::User).about(&item("purged"), Kind::Skill, &hash),
+        ]);
+        let known = KnownActions::rebuild(&events);
+
+        assert_eq!(
+            known
+                .stands_behind(&item("leak"), &hash)
+                .map(|stands| stands.action),
+            Some(KnownAction::Write)
+        );
+        assert_eq!(
+            known
+                .stands_behind(&item("drifted"), &hash)
+                .map(|stands| stands.action),
+            Some(KnownAction::Acknowledge)
+        );
+        assert_eq!(known.stands_behind(&item("purged"), &hash), None);
+        assert_eq!(known.len(), 2);
+    }
+
+    /// A known action is known by the bytes it left, so the same Item at
+    /// another hash is a change nothing accounts for.
+    #[test]
+    fn a_known_action_covers_the_hash_it_names_and_no_other() {
+        let left = "c".repeat(64);
+        let taken = "a".repeat(64);
+        let events = recorded(vec![
+            Event::new(Action::Restore, Actor::User)
+                .about(&item("moved"), Kind::Skill, &taken)
+                .leaving(&left),
+        ]);
+        let known = KnownActions::rebuild(&events);
+
+        assert!(known.stands_behind(&item("moved"), &left).is_some());
+        assert!(known.stands_behind(&item("moved"), &taken).is_some());
+        assert!(
+            known
+                .stands_behind(&item("moved"), &"d".repeat(64))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_known_action_names_the_event_behind_it() {
+        let hash = "e".repeat(64);
+        let events = recorded(vec![
+            Event::new(Action::Trust, Actor::User).about(&item("first"), Kind::Skill, &hash),
+            Event::new(Action::ReEnforce, Actor::Auto).about(&item("second"), Kind::Skill, &hash),
+        ]);
+        let known = KnownActions::rebuild(&events);
+        let stands = known
+            .stands_behind(&item("second"), &hash)
+            .expect("the re-enforce is a known action");
+        assert_eq!(stands.event, "1");
+    }
+
+    #[test]
+    fn nothing_is_known_without_an_event_log() {
+        assert!(KnownActions::none().is_empty());
     }
 }

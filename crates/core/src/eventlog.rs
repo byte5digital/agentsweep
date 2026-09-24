@@ -353,6 +353,10 @@ impl ReceiptStep {
     }
 }
 
+/// The detail key under which an event carries the content hash AgentSweep's
+/// own write left at the Item.
+pub const LEFT_HASH: &str = "left_hash";
+
 /// One record of the Event Log, with the fields of spec section 5.5. The
 /// timestamp is the envelope's; everything else is here.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -435,6 +439,18 @@ impl Event {
     pub fn noting(mut self, name: &str, fact: impl Into<String>) -> Event {
         self.detail.insert(name.to_string(), fact.into());
         self
+    }
+
+    /// Records the content hash AgentSweep's own write left at the Item.
+    ///
+    /// A Quarantine, a Restore, a re-enforce, a Re-enable or a Gate
+    /// registration changes what is on the Surface, and the next Scan would
+    /// otherwise find a hash nothing accounts for and ask the user whether the
+    /// change was theirs. The hash written here is the closed list's half of
+    /// that answer (ADR 0007): the action is known, and it is known by the
+    /// bytes it left, not by the path it touched.
+    pub fn leaving(self, content_hash: &str) -> Event {
+        self.noting(LEFT_HASH, content_hash)
     }
 
     /// The payload a record carries.

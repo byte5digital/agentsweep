@@ -11,7 +11,7 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::adapter::{Problem, ProblemReason};
-use crate::derived::{QuarantineManifest, TrustTable};
+use crate::derived::{KnownAction, KnownActions, QuarantineManifest, TrustTable};
 use crate::item::{ItemId, Kind};
 
 /// Whether the content was planted by an attacker or is the user's own risky
@@ -334,6 +334,15 @@ impl Finding {
     pub fn is_drift(&self) -> bool {
         self.source == Source::Drift
     }
+
+    /// True when this Finding is the one an Acknowledge answers.
+    ///
+    /// Only the standing question offers it. A Finding that merely carries
+    /// Drift as its context line is settled by resolving that Finding, and
+    /// offers no Acknowledge of its own (spec section 4.6.5).
+    pub fn offers_acknowledge(&self) -> bool {
+        self.is_drift()
+    }
 }
 
 /// The identity of one Finding: the Item it is about, what produced it and the
@@ -388,8 +397,9 @@ pub enum FindingState {
     Stopped,
     /// The user said this content of this kind is safe.
     Trusted,
-    /// The user said the change was their own doing. The Baseline milestone is
-    /// what puts a Finding here; nothing does yet.
+    /// The user said the change was their own doing: the accepted hash moved
+    /// to this content and the question is settled. Weaker than
+    /// [`FindingState::Trusted`], which says the content is safe.
     Acknowledged,
     /// The content is no longer there. Kept in the Activity.
     Gone,
@@ -456,6 +466,9 @@ pub struct Decided<'a> {
     pub quarantined: &'a QuarantineManifest,
     /// Which content hashes carry Trust.
     pub trusted: &'a TrustTable,
+    /// What the user said was their own doing, which is what puts a Drift
+    /// Finding at [`FindingState::Acknowledged`].
+    pub known: &'a KnownActions,
 }
 
 /// Every Finding that stands right now, derived from the Event Log and the
@@ -488,10 +501,19 @@ pub fn standing(
             .get(&finding.item_id)
             .copied()
             .or_else(|| stopped.and_then(|entry| entry.kind));
+        let acknowledged = decided
+            .known
+            .stands_behind(&finding.item_id, &finding.content_hash)
+            .is_some_and(|stands| stands.action == KnownAction::Acknowledge);
         let state = if stopped.is_some() {
             FindingState::Stopped
         } else if kind.is_some_and(|kind| decided.trusted.trusts(kind, &finding.content_hash)) {
             FindingState::Trusted
+        } else if acknowledged {
+            // The user said the change was theirs, which settles the question
+            // and nothing else: every Tier went on scanning the content, and
+            // whatever they raised stands here as it did before.
+            FindingState::Acknowledged
         } else if found_now.contains(&id) {
             FindingState::Open
         } else {
@@ -610,7 +632,9 @@ mod tests {
 
     /// The manifest and the Trust table as the Event Log yields them, written
     /// to a real chain and read back.
-    fn decided_by(events: Vec<crate::eventlog::Event>) -> (QuarantineManifest, TrustTable) {
+    fn decided_by(
+        events: Vec<crate::eventlog::Event>,
+    ) -> (QuarantineManifest, TrustTable, KnownActions) {
         use crate::eventlog::{EventLog, EventLogWriter};
         use crate::keychain::MemoryKeySource;
 
@@ -622,7 +646,11 @@ mod tests {
             writer.append(event).expect("an appended event");
         }
         let view = log.read(&keys).expect("a readable log");
-        (view.quarantine_manifest(), view.trust_table())
+        (
+            view.quarantine_manifest(),
+            view.trust_table(),
+            KnownActions::rebuild(&view.events),
+        )
     }
 
     #[test]
@@ -633,6 +661,7 @@ mod tests {
         let stopped = a_finding(Source::Rule(13), "b");
         let trusted = a_finding(Source::Rule(14), "c");
         let vanished = a_finding(Source::Rule(15), "d");
+        let answered = a_finding(Source::Drift, "e");
 
         let mut quarantine = Event::new(Action::Quarantine, Actor::Auto)
             .about(&stopped.item_id, Kind::Skill, &stopped.content_hash)
@@ -644,16 +673,25 @@ mod tests {
             Kind::Skill,
             &trusted.content_hash,
         );
-        let (quarantined, trust_table) = decided_by(vec![quarantine, trust]);
+        let acknowledge = Event::new(Action::Acknowledge, Actor::User)
+            .about(&answered.item_id, Kind::Skill, &answered.content_hash)
+            .leaving(&answered.content_hash);
+        let (quarantined, trust_table, known) = decided_by(vec![quarantine, trust, acknowledge]);
 
         let kinds = BTreeMap::from([(open.item_id.clone(), Kind::Skill)]);
         let placed = standing(
             std::slice::from_ref(&vanished),
-            &[open.clone(), stopped.clone(), trusted.clone()],
+            &[
+                open.clone(),
+                stopped.clone(),
+                trusted.clone(),
+                answered.clone(),
+            ],
             &kinds,
             Decided {
                 quarantined: &quarantined,
                 trusted: &trust_table,
+                known: &known,
             },
         );
 
@@ -667,7 +705,14 @@ mod tests {
         assert_eq!(state(&stopped), Some(FindingState::Stopped));
         assert_eq!(state(&trusted), Some(FindingState::Trusted));
         assert_eq!(state(&vanished), Some(FindingState::Gone));
-        assert_eq!(placed.len(), 4);
+        assert_eq!(
+            state(&answered),
+            Some(FindingState::Acknowledged),
+            "the user said the change was theirs"
+        );
+        assert!(answered.offers_acknowledge());
+        assert!(!open.offers_acknowledge());
+        assert_eq!(placed.len(), 5);
         let stopped_by = placed
             .iter()
             .find(|one| one.state == FindingState::Stopped)

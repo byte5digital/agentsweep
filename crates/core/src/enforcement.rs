@@ -774,6 +774,31 @@ mod tests {
         );
     }
 
+    /// Drift alone never quarantines, whoever asks: a change with nothing
+    /// known behind it is a question about who made it, never a verdict on
+    /// what the content says.
+    #[test]
+    fn drift_alone_never_quarantines() {
+        let bench = Bench::new();
+        let item = bench.item("CLAUDE.md", "# demo\n");
+        let drifted = crate::drift::Drift {
+            change: crate::drift::Change::Changed,
+            since: None,
+            accepted_hash: "a".repeat(64),
+            last_seen_hash: item.content_hash.clone(),
+            line: "changed since your last Scan".to_string(),
+            detail: Vec::new(),
+        };
+        let finding = crate::drift::finding(&item, &drifted);
+
+        for actor in [Actor::Auto, Actor::User] {
+            let cause = Cause::of(&finding, actor);
+            assert!(cause.drift);
+            let error = may_quarantine(&item, &cause).expect_err("a refusal");
+            assert!(error.to_string().contains("never quarantines"), "{error}");
+        }
+    }
+
     #[test]
     fn a_probation_rule_a_heuristic_and_an_exposure_never_quarantine_by_themselves() {
         let bench = Bench::new();

@@ -374,13 +374,18 @@ impl BaselineRecord {
             moved.first_differed_at = None;
             moved.last_seen_manifest = Vec::new();
             moved.last_seen_fields = BTreeMap::new();
-            moved.last_seen_facts = BTreeMap::new();
         } else {
             moved.first_differed_at = moved.first_differed_at.or(Some(at));
             moved.last_seen_manifest = ManifestFile::of(item);
             moved.last_seen_fields = field_hashes(item);
-            moved.last_seen_facts = item.baseline_facts.clone();
         }
+        // The facts are their own comparison: a marketplace points somewhere
+        // else without one byte of its clone moving, and the form that is
+        // waiting to be accepted is the one that was seen.
+        moved.last_seen_facts = match item.baseline_facts == moved.accepted_facts {
+            true => BTreeMap::new(),
+            false => item.baseline_facts.clone(),
+        };
         moved
     }
 
@@ -1032,6 +1037,7 @@ mod tests {
 
     use super::*;
     use crate::coverage::CoverageKey;
+    use crate::eventlog::{Action, EventLog};
     use crate::item::{Activation, Provenance, Scope, canonical_entry};
     use crate::keychain::{ChainKey, MemoryKeySource};
 
@@ -1387,5 +1393,215 @@ mod tests {
         assert!(view.is_empty());
         assert!(view.coverage().is_empty());
         assert!(!view.carried_over());
+    }
+
+    /// Spec section 4.6.6: compaction writes a fresh chain of what is still
+    /// worth keeping and anchors the old head and the new one in the Event
+    /// Log. It drops what a record is kept for no longer, and never a record
+    /// an open Finding refers to.
+    #[test]
+    fn compaction_drops_what_is_kept_for_no_longer_and_anchors_both_heads() {
+        let home = TempDir::new().expect("a temporary data directory");
+        let directory = DataDirectory::at(home.path());
+        let keys = MemoryKeySource::holding(ChainKey::generate().expect("a key"));
+        let baseline = Baseline::in_data_directory(&directory);
+
+        let present = user_file("present.md");
+        let long_gone = user_file("long-gone.md");
+        let lately_gone = user_file("lately-gone.md");
+        let live_project = project_file("/src/live");
+        let dead_project = project_file("/src/dead");
+        let referenced = user_file("referenced.md");
+
+        let accepted = moment("2026-01-01T09:00:00.000Z");
+        let (mut writer, state) = BaselineWriter::open(&baseline, &keys).expect("it opens");
+        assert_eq!(state, ChainState::Intact);
+        for key in [
+            CoverageKey::of("claude-code", &Scope::User, Kind::InstructionFile),
+            CoverageKey::of(
+                "claude-code",
+                &Scope::Project(PathBuf::from("/src/live")),
+                Kind::InstructionFile,
+            ),
+            CoverageKey::of(
+                "claude-code",
+                &Scope::Project(PathBuf::from("/src/dead")),
+                Kind::InstructionFile,
+            ),
+        ] {
+            writer
+                .cover(&CoverageRecord::new(key, accepted))
+                .expect("the coverage is written");
+        }
+        let mut kept: Vec<BaselineRecord> = Vec::new();
+        for item in [
+            &present,
+            &long_gone,
+            &lately_gone,
+            &live_project,
+            &dead_project,
+            &referenced,
+        ] {
+            let record = BaselineRecord::accepting(item, accepted, AcceptedBy::CleanScan);
+            writer.accept(&record).expect("the record is written");
+            kept.push(record);
+        }
+        // Two Items are gone: one long enough to be dropped, one not. A third
+        // is gone as well and an open Finding still refers to it.
+        for (record, when) in [
+            (&kept[1], "2026-06-01T09:00:00.000Z"),
+            (&kept[2], "2026-09-01T09:00:00.000Z"),
+            (&kept[5], "2026-06-01T09:00:00.000Z"),
+        ] {
+            writer
+                .accept(&record.absent(moment(when)))
+                .expect("the record is written");
+        }
+        drop(writer);
+
+        let before = baseline.read(&keys).expect("the Baseline reads");
+        assert_eq!(before.len(), 6);
+        let old_head = before.head.clone();
+
+        let live: BTreeSet<String> = ["user".to_string(), "project:/src/live".to_string()]
+            .into_iter()
+            .collect();
+        let retention = Retention::of(live).referring_to(
+            [kept[5].item_id.clone()]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+        );
+        let at = moment("2026-09-24T09:00:00.000Z");
+        let compaction = compact(&directory, &keys, &retention, at).expect("it compacts");
+
+        // What was dropped: the record absent for more than ninety days, and
+        // the root that left every registry.
+        let dropped: Vec<String> = compaction
+            .plan
+            .dropped
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+        assert_eq!(dropped.len(), 2, "{dropped:?}");
+        assert!(
+            dropped.iter().any(|id| id.ends_with("long-gone.md")),
+            "{dropped:?}"
+        );
+        assert!(
+            dropped.iter().any(|id| id.contains("/src/dead")),
+            "{dropped:?}"
+        );
+        assert_eq!(compaction.plan.uncovered.len(), 1);
+        assert_eq!(compaction.plan.uncovered[0].root, "project:/src/dead");
+
+        // What the fresh chain holds, read back through the ordinary routine.
+        let after = baseline.read(&keys).expect("the compacted Baseline reads");
+        assert_eq!(after.state, ChainState::Intact);
+        assert_eq!(after.len(), 4, "{:?}", after.records().collect::<Vec<_>>());
+        assert!(after.record(&present.id).is_some());
+        assert!(
+            after.record(&referenced.id).is_some(),
+            "a record an open Finding refers to is never dropped"
+        );
+        assert!(after.record(&lately_gone.id).is_some());
+        assert!(after.record(&long_gone.id).is_none());
+        assert!(after.record(&dead_project.id).is_none());
+        assert_eq!(after.compactions, 1);
+        assert_eq!(after.restarts, 0);
+        assert!(
+            after
+                .coverage()
+                .covers("claude-code", &Scope::User, Kind::InstructionFile)
+        );
+        assert!(!after.coverage().covers(
+            "claude-code",
+            &Scope::Project(PathBuf::from("/src/dead")),
+            Kind::InstructionFile
+        ));
+
+        // And the Event Log carries the one record that anchors the chain
+        // that was replaced to the one that took its place.
+        assert_eq!(compaction.chain.old_head, old_head);
+        assert_eq!(compaction.chain.new_head, after.head);
+        let log = EventLog::in_data_directory(&directory)
+            .read(&keys)
+            .expect("the log reads");
+        assert_eq!(log.events.len(), 1);
+        let event = &log.events[0].event;
+        assert_eq!(event.action, Action::BaselineCompacted);
+        assert_eq!(event.detail.get("old_head"), Some(&old_head));
+        assert_eq!(event.detail.get("new_head"), Some(&after.head));
+    }
+
+    /// A Baseline no key in hand can verify is read, never rewritten: writing
+    /// it afresh would launder records nobody can vouch for into a chain that
+    /// verifies (ADR 0007).
+    #[test]
+    fn compaction_refuses_a_baseline_that_does_not_verify() {
+        let home = TempDir::new().expect("a temporary data directory");
+        let directory = DataDirectory::at(home.path());
+        let keys = MemoryKeySource::holding(ChainKey::generate().expect("a key"));
+        let baseline = Baseline::in_data_directory(&directory);
+        let item = instruction_file("# demo\n");
+        let (mut writer, _) = BaselineWriter::open(&baseline, &keys).expect("it opens");
+        writer
+            .accept(&BaselineRecord::accepting(
+                &item,
+                moment("2026-09-24T09:00:00.000Z"),
+                AcceptedBy::CleanScan,
+            ))
+            .expect("the record is written");
+        drop(writer);
+
+        let stranger = MemoryKeySource::holding(ChainKey::from_bytes([7u8; 32]));
+        let refused = compact(
+            &directory,
+            &stranger,
+            &Retention::of(BTreeSet::new()),
+            moment("2026-09-25T09:00:00.000Z"),
+        )
+        .expect_err("it refuses");
+        assert!(refused.to_string().contains("never rewritten"), "{refused}");
+
+        let after = baseline.read(&keys).expect("the Baseline reads");
+        assert_eq!(after.len(), 1, "nothing was rewritten");
+    }
+
+    /// Compaction runs after a completed Full Scan and at most once a day.
+    #[test]
+    fn compaction_is_due_once_a_day() {
+        let at = moment("2026-09-24T09:00:00.000Z");
+        assert!(compaction_due(None, at));
+        assert!(!compaction_due(
+            Some(moment("2026-09-24T08:00:00.000Z")),
+            at
+        ));
+        assert!(compaction_due(Some(moment("2026-09-23T08:00:00.000Z")), at));
+    }
+
+    fn user_file(name: &str) -> Item {
+        Item::file(
+            "claude-code",
+            Scope::User,
+            Kind::InstructionFile,
+            &format!("~/.claude/{name}"),
+            PathBuf::from("/nowhere/.claude").join(name),
+            Provenance::Manual,
+            Activation::Active,
+            format!("# {name}\n").into_bytes(),
+        )
+    }
+
+    fn project_file(root: &str) -> Item {
+        Item::file(
+            "claude-code",
+            Scope::Project(PathBuf::from(root)),
+            Kind::InstructionFile,
+            "CLAUDE.md",
+            PathBuf::from(root).join("CLAUDE.md"),
+            Provenance::Manual,
+            Activation::Active,
+            b"# project\n".to_vec(),
+        )
     }
 }

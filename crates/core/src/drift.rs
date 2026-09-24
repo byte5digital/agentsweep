@@ -120,6 +120,29 @@ impl Drift {
         })
     }
 
+    /// The Drift the facts alone stand for: a marketplace that points
+    /// somewhere else without one byte of its clone moving.
+    ///
+    /// The content hash answers for the bytes, and the facts answer for what
+    /// the Baseline remembers beside them (spec section 4.6.5).
+    pub fn of_facts(item: &Item, record: Option<&BaselineRecord>) -> Drift {
+        let since = record.map(|held| held.accepted_at);
+        let accepted = record.map(|held| &held.accepted_facts);
+        Drift {
+            change: Change::Changed,
+            since,
+            accepted_hash: record
+                .map(|held| held.accepted_hash.clone())
+                .unwrap_or_default(),
+            last_seen_hash: item.content_hash.clone(),
+            line: line_for(Change::Changed, since),
+            detail: match accepted {
+                Some(accepted) => changed_fields(accepted, &item.baseline_facts),
+                None => Vec::new(),
+            },
+        }
+    }
+
     /// The Drift a Problem on a path the Baseline had readable stands for.
     pub fn of_problem(problem: &Problem, record: &BaselineRecord) -> Drift {
         let change = Change::Unreadable(problem.reason);
@@ -389,6 +412,18 @@ pub fn decide(
     if item.provenance == Provenance::AgentWritten {
         return Decision::Silent;
     }
+    // A fetch rewrites every clone and says nothing, and where a marketplace
+    // points is a fact beside the clone's bytes rather than in them: the
+    // question is asked of the facts, whatever the hash did.
+    if item.kind == Kind::Marketplace {
+        return match (state, record) {
+            (BaselineState::Added, _) => Decision::Ask,
+            // Nothing was ever accepted about where it points, and the
+            // clone's own bytes are never the question.
+            (_, Some(held)) if source_moved(held, item) => Decision::Ask,
+            _ => Decision::Silent,
+        };
+    }
     let change = match state {
         BaselineState::Added => Change::Added,
         BaselineState::Changed => Change::Changed,
@@ -413,16 +448,6 @@ pub fn decide(
                 Update::Consistent { from, to } => Decision::Updated { from, to },
                 Update::InPlace => Decision::Ask,
                 Update::None => Decision::Silent,
-            },
-        },
-        // A fetch rewrites every clone, so the tree is not the question. Where
-        // the marketplace points is.
-        Kind::Marketplace => match (change, record) {
-            (Change::Added, _) => Decision::Ask,
-            (_, None) => Decision::Ask,
-            (_, Some(held)) => match source_moved(held, item) {
-                true => Decision::Ask,
-                false => Decision::Silent,
             },
         },
         _ => Decision::Silent,
@@ -725,5 +750,318 @@ mod writer {
                 .field("baseline", &self.baseline)
                 .finish_non_exhaustive()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use serde_json::{Value, json};
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::baseline::{AcceptedBy, Baseline, BaselineWriter};
+    use crate::derived::KnownActions;
+    use crate::eventlog::{Action, EventLog, LEFT_HASH};
+    use crate::item::{Scope, Tree, canonical_entry};
+    use crate::keychain::{ChainKey, MemoryKeySource};
+    use crate::paths::DataDirectory;
+
+    fn moment(text: &str) -> Timestamp {
+        Timestamp::parse(text).expect("a readable moment")
+    }
+
+    fn server(body: &Value) -> Item {
+        Item::entry(
+            "claude-code",
+            Scope::User,
+            Kind::McpServer,
+            "~/.claude.json#mcpServers/tracker",
+            PathBuf::from("/nowhere/.claude.json"),
+            Provenance::Manual,
+            Activation::Active,
+            canonical_entry(body),
+        )
+    }
+
+    fn declared() -> Declarations {
+        Declarations::none().and(&Descriptor {
+            agent: "claude-code",
+            display_name: "Claude Code",
+            kinds: &[Kind::SettingsEntry],
+            default_config_dir: ".claude",
+            surfaces: &[],
+            capabilities: &[],
+            agent_written_keys: &["permissions.allow"],
+        })
+    }
+
+    fn watching(declarations: &Declarations, settled: &BTreeSet<String>) -> Watched<'static> {
+        // The two references outlive the call the way the Scan pass holds
+        // them: both are owned by the test for the whole of it.
+        let declarations: &'static Declarations =
+            unsafe { std::mem::transmute::<&Declarations, &'static Declarations>(declarations) };
+        let settled: &'static BTreeSet<String> =
+            unsafe { std::mem::transmute::<&BTreeSet<String>, &'static BTreeSet<String>>(settled) };
+        Watched {
+            declarations,
+            unsettled_marketplaces: settled,
+        }
+    }
+
+    /// The rows of spec section 4.6.5 that are a flat no: another Scope,
+    /// another kind, an Item the Agent would not load, and one the Agent wrote
+    /// itself.
+    #[test]
+    fn nothing_outside_the_table_is_ever_asked_about() {
+        let declarations = declared();
+        let settled = BTreeSet::new();
+        let watched = watching(&declarations, &settled);
+        let body = json!({"command": "/opt/tools/tracker"});
+
+        let mut project = server(&body);
+        project.scope = Scope::Project(PathBuf::from("/src/demo"));
+        assert_eq!(
+            decide(&project, BaselineState::Changed, None, watched),
+            Decision::Silent
+        );
+
+        let mut inactive = server(&body);
+        inactive.activation = Activation::Unknown;
+        assert_eq!(
+            decide(&inactive, BaselineState::Changed, None, watched),
+            Decision::Silent
+        );
+
+        let mut skill = server(&body);
+        skill.kind = Kind::Skill;
+        assert_eq!(
+            decide(&skill, BaselineState::Changed, None, watched),
+            Decision::Silent
+        );
+
+        let mut written = server(&body);
+        written.kind = Kind::ExecPolicy;
+        written.provenance = Provenance::AgentWritten;
+        assert_eq!(
+            decide(&written, BaselineState::Changed, None, watched),
+            Decision::Silent
+        );
+
+        // And an Item first seen before its Surface was covered, whatever kind
+        // it is.
+        assert_eq!(
+            decide(&server(&body), BaselineState::None, None, watched),
+            Decision::Silent
+        );
+        assert_eq!(
+            decide(&server(&body), BaselineState::Unchanged, None, watched),
+            Decision::Silent
+        );
+    }
+
+    /// A declared key covers its members, so a list the Agent appends to is
+    /// exempt whichever member moved.
+    #[test]
+    fn an_agent_written_key_covers_its_members() {
+        let declarations = declared();
+        assert!(declarations.agent_writes("claude-code", "permissions.allow"));
+        assert!(declarations.agent_writes("claude-code", "permissions.allow.0"));
+        assert!(!declarations.agent_writes("claude-code", "permissions.allowAll"));
+        assert!(!declarations.agent_writes("claude-code", "permissions.defaultMode"));
+        assert!(!declarations.agent_writes("codex", "permissions.allow"));
+    }
+
+    /// A consistent update is the registry record moving as a whole. A record
+    /// that stayed where it was while the tree moved is not one.
+    #[test]
+    fn a_registry_record_that_moved_as_a_whole_is_an_update() {
+        let before = tree_plugin("1.2", "/cache/demo/1.2", "aaa", "one");
+        let accepted = BaselineRecord::accepting(
+            &before,
+            moment("2026-09-24T09:00:00.000Z"),
+            AcceptedBy::CleanScan,
+        );
+
+        let updated = tree_plugin("1.3", "/cache/demo/1.3", "bbb", "two");
+        assert_eq!(
+            update_of(&accepted, &updated),
+            Update::Consistent {
+                from: "1.2".to_string(),
+                to: "1.3".to_string()
+            }
+        );
+
+        let tampered = tree_plugin("1.2", "/cache/demo/1.2", "aaa", "else");
+        assert_eq!(update_of(&accepted, &tampered), Update::InPlace);
+
+        // A version directory that moved while the commit stayed behind is not
+        // a record that moved as a whole.
+        let half = tree_plugin("1.3", "/cache/demo/1.3", "aaa", "two");
+        assert_eq!(update_of(&accepted, &half), Update::InPlace);
+    }
+
+    fn tree_plugin(version: &str, path: &str, commit: &str, content: &str) -> Item {
+        let mut tree = Tree::default();
+        tree.files.push(crate::item::TreeFile {
+            path: "run.sh".to_string(),
+            size: content.len() as u64,
+            mode: 0o644,
+            sha256: crate::item::sha256_hex(content.as_bytes()),
+            scanned: true,
+            is_symlink: false,
+            link_target: String::new(),
+            facts: crate::item::FileFacts::default(),
+            content: content.as_bytes().to_vec(),
+        });
+        Item::tree(
+            "claude-code",
+            Scope::User,
+            Kind::Plugin,
+            "demo@shop",
+            PathBuf::from(path),
+            Provenance::Marketplace {
+                name: "shop".to_string(),
+                pinned_ref: commit.to_string(),
+                official: false,
+            },
+            Activation::Active,
+            tree,
+        )
+        .noting(VERSION, version)
+        .noting(INSTALL_PATH, path)
+        .noting(COMMIT, commit)
+    }
+
+    /// The write side: one bench holding both chains of one temporary data
+    /// directory. Nothing here touches the real home.
+    struct Bench {
+        directory: TempDir,
+        keys: MemoryKeySource,
+    }
+
+    impl Bench {
+        fn new() -> Bench {
+            Bench {
+                directory: TempDir::new().expect("a temporary data directory"),
+                keys: MemoryKeySource::holding(ChainKey::generate().expect("a key")),
+            }
+        }
+
+        fn data(&self) -> DataDirectory {
+            DataDirectory::at(self.directory.path())
+        }
+
+        fn write(&self, record: &BaselineRecord) {
+            let baseline = Baseline::in_data_directory(&self.data());
+            let (mut writer, _) =
+                BaselineWriter::open(&baseline, &self.keys).expect("the Baseline opens");
+            writer.accept(record).expect("the record is written");
+        }
+
+        /// The Baseline record of a server that was accepted at one form and
+        /// seen at another, which is the Item a Drift Finding stands on.
+        fn drifted(&self) -> (Item, BaselineRecord) {
+            let accepted = server(&json!({"command": "/opt/tools/tracker"}));
+            let record = BaselineRecord::accepting(
+                &accepted,
+                moment("2026-09-24T09:00:00.000Z"),
+                AcceptedBy::CleanScan,
+            );
+            let seen = server(&json!({"command": "/opt/tools/other"}));
+            let record = record.seeing(&seen, moment("2026-09-24T10:00:00.000Z"));
+            self.write(&record);
+            (seen, record)
+        }
+    }
+
+    /// Acknowledge moves the accepted hash to the form that was on screen and
+    /// does nothing else: it is one Event Log action and one Baseline advance,
+    /// and it is not Trust.
+    #[test]
+    fn an_acknowledge_advances_the_accepted_hash_and_nothing_else() {
+        let bench = Bench::new();
+        let (seen, held) = bench.drifted();
+
+        let (mut answering, _, _) =
+            Acknowledgement::open(&bench.data(), &bench.keys).expect("both chains open");
+        let answered = answering
+            .acknowledge(&seen.id, &seen.content_hash, "a-finding")
+            .expect("the answer is taken");
+
+        assert_eq!(answered.record.accepted_hash, seen.content_hash);
+        assert_eq!(answered.record.accepted_by, AcceptedBy::Acknowledge);
+        assert_eq!(answered.record.first_differed_at, None);
+        assert_ne!(answered.record.accepted_hash, held.accepted_hash);
+        assert_eq!(answered.record.accepted_event, answered.event);
+
+        // The Baseline chain says the same, read back.
+        let view = Baseline::in_data_directory(&bench.data())
+            .read(&bench.keys)
+            .expect("the Baseline reads");
+        let record = view.record(&seen.id).expect("the record is there");
+        assert_eq!(record.accepted_hash, seen.content_hash);
+
+        // And the Event Log carries the answer, with the hash it stands
+        // behind, so the next Scan reads the Item as unchanged.
+        let log = EventLog::in_data_directory(&bench.data())
+            .read(&bench.keys)
+            .expect("the log reads");
+        assert_eq!(log.events.len(), 1);
+        let event = &log.events[0].event;
+        assert_eq!(event.action, Action::Acknowledge);
+        assert_eq!(event.detail.get(LEFT_HASH), Some(&seen.content_hash));
+        let known = KnownActions::rebuild(&log.events);
+        assert!(known.stands_behind(&seen.id, &seen.content_hash).is_some());
+    }
+
+    /// The hash the user was shown is a compare-and-swap: an Item that moved
+    /// on accepts nothing, and the caller is told what it stands at now so the
+    /// Finding can ask again.
+    #[test]
+    fn an_acknowledge_against_a_stale_hash_refuses_and_writes_nothing() {
+        let bench = Bench::new();
+        let (seen, held) = bench.drifted();
+
+        let (mut answering, _, _) =
+            Acknowledgement::open(&bench.data(), &bench.keys).expect("both chains open");
+        let refused = answering
+            .acknowledge(&seen.id, &held.accepted_hash, "a-finding")
+            .expect_err("the answer is refused");
+        assert_eq!(
+            refused,
+            AcknowledgeError::Stale {
+                answered: held.accepted_hash.clone(),
+                last_seen: seen.content_hash.clone(),
+            }
+        );
+        assert!(refused.to_string().contains("changed again"), "{refused}");
+
+        let view = Baseline::in_data_directory(&bench.data())
+            .read(&bench.keys)
+            .expect("the Baseline reads");
+        let record = view.record(&seen.id).expect("the record is there");
+        assert_eq!(
+            record.accepted_hash, held.accepted_hash,
+            "nothing was accepted"
+        );
+        let log = EventLog::in_data_directory(&bench.data())
+            .read(&bench.keys)
+            .expect("the log reads");
+        assert!(log.events.is_empty(), "and nothing was written down");
+    }
+
+    /// An Item the Baseline never heard of has nothing to advance.
+    #[test]
+    fn an_acknowledge_about_an_unknown_item_refuses() {
+        let bench = Bench::new();
+        let unknown = server(&json!({"command": "/opt/tools/tracker"}));
+        let (mut answering, _, _) =
+            Acknowledgement::open(&bench.data(), &bench.keys).expect("both chains open");
+        let refused = answering
+            .acknowledge(&unknown.id, &unknown.content_hash, "")
+            .expect_err("the answer is refused");
+        assert_eq!(refused, AcknowledgeError::Unknown(unknown.id.clone()));
     }
 }

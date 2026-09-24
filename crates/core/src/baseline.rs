@@ -367,13 +367,28 @@ impl BaselineRecord {
 
     /// The record after the hash was accepted: the last-seen forms fold into
     /// the accepted one and nothing differs any more.
-    pub fn accepted(&self, item: &Item, at: Timestamp, by: AcceptedBy) -> BaselineRecord {
+    ///
+    /// A Scan that finds the Item at the hash that was already accepted does
+    /// not accept it again. The moment on the record is when AgentSweep first
+    /// took this content, because that is the date a Drift Finding reads back
+    /// ("changed since your last Scan on <date>"), and because a record that
+    /// moved only its own timestamps is a record not worth writing.
+    pub fn accepted(
+        &self,
+        item: &Item,
+        at: Timestamp,
+        by: AcceptedBy,
+        event: &str,
+    ) -> BaselineRecord {
         let mut moved = BaselineRecord::accepting(item, at, by);
-        moved.last_seen_at = if self.last_seen_hash == item.content_hash {
-            self.last_seen_at
+        if self.accepted_hash == item.content_hash {
+            moved.accepted_at = self.accepted_at;
+            moved.accepted_by = self.accepted_by;
+            moved.accepted_event = self.accepted_event.clone();
+            moved.last_seen_at = self.last_seen_at;
         } else {
-            at
-        };
+            moved.accepted_event = event.to_string();
+        }
         moved
     }
 
@@ -874,10 +889,23 @@ mod tests {
             &second,
             moment("2026-09-24T11:00:00.000Z"),
             AcceptedBy::CleanScan,
+            "",
         );
         assert_eq!(taken.accepted_hash, second.content_hash);
+        assert_eq!(taken.accepted_at, moment("2026-09-24T11:00:00.000Z"));
         assert_eq!(taken.first_differed_at, None);
         assert!(taken.last_seen_fields.is_empty());
+
+        // Seeing the same content again is not accepting it again: the moment
+        // on the record is when AgentSweep first took this content.
+        let again = taken.accepted(
+            &second,
+            moment("2026-09-24T12:00:00.000Z"),
+            AcceptedBy::CleanScan,
+            "",
+        );
+        assert_eq!(again.accepted_at, moment("2026-09-24T11:00:00.000Z"));
+        assert!(!again.moved_from(&taken));
     }
 
     #[test]
@@ -1024,6 +1052,7 @@ mod tests {
                 &second_at_the_same_id,
                 moment("2026-09-24T10:00:00.000Z"),
                 AcceptedBy::CleanScan,
+                "",
             );
             writer.accept(&two).expect("the second record");
         }

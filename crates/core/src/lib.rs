@@ -40,6 +40,7 @@ pub mod provenance;
 pub mod quarantine;
 pub mod rules;
 pub mod scan;
+pub mod scan_pass;
 pub mod user_rules;
 pub mod verdicts;
 pub mod views;

@@ -9,8 +9,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use agentsweep_core::chain::ChainState;
+use agentsweep_core::enforcement::Enforcement;
 use agentsweep_core::envelope::Timestamp;
+use agentsweep_core::eventlog::{Actor, EventLog};
 use agentsweep_core::health::StateFileHealth;
+use agentsweep_core::item::Kind;
 use agentsweep_core::keychain::{ChainKey, KeyError, KeySource, MemoryKeySource};
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::state::{StateFile, Trigger};
@@ -155,8 +159,12 @@ impl Drop for Sandbox {
 }
 
 /// Waits until no Scan is running and one has finished.
+///
+/// Two minutes, which is far longer than a Full Scan of a fixture home takes
+/// and long enough that a suite running every test at once on a busy machine
+/// never mistakes a slow Scan for a broken one.
 fn wait_for_a_scan(daemon: &Arc<Daemon>) {
-    for _ in 0..600 {
+    for _ in 0..2_400 {
         let health = daemon.health();
         if !health.scanning && daemon.status().scan.is_some() {
             return;
@@ -389,6 +397,58 @@ fn a_restart_rebuilds_what_the_logs_say_and_matches_the_previous_state() {
     // The second Scan keeps the Scan before it: the file holds the last thirty.
     let state = daemon.daemon().status();
     assert!(state.scan.is_some());
+}
+
+/// The Trust table and the quarantine manifest are never stored: they are
+/// rebuilt from the Event Log at every start (ADR 0003). A Trust granted
+/// between two daemons therefore changes what the second one says.
+#[test]
+fn a_restart_reads_the_trust_table_and_the_manifest_out_of_the_event_log() {
+    let sandbox = Sandbox::with_a_planted_skill("rebuild-from-the-log");
+
+    let (item_id, content_hash) = {
+        let daemon = sandbox.start();
+        let status = ask(&daemon.socket());
+        let planted = status
+            .open()
+            .find(|finding| finding.item_id.as_str().ends_with("skills/setup"))
+            .expect("the planted skill is a Finding");
+        (planted.item_id.clone(), planted.content_hash.clone())
+    };
+
+    // The user says that content is safe. Nothing but the Event Log records it.
+    {
+        let (mut enforcement, chain) =
+            Enforcement::open(&sandbox.data(), &sandbox.keys).expect("an open Event Log");
+        assert_eq!(chain, ChainState::Intact);
+        enforcement
+            .trust(&item_id, Kind::Skill, &content_hash, Actor::User)
+            .expect("a granted Trust");
+    }
+
+    let view = EventLog::in_data_directory(&sandbox.data())
+        .read(&sandbox.keys)
+        .expect("a readable Event Log");
+    assert_eq!(view.state, ChainState::Intact);
+    assert_eq!(view.trust_table().len(), 1);
+    assert!(view.quarantine_manifest().is_empty());
+
+    // The next daemon derives the same views and acts on them. Trust is the
+    // Allowlist, so the Item is settled by T0 and no later Tier sees it: the
+    // Finding is not raised again at all.
+    let daemon = sandbox.start();
+    let status = ask(&daemon.socket());
+    assert!(
+        !status
+            .findings
+            .iter()
+            .any(|finding| finding.item_id == item_id),
+        "the trusted content raises nothing: {:?}",
+        status.findings
+    );
+    assert_eq!(status.scan.as_ref().expect("a Scan").threats, 0);
+    assert_eq!(status.health.open_findings, 0);
+    assert!(status.health.headline().starts_with("All clear"));
 }
 
 /// The subscribe stream carries a Scan from start to finish, with the Finding

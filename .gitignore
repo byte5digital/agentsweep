@@ -7,10 +7,6 @@ Cargo.lock.bak
 
 # Tauri / node
 node_modules/
-# One conformance fixture ships a vendored dependency directory, because what
-# a tree lists without scanning is part of what that case proves. It is a
-# fixture and never a dependency, so it is committed like the rest of the tree.
-!crates/adapter-conformance/fixtures/**/node_modules/
 dist/
 apps/*/src-tauri/gen/
 

@@ -332,6 +332,7 @@ impl FindingId {
         let source = match source {
             Source::Rule(id) => format!("rule/{id:04}"),
             Source::Score(_) => "score".to_string(),
+            Source::Problem(reason) => format!("problem/{}", reason.as_str()),
         };
         FindingId(format!("{item_id}|{source}|{content_hash}"))
     }

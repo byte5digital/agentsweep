@@ -53,7 +53,7 @@ impl Cause {
             status: finding.status,
             rule_id: match finding.source {
                 Source::Rule(id) => id,
-                Source::Score(_) => 0,
+                Source::Score(_) | Source::Problem(_) => 0,
             },
             finding_id: FindingId::of(finding),
             sessions_running: SessionsRunning::Unknown,

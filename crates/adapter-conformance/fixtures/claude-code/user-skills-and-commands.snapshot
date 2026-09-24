@@ -13,11 +13,11 @@ item claude-code/user/instruction-file/~/.claude/output-styles/terse.md
   shape=file scope=user provenance=manual activation=active registered=true symlink=false size=46
   sha256=43de2b28918850c081f9d397a0fb781e5daecf3aa9c4f6e5a91465ab126d1266
 item claude-code/user/skill/~/.claude/skills/pdf-tools
-  shape=tree scope=user provenance=manual activation=active registered=true symlink=false size=316
-  sha256=aaf6eae7be0e9cc86e248848543daebca773fe5a1328d18dd637ae77b494fcee
+  shape=tree scope=user provenance=manual activation=active registered=true symlink=false size=336
+  sha256=4f7cd1b48ef3583e42e888527a0ff16a41d01a94791216e36f179b8f856369e3
+  file .venv/lib/pypdf/__init__.py 104 hashed text
   file SKILL.md 186 scanned text
   file bin/helper 12 scanned executable
-  file node_modules/left-pad/index.js 84 hashed text
   file scripts/convert.sh 34 scanned text
   view skill {allowed_tools=["Bash(pdftotext *)", "Read"] allowed_tools_n=2 has_dynamic_context=false name="pdf-tools"}
 item claude-code/user/skill/~/.claude/skills/shared-notes

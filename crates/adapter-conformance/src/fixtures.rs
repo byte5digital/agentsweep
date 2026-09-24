@@ -10,6 +10,11 @@
 //! So every path component that starts with `dot-` is committed that way and
 //! renamed to a leading dot on the copy.
 //!
+//! A third name is ignored by this repository as well: `node_modules`. The
+//! case that proves a vendored dependency directory is listed and never
+//! scanned therefore uses `.venv`, committed as `dot-venv`. The core treats
+//! every name of its vendored list the same, so the case reads the same.
+//!
 //! A symbolic link is committed as a file whose name ends in `.symlink` and
 //! whose one line is the target it points at. Most skills on a real machine are
 //! links into a shared directory, and a link committed as a link would be

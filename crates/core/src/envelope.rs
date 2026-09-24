@@ -121,6 +121,12 @@ impl Timestamp {
         self.0
     }
 
+    /// The civil date alone, which is what a Drift Finding reads back
+    /// ("changed since your last Scan on <date>").
+    pub fn day(self) -> String {
+        self.to_string()[..10].to_string()
+    }
+
     /// Reads back the spelling a record carries.
     pub fn parse(text: &str) -> Option<Timestamp> {
         let bytes = text.as_bytes();

@@ -39,6 +39,10 @@ pub struct Cause {
     pub rule_id: i64,
     /// The Finding, by its identity.
     pub finding_id: FindingId,
+    /// True when the Finding is the standing question of whether a change was
+    /// the user's own. Drift alone never quarantines, at any Tier and for any
+    /// actor: it says that something moved, never that the content is bad.
+    pub drift: bool,
     /// Whether Agent sessions looked to be running. Detected read-only.
     pub sessions_running: SessionsRunning,
 }
@@ -53,9 +57,10 @@ impl Cause {
             status: finding.status,
             rule_id: match finding.source {
                 Source::Rule(id) => id,
-                Source::Score(_) | Source::Problem(_) => 0,
+                Source::Score(_) | Source::Drift | Source::Problem(_) => 0,
             },
             finding_id: FindingId::of(finding),
+            drift: finding.is_drift(),
             sessions_running: SessionsRunning::Unknown,
         }
     }
@@ -65,6 +70,31 @@ impl Cause {
         self.sessions_running = sessions;
         self
     }
+}
+
+/// The hash a Quarantine left at the Item itself, for the one primitive that
+/// leaves it where it is.
+///
+/// MoveOut takes the Item away and RemoveEntry takes the entry out of its
+/// file, so neither leaves a hash behind. NeutraliseInPlace comments the key
+/// or the line out and the Item stays, at content AgentSweep wrote: the next
+/// Scan must read that as a known action rather than as a question.
+#[cfg(feature = "daemon")]
+fn left_in_place(
+    host: &crate::host::Host,
+    item: &Item,
+    receipt: &crate::quarantine::Receipt,
+) -> Option<String> {
+    let neutralised = receipt.steps.iter().any(|step| {
+        step.primitive == crate::eventlog::Primitive::NeutraliseInPlace
+            && step.outcome == crate::eventlog::Outcome::Ok
+    });
+    if !neutralised {
+        return None;
+    }
+    host.read(&item.path)
+        .ok()
+        .map(|bytes| crate::item::sha256_hex(&bytes))
 }
 
 /// Whether this Finding on this Item may be quarantined by the actor that
@@ -77,6 +107,11 @@ pub fn may_quarantine(item: &Item, cause: &Cause) -> Result<(), EnforcementError
     };
     if cause.category != Category::Threat {
         return refuse("an Exposure is never quarantined, only fixed");
+    }
+    if cause.drift {
+        return refuse(
+            "a change with nothing known behind it is a question, not a verdict: Drift alone              never quarantines",
+        );
     }
     if item.scope == crate::item::Scope::Managed {
         return refuse("a Managed Item is read-only for AgentSweep, so it is only ever flagged");
@@ -127,7 +162,7 @@ pub use writer::Enforcement;
 
 #[cfg(feature = "daemon")]
 mod writer {
-    use super::{Cause, may_quarantine, primitives_for};
+    use super::{Cause, left_in_place, may_quarantine, primitives_for};
 
     use crate::adapter::SurfaceAdapter;
     use crate::chain::ChainState;
@@ -211,6 +246,12 @@ mod writer {
             let mut event = Event::new(Action::Quarantine, cause.actor)
                 .about(&item.id, item.kind, &item.content_hash)
                 .because_of(cause.finding_id.as_str(), cause.tier, cause.rule_id);
+            // What AgentSweep's own write left on the Surface is a known
+            // action, so the next Scan does not ask the user about it (ADR
+            // 0007). A neutralised Item is still there, at a new hash.
+            if let Some(hash) = left_in_place(host, item, &receipt) {
+                event = event.leaving(&hash);
+            }
             event.receipt_id = receipt.id.to_string();
             event.steps = receipt.steps.clone();
             event.result = receipt.result();
@@ -394,6 +435,7 @@ mod tests {
         default_config_dir: ".demo",
         surfaces: SURFACES,
         capabilities: CAPABILITIES,
+        agent_written_keys: &[],
     };
 
     /// The smallest adapter that can enforce: it knows that a file or a tree
@@ -568,6 +610,7 @@ mod tests {
             status: RuleStatus::Stable,
             rule_id: 12,
             finding_id: FindingId::from_recorded("demo/user/instruction-file/x|rule/0012|abc"),
+            drift: false,
             sessions_running: SessionsRunning::No,
         }
     }

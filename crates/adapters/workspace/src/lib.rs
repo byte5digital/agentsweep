@@ -145,6 +145,9 @@ static DESCRIPTOR: Descriptor = Descriptor {
     default_config_dir: "",
     surfaces: SURFACES,
     capabilities: CAPABILITIES,
+    // The workspace adapter yields no settings entry, so nothing it enumerates
+    // is a key an Agent writes for itself.
+    agent_written_keys: &[],
 };
 
 /// The built-in workspace Surface Adapter.

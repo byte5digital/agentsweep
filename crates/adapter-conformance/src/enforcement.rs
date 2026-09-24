@@ -600,6 +600,7 @@ mod tests {
             default_config_dir: "",
             surfaces: &[],
             capabilities: CAPABILITIES,
+            agent_written_keys: &[],
         };
 
         impl SurfaceAdapter for Unproven {

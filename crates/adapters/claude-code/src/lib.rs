@@ -340,6 +340,7 @@ static DESCRIPTOR: Descriptor = Descriptor {
     default_config_dir: ".claude",
     surfaces: SURFACES,
     capabilities: CAPABILITIES,
+    agent_written_keys: settings::AGENT_WRITTEN_KEYS,
 };
 
 /// The Claude Code Surface Adapter.

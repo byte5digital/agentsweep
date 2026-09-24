@@ -340,7 +340,9 @@ pub struct StandsBehind {
 ///
 /// An action is remembered by the content hash it names, never by the path it
 /// touched: knowing that AgentSweep once wrote a file is not knowing that the
-/// bytes there now are the ones it wrote.
+/// bytes there now are the ones it wrote. A write that moved another Item as
+/// well, such as the settings entry a native disable flips, names that Item
+/// and the hash it left there, so the collateral is a known action too.
 #[derive(Clone, Debug, Default)]
 pub struct KnownActions {
     by_item: BTreeMap<ItemId, BTreeMap<String, StandsBehind>>,
@@ -366,16 +368,16 @@ impl KnownActions {
                 Action::Acknowledge => KnownAction::Acknowledge,
                 _ => continue,
             };
-            let Some(item_id) = recorded.event.item_id.clone() else {
-                continue;
-            };
             let event = recorded.sequence.to_string();
-            let mut hashes = vec![recorded.event.content_hash.clone()];
-            if let Some(left) = recorded.event.detail.get(crate::eventlog::LEFT_HASH) {
-                hashes.push(left.clone());
+            let mut stands: Vec<(ItemId, String)> = Vec::new();
+            if let Some(item_id) = recorded.event.item_id.clone() {
+                stands.push((item_id, recorded.event.content_hash.clone()));
             }
-            for hash in hashes.into_iter().filter(|hash| !hash.is_empty()) {
-                known.by_item.entry(item_id.clone()).or_default().insert(
+            // One write moves more than the Item it is about, and every hash
+            // it left is a change with a reason behind it.
+            stands.extend(recorded.event.left_behind());
+            for (item_id, hash) in stands.into_iter().filter(|(_, hash)| !hash.is_empty()) {
+                known.by_item.entry(item_id).or_default().insert(
                     hash,
                     StandsBehind {
                         action,

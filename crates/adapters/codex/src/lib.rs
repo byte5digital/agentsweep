@@ -273,6 +273,7 @@ static DESCRIPTOR: Descriptor = Descriptor {
     default_config_dir: ".codex",
     surfaces: SURFACES,
     capabilities: CAPABILITIES,
+    agent_written_keys: settings::AGENT_WRITTEN_KEYS,
 };
 
 /// The Codex Surface Adapter.

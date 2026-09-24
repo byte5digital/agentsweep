@@ -103,6 +103,17 @@ pub static EXECUTING_OR_REDIRECTING_KEYS: &[DeclaredKey] = &[
     managed("claudeMd", FanOut::Whole),
 ];
 
+/// The declared keys Claude Code writes for itself.
+///
+/// Spec section 4.6.5 keeps what an Agent writes itself out of Drift, and
+/// names `permissions.allow` growth as one of the three. The key is a Surface
+/// all the same: Rule 0006 reads it, and a repository that ships one is a
+/// Finding. What the exemption takes away is only the question "was that
+/// you?", which nobody can answer about a list the interface appends to on
+/// every "always allow". The exemption is by key rather than by Provenance,
+/// because the file the key sits in is the user's own.
+pub static AGENT_WRITTEN_KEYS: &[&str] = &["permissions.allow"];
+
 /// One settings key found in one document.
 #[derive(Clone, Debug)]
 pub struct Entry {

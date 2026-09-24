@@ -248,6 +248,7 @@ mod tests {
             default_config_dir: "~/.demo",
             surfaces: &[],
             capabilities: &[],
+            agent_written_keys: &[],
         };
         let mut plan = CoveragePlan::new();
         plan.enumerated(&descriptor, &Scope::User);

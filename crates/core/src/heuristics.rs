@@ -239,6 +239,9 @@ fn suspicious_finding(item: &Item, score: i64, fired: &[FiredHeuristic]) -> Find
         file: String::new(),
         matches: Vec::new(),
         heuristics: fired.to_vec(),
+        // Drift is the Scan pass's to fold in: it is a condition on the Item,
+        // not something a Rule or a Heuristic saw in the bytes.
+        drift: None,
     }
 }
 
@@ -258,6 +261,7 @@ fn finding_of(item: &Item, meta: &RuleMeta, hit: &RuleHit) -> Finding {
         file: hit.file.clone(),
         matches: hit.matches.clone(),
         heuristics: Vec::new(),
+        drift: None,
     }
 }
 
@@ -282,7 +286,8 @@ fn order(finding: &Finding) -> (u8, i64) {
     match finding.source {
         Source::Rule(id) => (0, id),
         Source::Score(score) => (1, score),
-        Source::Problem(_) => (2, 0),
+        Source::Drift => (2, 0),
+        Source::Problem(_) => (3, 0),
     }
 }
 

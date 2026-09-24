@@ -357,6 +357,16 @@ impl ReceiptStep {
 /// own write left at the Item.
 pub const LEFT_HASH: &str = "left_hash";
 
+/// The prefix of the detail keys under which an event carries the content hash
+/// AgentSweep's own write left at *another* Item.
+///
+/// One write moves more than the Item it is about: switching a plugin off
+/// rewrites an `enabledPlugins` entry, and commenting a key out in place
+/// leaves the file it sits in at a new hash. Those Items would otherwise read
+/// `changed` on the next Scan with nothing to account for it, and the user
+/// would be asked about a change AgentSweep made itself (ADR 0007).
+pub const LEFT_HASH_AT: &str = "left_hash:";
+
 /// One record of the Event Log, with the fields of spec section 5.5. The
 /// timestamp is the envelope's; everything else is here.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -436,8 +446,8 @@ impl Event {
     }
 
     /// Records a fact that carries no content and nothing sensitive.
-    pub fn noting(mut self, name: &str, fact: impl Into<String>) -> Event {
-        self.detail.insert(name.to_string(), fact.into());
+    pub fn noting(mut self, name: impl Into<String>, fact: impl Into<String>) -> Event {
+        self.detail.insert(name.into(), fact.into());
         self
     }
 
@@ -451,6 +461,28 @@ impl Event {
     /// bytes it left, not by the path it touched.
     pub fn leaving(self, content_hash: &str) -> Event {
         self.noting(LEFT_HASH, content_hash)
+    }
+
+    /// Records the content hash the same write left at another Item: the
+    /// settings entry a native disable flipped, the file an in-place
+    /// neutralisation rewrote.
+    pub fn also_leaving(self, item_id: &ItemId, content_hash: &str) -> Event {
+        self.noting(format!("{LEFT_HASH_AT}{item_id}"), content_hash)
+    }
+
+    /// Every Item this write left at a known hash, the Item the event is about
+    /// included. What the known actions are rebuilt from.
+    pub fn left_behind(&self) -> Vec<(ItemId, String)> {
+        let mut left = Vec::new();
+        if let (Some(item_id), Some(hash)) = (&self.item_id, self.detail.get(LEFT_HASH)) {
+            left.push((item_id.clone(), hash.clone()));
+        }
+        for (name, hash) in &self.detail {
+            if let Some(item_id) = name.strip_prefix(LEFT_HASH_AT) {
+                left.push((ItemId::from_recorded(item_id), hash.clone()));
+            }
+        }
+        left
     }
 
     /// The payload a record carries.

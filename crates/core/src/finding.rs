@@ -181,6 +181,11 @@ pub enum Source {
     /// in the Suspicious Band. The Finding is about the Item, not about one
     /// Rule, and the number is Developer Posture detail.
     Score(i64),
+    /// The Item's own executable configuration moved without a known action
+    /// behind it, and the user is asked whether the change was theirs (spec
+    /// section 4.6.5). One such Finding per Item, and none at all while
+    /// another Threat Finding is open on it.
+    Drift,
     /// A path no adapter could turn into an Item (spec section 3.3). No Rule
     /// ever ran over it, which is the whole point: what was not read cannot be
     /// called clear.
@@ -192,6 +197,7 @@ impl fmt::Display for Source {
         match self {
             Source::Rule(id) => write!(f, "rule {id:04}"),
             Source::Score(score) => write!(f, "score {score}"),
+            Source::Drift => f.write_str("drift"),
             Source::Problem(reason) => write!(f, "problem {}", reason.as_str()),
         }
     }
@@ -263,6 +269,11 @@ pub struct Finding {
     /// Suspicious Finding, and the supporting detail under a Probation Rule
     /// Finding. Empty on everything else.
     pub heuristics: Vec<FiredHeuristic>,
+    /// How the Item stands against its Baseline, when it moved. Drift is a
+    /// condition on every Item and context on any Finding about it, so this is
+    /// filled on a Finding of any source; on a Finding with source
+    /// [`Source::Drift`] it is the Finding itself (spec section 4.6.5).
+    pub drift: Option<crate::drift::Drift>,
 }
 
 impl Finding {
@@ -297,6 +308,7 @@ impl Finding {
             file: String::new(),
             matches: Vec::new(),
             heuristics: Vec::new(),
+            drift: None,
         }
     }
 
@@ -308,12 +320,19 @@ impl Finding {
 
     /// The Heuristics that fired on the same Item and are shown under this
     /// Finding as "Also noticed" rather than as a second Finding. Empty unless
-    /// a Rule produced the Finding.
+    /// a Rule or the Drift question produced the Finding: a Suspicious Finding
+    /// carries its Heuristics as evidence rather than as an aside.
     pub fn also_noticed(&self) -> &[FiredHeuristic] {
-        match self.tier {
-            Tier::Rules => &self.heuristics,
+        match (self.tier, self.source) {
+            (Tier::Rules, _) | (_, Source::Drift) => &self.heuristics,
             _ => &[],
         }
+    }
+
+    /// True when the Finding is the standing question of whether a change was
+    /// the user's own. Drift alone never quarantines.
+    pub fn is_drift(&self) -> bool {
+        self.source == Source::Drift
     }
 }
 
@@ -332,6 +351,7 @@ impl FindingId {
         let source = match source {
             Source::Rule(id) => format!("rule/{id:04}"),
             Source::Score(_) => "score".to_string(),
+            Source::Drift => "drift".to_string(),
             Source::Problem(reason) => format!("problem/{}", reason.as_str()),
         };
         FindingId(format!("{item_id}|{source}|{content_hash}"))
@@ -584,6 +604,7 @@ mod tests {
             file: String::new(),
             matches: Vec::new(),
             heuristics: Vec::new(),
+            drift: None,
         }
     }
 

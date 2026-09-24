@@ -90,6 +90,15 @@ impl ChainState {
     }
 }
 
+/// The cause a chain restart record carries when the key went missing and a
+/// new key and a new chain started.
+pub const KEY_MISSING: &str = "key-missing";
+
+/// The cause a chain restart record carries when the chain was compacted: the
+/// records that were kept, written afresh and anchored to the chain they
+/// replace (spec section 4.6.6).
+pub const COMPACTION: &str = "compaction";
+
 /// One record as verification read it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Record {
@@ -148,6 +157,8 @@ pub enum ChainError {
     Io(io::Error),
     /// The key could not be read or stored.
     Key(KeyError),
+    /// The write would have been unsafe, and was not made.
+    Refused(String),
 }
 
 impl fmt::Display for ChainError {
@@ -155,6 +166,7 @@ impl fmt::Display for ChainError {
         match self {
             ChainError::Io(error) => write!(f, "the chain file could not be used: {error}"),
             ChainError::Key(error) => write!(f, "{error}"),
+            ChainError::Refused(reason) => f.write_str(reason),
         }
     }
 }
@@ -326,7 +338,7 @@ fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
 }
 
 #[cfg(feature = "daemon")]
-pub use writer::ChainWriter;
+pub use writer::{ChainWriter, Compacted};
 
 #[cfg(feature = "daemon")]
 mod writer {
@@ -423,20 +435,13 @@ mod writer {
 
         fn restart(&mut self, verification: &Verification) -> Result<Envelope, ChainError> {
             self.epoch = verification.epoch + 1;
-            let mut payload = Map::new();
-            payload.insert(
-                "old_head".to_string(),
-                Value::from(verification.head.as_str()),
+            let payload = anchor(
+                super::KEY_MISSING,
+                &verification.head,
+                verification.next_sequence,
+                "the key was missing, so a new key and a new chain start here",
             );
-            payload.insert(
-                "old_records".to_string(),
-                Value::from(verification.next_sequence),
-            );
-            payload.insert(
-                "reason".to_string(),
-                Value::from("the key was missing, so a new key and a new chain start here"),
-            );
-            self.write(RecordKind::ChainRestart, Value::Object(payload))
+            self.write(RecordKind::ChainRestart, payload)
         }
 
         fn write(&mut self, kind: RecordKind, payload: Value) -> Result<Envelope, ChainError> {
@@ -457,6 +462,104 @@ mod writer {
             self.head = record.hash();
             self.next_sequence += 1;
             Ok(record)
+        }
+    }
+
+    /// What one compaction replaced, so the Event Log can anchor the old chain
+    /// and the new one to each other (spec section 4.6.6).
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct Compacted {
+        /// The hash of the last record of the chain that was replaced.
+        pub old_head: String,
+        /// How many records it held.
+        pub old_records: u64,
+        /// The hash of the last record of the chain that took its place.
+        pub new_head: String,
+        /// How many records that one holds.
+        pub new_records: u64,
+    }
+
+    /// The payload of a record that anchors one chain to the one it follows.
+    fn anchor(cause: &str, old_head: &str, old_records: u64, reason: &str) -> Value {
+        let mut payload = Map::new();
+        payload.insert("cause".to_string(), Value::from(cause));
+        payload.insert("old_head".to_string(), Value::from(old_head));
+        payload.insert("old_records".to_string(), Value::from(old_records));
+        payload.insert("reason".to_string(), Value::from(reason));
+        Value::Object(payload)
+    }
+
+    impl ChainWriter {
+        /// Writes a fresh chain holding only what is handed over, anchored to
+        /// the chain it replaces.
+        ///
+        /// The new file opens with a chain restart naming the old head and how
+        /// many records it held, so the chain that was dropped is witnessed by
+        /// the one that took its place. It refuses on anything but an intact
+        /// chain: rewriting records no key in hand can verify would launder
+        /// them into a chain that verifies, which is the one thing compaction
+        /// may not do (ADR 0007).
+        pub fn compact(
+            chain: Chain,
+            keys: &dyn KeySource,
+            payloads: &[Value],
+        ) -> Result<(ChainWriter, Compacted), ChainError> {
+            let verification = chain.verify(keys)?;
+            if verification.state != ChainState::Intact {
+                return Err(ChainError::Refused(
+                    "a chain that does not verify is never rewritten".to_string(),
+                ));
+            }
+            let key = match keys.load()? {
+                Some(key) => key,
+                None => {
+                    return Err(ChainError::Refused(
+                        "the key is missing, and a Baseline is never rebuilt without one"
+                            .to_string(),
+                    ));
+                }
+            };
+            let path = chain.path().to_path_buf();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let beside = path.with_extension("compacting");
+            let file = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&beside)?;
+            let mut writer = ChainWriter {
+                chain,
+                file,
+                key,
+                epoch: 0,
+                next_sequence: 0,
+                head: crate::envelope::GENESIS.to_string(),
+            };
+            writer.write(
+                RecordKind::ChainRestart,
+                anchor(
+                    super::COMPACTION,
+                    &verification.head,
+                    verification.next_sequence,
+                    "the Baseline was compacted, and this chain holds what it kept",
+                ),
+            )?;
+            for payload in payloads {
+                writer.append(payload.clone())?;
+            }
+            writer.file.sync_all()?;
+            std::fs::rename(&beside, &path)?;
+            // The handle above points at the file that was renamed into place,
+            // which is the one to go on appending to.
+            let compacted = Compacted {
+                old_head: verification.head,
+                old_records: verification.next_sequence,
+                new_head: writer.head.clone(),
+                new_records: writer.next_sequence,
+            };
+            Ok((writer, compacted))
         }
     }
 

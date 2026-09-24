@@ -17,13 +17,13 @@
 //! of the accepted entry with its sensitive fields left out. Nothing else about
 //! an Item's bytes is written down.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
 use crate::chain::{Chain, ChainError, ChainState};
-use crate::coverage::{Coverage, CoverageRecord};
+use crate::coverage::{Coverage, CoverageKey, CoverageRecord};
 use crate::envelope::{ChainId, RecordKind, Timestamp};
 use crate::item::{Item, ItemId, Kind, Shape, sha256_hex};
 use crate::keychain::KeySource;
@@ -314,6 +314,19 @@ pub struct BaselineRecord {
     /// The canonical form of the accepted entry with its sensitive fields left
     /// out, which is the "before" a Drift Finding shows.
     pub previous_form: String,
+    /// The facts the accepted form carried beside its hash, as the Surface
+    /// Adapter declared them: the version an install registry pointed a plugin
+    /// at, the directory that version lived in, the commit it recorded, the
+    /// source a marketplace pointed at. What tells a consistent plugin update
+    /// from a tree that moved under an unchanged record (spec section 4.6.5).
+    pub accepted_facts: BTreeMap<String, String>,
+    /// The same for the last-seen form, kept only while the two differ.
+    pub last_seen_facts: BTreeMap<String, String>,
+    /// Where the Item was read from, as the last Scan saw it. Not part of the
+    /// Item's identity: it is what a Problem is matched against, so that a
+    /// path the Baseline had readable and cannot be read now is the last row
+    /// of the Drift table.
+    pub path: String,
 }
 
 impl BaselineRecord {
@@ -338,6 +351,9 @@ impl BaselineRecord {
             accepted_fields: fields,
             last_seen_fields: BTreeMap::new(),
             previous_form: redacted_form(item),
+            accepted_facts: item.baseline_facts.clone(),
+            last_seen_facts: BTreeMap::new(),
+            path: item.path.display().to_string(),
         }
     }
 
@@ -353,14 +369,17 @@ impl BaselineRecord {
             moved.last_seen_hash = item.content_hash.clone();
             moved.last_seen_at = at;
         }
+        moved.path = item.path.display().to_string();
         if item.content_hash == moved.accepted_hash {
             moved.first_differed_at = None;
             moved.last_seen_manifest = Vec::new();
             moved.last_seen_fields = BTreeMap::new();
+            moved.last_seen_facts = BTreeMap::new();
         } else {
             moved.first_differed_at = moved.first_differed_at.or(Some(at));
             moved.last_seen_manifest = ManifestFile::of(item);
             moved.last_seen_fields = field_hashes(item);
+            moved.last_seen_facts = item.baseline_facts.clone();
         }
         moved
     }
@@ -389,6 +408,38 @@ impl BaselineRecord {
         } else {
             moved.accepted_event = event.to_string();
         }
+        moved
+    }
+
+    /// The record after the user said the change was their own doing.
+    ///
+    /// Acknowledge moves the accepted hash to the last-seen form and nothing
+    /// else (ADR 0007): the form that was on screen becomes the accepted one,
+    /// the Item stops differing, and every Tier goes on scanning the content.
+    /// The canonical form of the newly accepted entry is not in hand here, so
+    /// it is cleared rather than left describing a form nobody accepted; the
+    /// next Scan that reads the Item writes it back.
+    pub fn acknowledged(&self, at: Timestamp, event: &str) -> BaselineRecord {
+        let mut moved = self.clone();
+        moved.accepted_hash = self.last_seen_hash.clone();
+        moved.accepted_at = at;
+        moved.accepted_by = AcceptedBy::Acknowledge;
+        moved.accepted_event = event.to_string();
+        moved.first_differed_at = None;
+        moved.origin = Origin::Verified;
+        if !self.last_seen_manifest.is_empty() {
+            moved.accepted_manifest = self.last_seen_manifest.clone();
+        }
+        if !self.last_seen_fields.is_empty() {
+            moved.accepted_fields = self.last_seen_fields.clone();
+        }
+        if !self.last_seen_facts.is_empty() {
+            moved.accepted_facts = self.last_seen_facts.clone();
+        }
+        moved.last_seen_manifest = Vec::new();
+        moved.last_seen_fields = BTreeMap::new();
+        moved.last_seen_facts = BTreeMap::new();
+        moved.previous_form = String::new();
         moved
     }
 
@@ -442,6 +493,7 @@ impl BaselineRecord {
             "accepted_event".to_string(),
             Value::from(self.accepted_event.as_str()),
         );
+        map.insert("accepted_facts".to_string(), strings(&self.accepted_facts));
         map.insert(
             "accepted_fields".to_string(),
             strings(&self.accepted_fields),
@@ -469,6 +521,10 @@ impl BaselineRecord {
             Value::from(self.last_seen_at.to_string()),
         );
         map.insert(
+            "last_seen_facts".to_string(),
+            strings(&self.last_seen_facts),
+        );
+        map.insert(
             "last_seen_fields".to_string(),
             strings(&self.last_seen_fields),
         );
@@ -481,6 +537,7 @@ impl BaselineRecord {
             files(&self.last_seen_manifest),
         );
         map.insert("origin".to_string(), Value::from(self.origin.as_str()));
+        map.insert("path".to_string(), Value::from(self.path.as_str()));
         map.insert(
             "previous_form".to_string(),
             Value::from(self.previous_form.as_str()),
@@ -541,6 +598,9 @@ impl BaselineRecord {
             accepted_fields: strings("accepted_fields")?,
             last_seen_fields: strings("last_seen_fields")?,
             previous_form: text("previous_form")?.to_string(),
+            accepted_facts: strings("accepted_facts")?,
+            last_seen_facts: strings("last_seen_facts")?,
+            path: text("path")?.to_string(),
         })
     }
 }
@@ -611,6 +671,7 @@ impl Baseline {
             head: verification.head.clone(),
             unverified: verification.records.iter().filter(|r| !r.verified).count(),
             restarts: 0,
+            compactions: 0,
             unreadable: 0,
             records: BTreeMap::new(),
             coverage: Coverage::none(),
@@ -618,7 +679,10 @@ impl Baseline {
         let key_missing = verification.state == ChainState::KeyMissing;
         for record in &verification.records {
             if record.envelope.record == RecordKind::ChainRestart {
-                view.restarts += 1;
+                match cause_of(&record.envelope.payload) {
+                    crate::chain::COMPACTION => view.compactions += 1,
+                    _ => view.restarts += 1,
+                }
                 continue;
             }
             match BaselineEntry::from_payload(&record.envelope.payload) {
@@ -636,6 +700,16 @@ impl Baseline {
     }
 }
 
+/// Why a chain restart record sits where it does. A record written before the
+/// cause was carried says nothing, and the key going missing is what a restart
+/// meant then.
+fn cause_of(payload: &Value) -> &str {
+    payload
+        .get("cause")
+        .and_then(Value::as_str)
+        .unwrap_or(crate::chain::KEY_MISSING)
+}
+
 /// The Baseline as one read of the chain left it: the last record per Item and
 /// everything that is covered.
 #[derive(Clone, Debug)]
@@ -648,6 +722,8 @@ pub struct BaselineView {
     pub unverified: usize,
     /// How many times the chain was restarted because the key went missing.
     pub restarts: usize,
+    /// How many times the chain was compacted, which restarts it as well.
+    pub compactions: usize,
     /// How many records carried a payload that is neither an Item nor
     /// coverage.
     pub unreadable: usize,
@@ -665,6 +741,7 @@ impl BaselineView {
             head: crate::envelope::GENESIS.to_string(),
             unverified: 0,
             restarts: 0,
+            compactions: 0,
             unreadable: 0,
             records: BTreeMap::new(),
             coverage: Coverage::none(),
@@ -703,17 +780,148 @@ impl BaselineView {
     }
 }
 
+/// How long a record of an Item that is gone is kept (spec section 4.6.6).
+///
+/// Disappearance is never a Finding: the record is marked absent and kept, so
+/// an Item that comes back within the ninety days is `unchanged` or `changed`
+/// against what was accepted. After compaction it is `added`.
+pub const ABSENT_FOR: i64 = 90 * 86_400_000;
+
+/// What compaction keeps.
+#[derive(Clone, Debug, Default)]
+pub struct Retention {
+    /// How long a record of an Item that is gone is kept, in milliseconds.
+    pub absent_for: i64,
+    /// The Scope segments of the roots that are still in a registry, as
+    /// [`crate::item::Scope::id_segment`] spells them. The records and the
+    /// coverage of a project root that left every registry are dropped; a root
+    /// that comes back bootstraps as `none`.
+    pub live_roots: BTreeSet<String>,
+    /// The Items an open Finding refers to. No compaction ever drops one of
+    /// them, whatever else it drops.
+    pub referenced: BTreeSet<ItemId>,
+}
+
+impl Retention {
+    /// What to keep, given the roots that are still registered.
+    pub fn of(live_roots: BTreeSet<String>) -> Retention {
+        Retention {
+            absent_for: ABSENT_FOR,
+            live_roots,
+            referenced: BTreeSet::new(),
+        }
+    }
+
+    /// The same, with the Items an open Finding stands on named.
+    pub fn referring_to(mut self, referenced: BTreeSet<ItemId>) -> Retention {
+        self.referenced = referenced;
+        self
+    }
+
+    /// True when this record survives a compaction run at this moment.
+    pub fn keeps(&self, record: &BaselineRecord, at: Timestamp) -> bool {
+        if self.referenced.contains(&record.item_id) {
+            return true;
+        }
+        if record.item_id.is_project()
+            && !self
+                .live_roots
+                .iter()
+                .any(|root| record.item_id.in_scope(root))
+        {
+            return false;
+        }
+        match record.state {
+            Presence::Present => true,
+            Presence::Absent { since } => at.as_unix_ms() - since.as_unix_ms() <= self.absent_for,
+        }
+    }
+
+    /// True when this stretch of coverage survives a compaction run.
+    pub fn covers(&self, key: &CoverageKey) -> bool {
+        !key.root.starts_with("project:") || self.live_roots.contains(&key.root)
+    }
+}
+
+/// What one compaction would write and what it would drop.
+#[derive(Clone, Debug, Default)]
+pub struct CompactionPlan {
+    /// The coverage the fresh chain opens with.
+    pub coverage: Vec<CoverageRecord>,
+    /// The records it holds, in Item id order.
+    pub keep: Vec<BaselineRecord>,
+    /// The Items whose records are dropped.
+    pub dropped: Vec<ItemId>,
+    /// The stretches of coverage that are dropped.
+    pub uncovered: Vec<CoverageKey>,
+}
+
+impl CompactionPlan {
+    /// What compaction would make of the Baseline as it stands.
+    ///
+    /// A pure function of the view and the retention: nothing is written here,
+    /// so the daemon can say what a compaction would drop before it runs one.
+    pub fn of(view: &BaselineView, retention: &Retention, at: Timestamp) -> CompactionPlan {
+        let mut plan = CompactionPlan::default();
+        for key in view.coverage().keys() {
+            match retention.covers(key) {
+                true => plan.coverage.push(CoverageRecord::new(key.clone(), at)),
+                false => plan.uncovered.push(key.clone()),
+            }
+        }
+        for record in view.records() {
+            match retention.keeps(record, at) {
+                true => plan.keep.push(record.clone()),
+                false => plan.dropped.push(record.item_id.clone()),
+            }
+        }
+        plan
+    }
+
+    /// Everything the fresh chain holds, in the order it is written: coverage
+    /// first, then one record per Item.
+    pub fn entries(&self) -> Vec<BaselineEntry> {
+        let covered = self.coverage.iter().cloned().map(BaselineEntry::Coverage);
+        let kept = self
+            .keep
+            .iter()
+            .cloned()
+            .map(|record| BaselineEntry::Item(Box::new(record)));
+        covered.chain(kept).collect()
+    }
+
+    /// True when the chain would say exactly what it says now, which is a
+    /// compaction not worth running.
+    pub fn changes_nothing(&self) -> bool {
+        self.dropped.is_empty() && self.uncovered.is_empty()
+    }
+}
+
+/// How long a completed Full Scan waits before compaction may run again (spec
+/// section 4.6.6: at most once a day).
+pub const COMPACT_EVERY: i64 = 86_400_000;
+
+/// True when compaction may run now, given when it last ran.
+pub fn compaction_due(last: Option<Timestamp>, at: Timestamp) -> bool {
+    match last {
+        None => true,
+        Some(last) => at.as_unix_ms() - last.as_unix_ms() >= COMPACT_EVERY,
+    }
+}
+
 #[cfg(feature = "daemon")]
-pub use writer::BaselineWriter;
+pub use writer::{BaselineWriter, Compaction, compact};
 
 #[cfg(feature = "daemon")]
 mod writer {
-    use super::{Baseline, BaselineEntry, BaselineRecord};
+    use super::{Baseline, BaselineEntry, BaselineRecord, BaselineView, CompactionPlan, Retention};
 
-    use crate::chain::{ChainError, ChainState, ChainWriter};
+    use crate::chain::{ChainError, ChainState, ChainWriter, Compacted};
     use crate::coverage::CoverageRecord;
-    use crate::envelope::Envelope;
+    use crate::envelope::{Envelope, Timestamp};
+    use crate::eventlog::{Action, Actor, Event, EventLog, EventLogWriter};
     use crate::keychain::KeySource;
+    use crate::paths::DataDirectory;
 
     /// The write side of the Baseline.
     ///
@@ -757,6 +965,62 @@ mod writer {
         pub fn head(&self) -> &str {
             self.writer.head()
         }
+    }
+
+    /// What one compaction did.
+    #[derive(Clone, Debug)]
+    pub struct Compaction {
+        /// What was kept and what was dropped.
+        pub plan: CompactionPlan,
+        /// The old and the new head, which the Event Log record anchors to
+        /// each other.
+        pub chain: Compacted,
+    }
+
+    /// Writes a fresh Baseline chain of what is still worth keeping and
+    /// anchors it in the Event Log (spec section 4.6.6).
+    ///
+    /// It runs after a completed Full Scan and at most once a day. What it
+    /// drops is what a record is kept for no longer: an Item that has been
+    /// absent for more than ninety days, and the records and the coverage of a
+    /// project root that left every registry. A record any open Finding refers
+    /// to is never dropped, whatever else is.
+    ///
+    /// The Event Log is never compacted, and the one record appended to it
+    /// carries the old head and the new one, so the chain that was replaced
+    /// stays witnessed by the log that outlives it.
+    pub fn compact(
+        directory: &DataDirectory,
+        keys: &dyn KeySource,
+        retention: &Retention,
+        at: Timestamp,
+    ) -> Result<Compaction, ChainError> {
+        let baseline = Baseline::in_data_directory(directory);
+        let view: BaselineView = baseline.read(keys)?;
+        if view.state != ChainState::Intact {
+            return Err(ChainError::Refused(
+                "a Baseline that does not verify is read, never rewritten".to_string(),
+            ));
+        }
+        let plan = CompactionPlan::of(&view, retention, at);
+        let payloads: Vec<serde_json::Value> = plan
+            .entries()
+            .iter()
+            .map(BaselineEntry::to_payload)
+            .collect();
+        let (_, chain) = ChainWriter::compact(baseline.chain().clone(), keys, &payloads)?;
+
+        let log = EventLog::in_data_directory(directory);
+        let (mut events, _) = EventLogWriter::open(&log, keys)?;
+        let event = Event::new(Action::BaselineCompacted, Actor::Auto)
+            .noting("old_head", chain.old_head.as_str())
+            .noting("new_head", chain.new_head.as_str())
+            .noting("old_records", chain.old_records.to_string())
+            .noting("new_records", chain.new_records.to_string())
+            .noting("dropped", plan.dropped.len().to_string())
+            .noting("uncovered", plan.uncovered.len().to_string());
+        events.append(&event)?;
+        Ok(Compaction { plan, chain })
     }
 }
 

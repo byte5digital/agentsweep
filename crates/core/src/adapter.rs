@@ -92,6 +92,12 @@ pub struct Descriptor {
     pub surfaces: &'static [Surface],
     /// The enforcement primitives the adapter declares per kind.
     pub capabilities: &'static [(Kind, &'static [Primitive])],
+    /// The settings keys this Agent writes for itself, as dotted paths. A
+    /// change to one of them is never a question for the user, because the
+    /// Agent's own "always allow" flow is what writes it (spec section 4.6.5).
+    /// A declared key covers its members: `permissions.allow` covers
+    /// `permissions.allow.0`.
+    pub agent_written_keys: &'static [&'static str],
 }
 
 impl Descriptor {

@@ -635,6 +635,7 @@ mod tests {
             default_config_dir: "",
             surfaces: &[],
             capabilities: WRONG_CAPABILITIES,
+            agent_written_keys: &[],
         };
 
     impl SurfaceAdapter for Wrong {

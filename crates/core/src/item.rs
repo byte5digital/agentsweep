@@ -10,6 +10,7 @@
 //! files a Rule is run over. That is why [`Item::scan_units`] returns a list
 //! rather than one unit.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
@@ -389,7 +390,39 @@ impl ItemId {
     pub fn from_recorded(text: &str) -> ItemId {
         ItemId(text.to_string())
     }
+
+    /// True when the Item sits in the Scope this segment names, as
+    /// [`Scope::id_segment`] spells it.
+    ///
+    /// A Scope segment holds a project root, so it holds slashes of its own
+    /// and cannot be read off by counting separators. The test is the prefix
+    /// the agent and the segment make together, which is exact.
+    pub fn in_scope(&self, segment: &str) -> bool {
+        let Some((_, rest)) = self.0.split_once('/') else {
+            return false;
+        };
+        rest.strip_prefix(segment)
+            .is_some_and(|tail| tail.starts_with('/'))
+    }
+
+    /// True when the Item belongs to a project root rather than to the user's
+    /// own configuration or to a Managed layer. What compaction asks before it
+    /// drops the records of a root that left every registry.
+    pub fn is_project(&self) -> bool {
+        self.0
+            .split_once('/')
+            .is_some_and(|(_, rest)| rest.starts_with(PROJECT_SEGMENT))
+    }
+
+    /// True when the Item sits in the user's own profile layers, which is the
+    /// only Scope a Drift Finding is ever raised for (spec section 4.6.5).
+    pub fn is_user(&self) -> bool {
+        self.in_scope("user")
+    }
 }
+
+/// What the Scope segment of a project Item starts with.
+const PROJECT_SEGMENT: &str = "project:";
 
 impl fmt::Display for ItemId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -437,6 +470,14 @@ pub struct Item {
     pub link_target: String,
     /// How the content compares with the accepted hash.
     pub baseline: BaselineState,
+    /// The facts the Baseline remembers beside the content hash, so that a
+    /// Drift decision can tell one form of the Item from another where the
+    /// hash cannot: the version an install registry points a plugin at, the
+    /// directory that version lives in, the commit it records, the source a
+    /// marketplace points at. Never a sensitive value and never rule-visible;
+    /// what goes in here is the Surface Adapter's to declare (spec section
+    /// 4.6.5).
+    pub baseline_facts: BTreeMap<String, String>,
     /// The derived facts about the content.
     pub facts: FileFacts,
     /// The normalised view of the Item's kind, as the Surface Adapter parsed
@@ -482,6 +523,7 @@ impl Item {
             is_symlink: false,
             link_target: String::new(),
             baseline: BaselineState::None,
+            baseline_facts: BTreeMap::new(),
             facts: FileFacts::of(&content),
             view: crate::views::ParsedView::None,
             content_hash: sha256_hex(&content),
@@ -548,6 +590,20 @@ impl Item {
     /// Attaches the normalised view the Surface Adapter parsed for this Item.
     pub fn with_view(mut self, view: crate::views::ParsedView) -> Item {
         self.view = view;
+        self
+    }
+
+    /// Records one fact the Baseline remembers beside the content hash.
+    ///
+    /// A Surface Adapter names the facts a Drift decision needs and nothing
+    /// else: a plugin's version, install path and recorded commit, a
+    /// marketplace's source. A fact is written down as it stands, so nothing
+    /// sensitive is ever passed here.
+    pub fn noting(mut self, name: &str, fact: impl Into<String>) -> Item {
+        let fact = fact.into();
+        if !fact.is_empty() {
+            self.baseline_facts.insert(name.to_string(), fact);
+        }
         self
     }
 

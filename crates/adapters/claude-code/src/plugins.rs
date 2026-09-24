@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use agentsweep_core::adapter::Enumeration;
+use agentsweep_core::drift;
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{Activation, InactiveReason, Kind, Provenance, Scope};
 use serde_json::Value;
@@ -224,7 +225,14 @@ fn clones(
             &path,
         );
         let view = skills::marketplace_view(&item, &name);
-        tree::yielded(host, enumeration, item.with_view(view));
+        // Where the marketplace points is what a Drift decision compares: a
+        // fetch rewrites the clone every time and says nothing, while a
+        // marketplace that starts pointing somewhere else is the question
+        // (spec section 4.6.5).
+        let item = item
+            .with_view(view)
+            .noting(drift::SOURCE, source_hash(known.get(&name)));
+        tree::yielded(host, enumeration, item);
     }
 }
 
@@ -310,7 +318,18 @@ fn version_item(
         &record.install_path,
     );
     let view = skills::plugin_view(&item, record.name());
-    tree::yielded(host, enumeration, item.with_view(view));
+    // The three facts of spec section 4.6.1. A registry record that moved as a
+    // whole is an update and raises no question; a tree that moved under a
+    // record that did not is the question.
+    let item = item
+        .with_view(view)
+        .noting(drift::VERSION, record.version.clone())
+        .noting(
+            drift::INSTALL_PATH,
+            record.install_path.display().to_string(),
+        )
+        .noting(drift::COMMIT, record.commit.clone());
+    tree::yielded(host, enumeration, item);
     bundled_servers(adapter, host, placement, record, enumeration);
 }
 
@@ -414,6 +433,15 @@ fn is_official(name: &str, known: &BTreeMap<String, Value>) -> bool {
     let url = string(source, "url");
     agentsweep_core::views::url_host(&url) == OFFICIAL_SOURCE_HOST
         && url.contains(&format!("/{OFFICIAL_SOURCE_OWNER}"))
+}
+
+/// The hash of where one marketplace points, which is the fact a Drift
+/// decision compares. A marketplace no registry lists has none.
+fn source_hash(entry: Option<&Value>) -> String {
+    let Some(source) = entry.and_then(|entry| entry.get("source")) else {
+        return String::new();
+    };
+    agentsweep_core::item::sha256_hex(&agentsweep_core::item::canonical_entry(source))
 }
 
 fn string(value: &Value, field: &str) -> String {

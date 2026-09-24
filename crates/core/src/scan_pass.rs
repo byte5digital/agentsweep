@@ -25,8 +25,9 @@ use crate::allowlist::{self, Allowlist};
 use crate::baseline::{AcceptedBy, BaselineEntry, BaselineRecord, BaselineView};
 use crate::coverage::{CoveragePlan, CoverageRecord};
 use crate::derived::{KnownActions, TrustTable};
+use crate::drift::{self, Declarations, Drift, Note, Watched};
 use crate::envelope::Timestamp;
-use crate::finding::Finding;
+use crate::finding::{Category, Finding};
 use crate::heuristics::Assessment;
 use crate::item::{BaselineState, Item, ItemId, Kind};
 use crate::pack::{Bands, Manifest};
@@ -91,6 +92,12 @@ pub struct ScannedItem {
     pub accepted: Option<AcceptedBy>,
     /// How many Findings the Tiers raised on it.
     pub findings: usize,
+    /// How it stands against its Baseline, where it moved: the context line
+    /// every Finding about it carries, and the question when one was raised.
+    pub drift: Option<Drift>,
+    /// True when a Drift Finding of its own stands on the Item, rather than
+    /// the question folding into another Threat Finding.
+    pub asked: bool,
 }
 
 impl ScannedItem {
@@ -112,6 +119,9 @@ pub struct ScanOutcome {
     pub advances: Vec<BaselineRecord>,
     /// The coverage to write, which comes before everything else.
     pub coverage: Vec<CoverageRecord>,
+    /// The lines the Activity keeps that are not Findings: a consistent plugin
+    /// update, content that changed back to what was accepted.
+    pub notes: Vec<Note>,
 }
 
 impl ScanOutcome {
@@ -151,6 +161,9 @@ pub struct ScanPass<'a> {
     pub trusted: &'a TrustTable,
     /// The changes AgentSweep already has a reason for.
     pub known: &'a KnownActions,
+    /// What the Surface Adapters declare about their own keys, which a Drift
+    /// decision reads.
+    pub declarations: &'a Declarations,
     /// The moment the Scan stands at.
     pub at: Timestamp,
 }
@@ -164,6 +177,7 @@ impl<'a> ScanPass<'a> {
         coverage: &'a CoveragePlan,
         trusted: &'a TrustTable,
         known: &'a KnownActions,
+        declarations: &'a Declarations,
     ) -> ScanPass<'a> {
         ScanPass {
             kind: ScanKind::Full,
@@ -173,6 +187,7 @@ impl<'a> ScanPass<'a> {
             coverage,
             trusted,
             known,
+            declarations,
             at: Timestamp::now(),
         }
     }
@@ -185,10 +200,11 @@ impl<'a> ScanPass<'a> {
         coverage: &'a CoveragePlan,
         trusted: &'a TrustTable,
         known: &'a KnownActions,
+        declarations: &'a Declarations,
     ) -> ScanPass<'a> {
         ScanPass {
             kind: ScanKind::Change,
-            ..ScanPass::full(pack, baseline, coverage, trusted, known)
+            ..ScanPass::full(pack, baseline, coverage, trusted, known, declarations)
         }
     }
 
@@ -222,6 +238,11 @@ impl<'a> ScanPass<'a> {
             ..ScanOutcome::default()
         };
         let mut seen: BTreeSet<ItemId> = BTreeSet::new();
+        // A marketplace whose own question is open settles nothing under it,
+        // so no plugin update from it counts as consistent while it stands
+        // (spec section 4.6.5). It is read before the pass because a plugin
+        // may be enumerated before the marketplace it came from.
+        let unsettled = self.unsettled_marketplaces(enumeration);
 
         for item in &mut enumeration.items {
             // The known actions are applied to the Baseline before the Rules
@@ -231,11 +252,43 @@ impl<'a> ScanPass<'a> {
             item.baseline = decision.state;
             seen.insert(item.id.clone());
 
-            let assessment = allowlist::assess(&allowlist, &mut scanners, item)?;
+            let mut assessment = allowlist::assess(&allowlist, &mut scanners, item)?;
 
             // A Drift Finding, when there is one, joins the Findings here: it
             // is what holds the accepted hash where it is until the user
             // answers the question.
+            let held = self.baseline.record(&item.id);
+            let drift = Drift::of(item, held);
+            let mut asked = false;
+            match &drift {
+                Some(drift) => {
+                    // Drift is context on any Finding about the Item, whatever
+                    // raised it and whether or not a question is worth asking.
+                    for finding in &mut assessment.findings {
+                        finding.drift = Some(drift.clone());
+                    }
+                    let watched = Watched {
+                        declarations: self.declarations,
+                        unsettled_marketplaces: &unsettled,
+                    };
+                    match drift::decide(item, decision.state, held, watched) {
+                        drift::Decision::Ask => {
+                            asked = self.ask(item, drift, &mut assessment);
+                        }
+                        drift::Decision::Updated { from, to } => {
+                            outcome.notes.push(Note::updated(item, &from, &to));
+                        }
+                        drift::Decision::Silent => {}
+                    }
+                }
+                // Content that came back to the hash that was accepted closes
+                // its Drift Finding by itself, and the Activity says so.
+                None if held.is_some_and(|held| held.first_differed_at.is_some()) => {
+                    outcome.notes.push(Note::changed_back(item));
+                }
+                None => {}
+            }
+
             let accepted = self.acceptance(&decision, &assessment);
             if let Some(record) = self.advance(item, &decision, accepted) {
                 outcome.advances.push(record);
@@ -248,6 +301,8 @@ impl<'a> ScanPass<'a> {
                 baseline: decision.state,
                 accepted,
                 findings: assessment.findings.len(),
+                drift,
+                asked,
             });
             outcome
                 .report
@@ -262,6 +317,7 @@ impl<'a> ScanPass<'a> {
             .report
             .findings
             .extend(enumeration.problems.iter().map(Finding::of_problem));
+        outcome.report.findings.extend(self.unreadable(enumeration));
 
         if !self.kind.records() {
             outcome.advances.clear();
@@ -280,6 +336,69 @@ impl<'a> ScanPass<'a> {
         }
         outcome.coverage = self.baseline.coverage().additions(self.coverage, self.at);
         Ok(outcome)
+    }
+
+    /// Puts the question to the user, or folds it into the Threat Finding
+    /// that is already open on the Item.
+    ///
+    /// One `drift` Finding per Item, and none at all beside another open
+    /// Threat Finding: the question is that Finding's context line, resolving
+    /// it settles the Drift, and a Finding carrying Drift as context offers no
+    /// Acknowledge (spec section 4.6.5). Answers with true when a Finding of
+    /// its own was raised.
+    fn ask(&self, item: &Item, drift: &Drift, assessment: &mut Assessment) -> bool {
+        let standing = assessment
+            .findings
+            .iter()
+            .any(|finding| finding.category == Category::Threat);
+        if standing {
+            return false;
+        }
+        let mut finding = drift::finding(item, drift);
+        // The Heuristics that read the Baseline fold in as supporting detail
+        // rather than saying the same thing twice.
+        finding.heuristics = assessment.fired.clone();
+        assessment.findings.push(finding);
+        true
+    }
+
+    /// The marketplaces a Drift question stands on, by name.
+    fn unsettled_marketplaces(&self, enumeration: &Enumeration) -> BTreeSet<String> {
+        let settled = BTreeSet::new();
+        let watched = Watched {
+            declarations: self.declarations,
+            unsettled_marketplaces: &settled,
+        };
+        enumeration
+            .items
+            .iter()
+            .filter(|item| item.kind == Kind::Marketplace)
+            .filter(|item| {
+                let state = self.decide(item).state;
+                let held = self.baseline.record(&item.id);
+                drift::decide(item, state, held, watched) == drift::Decision::Ask
+            })
+            .map(drift::marketplace_name)
+            .collect()
+    }
+
+    /// The Drift Findings the Problems of this Enumeration raise: a path the
+    /// Baseline had readable that could not be read or parsed this time (spec
+    /// section 4.6.5).
+    fn unreadable(&self, enumeration: &Enumeration) -> Vec<Finding> {
+        if !self.kind.records() || enumeration.problems.is_empty() {
+            return Vec::new();
+        }
+        let mut raised = Vec::new();
+        for problem in &enumeration.problems {
+            for record in self.baseline.records() {
+                if drift::was_readable(record, problem) {
+                    let drift = Drift::of_problem(problem, record);
+                    raised.push(drift::finding_of_problem(record, &drift));
+                }
+            }
+        }
+        raised
     }
 
     /// How one Item compares with the Baseline, and what stands behind it.
@@ -413,14 +532,16 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::adapter::Descriptor;
     use crate::baseline::{Baseline, BaselineWriter, Presence};
+    use crate::finding::{Category, Severity, Source, Tier};
     use crate::chain::ChainState;
     use crate::eventlog::{Action, Actor, Event, EventLog, EventLogWriter};
     use crate::host::Host;
     use crate::item::{Activation, Item, Kind, Provenance, Scope, Tree, TreeCaps, canonical_entry};
     use crate::keychain::{ChainKey, MemoryKeySource};
     use crate::paths::DataDirectory;
-    use crate::views::{McpView, ParsedView};
+    use crate::views::{McpView, ParsedView, PluginView, SettingsView};
 
     /// A fake Host: a temporary home with the Surfaces of one Agent under it.
     /// Nothing here touches the real home.
@@ -462,6 +583,89 @@ mod tests {
         fn remove_skill(&self, name: &str) {
             let root = self.home.path().join(".claude").join("skills").join(name);
             let _ = std::fs::remove_dir_all(root);
+        }
+
+        /// The one project root this fake Host knows.
+        fn project(&self) -> PathBuf {
+            self.home.path().join("src").join("demo")
+        }
+
+        /// The instruction file of that project, which is what a pull moves.
+        fn project_instructions(&self, content: &str) {
+            let root = self.project();
+            std::fs::create_dir_all(&root).expect("a writable home");
+            std::fs::write(root.join("CLAUDE.md"), content).expect("a writable home");
+        }
+
+        /// One settings key, as the adapter's declaration table would yield
+        /// it: every key written here is a declared executing or redirecting
+        /// one, because that is the only kind of key that becomes an Item.
+        fn setting(&self, key_path: &str, value: Value) {
+            let path = self.home.path().join(".claude").join("settings.json");
+            let mut written = match std::fs::read(&path) {
+                Ok(bytes) => serde_json::from_slice::<Value>(&bytes).expect("readable settings"),
+                Err(_) => json!({}),
+            };
+            written[key_path] = value;
+            std::fs::write(&path, serde_json::to_vec(&written).expect("a writable value"))
+                .expect("a writable home");
+        }
+
+        fn plugins_dir(&self) -> PathBuf {
+            self.home.path().join(".claude").join("plugins")
+        }
+
+        fn version_dir(&self, id: &str, version: &str) -> PathBuf {
+            self.plugins_dir().join("cache").join(id).join(version)
+        }
+
+        /// One plugin version on disk with the install registry pointing at
+        /// it, which is what an install and a consistent update both look
+        /// like.
+        fn plugin(&self, id: &str, version: &str, commit: &str, files: &[(&str, &str)]) {
+            let directory = self.version_dir(id, version);
+            std::fs::create_dir_all(&directory).expect("a writable home");
+            for (name, content) in files {
+                std::fs::write(directory.join(name), content).expect("a writable home");
+            }
+            let registry = self.plugins_dir().join("installed.json");
+            let mut written = match std::fs::read(&registry) {
+                Ok(bytes) => serde_json::from_slice::<Value>(&bytes).expect("a readable registry"),
+                Err(_) => json!({}),
+            };
+            written[id] = json!({"version": version, "commit": commit});
+            std::fs::write(&registry, serde_json::to_vec(&written).expect("a writable value"))
+                .expect("a writable home");
+        }
+
+        /// One file inside a version directory, written without the install
+        /// registry moving: the tree changes under an unchanged record.
+        fn plugin_file(&self, id: &str, version: &str, name: &str, content: &str) {
+            let directory = self.version_dir(id, version);
+            std::fs::create_dir_all(&directory).expect("a writable home");
+            std::fs::write(directory.join(name), content).expect("a writable home");
+        }
+
+        /// One marketplace clone and where the registry says it came from.
+        fn marketplace(&self, name: &str, source: &str) {
+            let clone = self.plugins_dir().join("marketplaces").join(name);
+            std::fs::create_dir_all(&clone).expect("a writable home");
+            std::fs::write(clone.join("marketplace.json"), "{}").expect("a writable home");
+            let registry = self.plugins_dir().join("known.json");
+            let mut written = match std::fs::read(&registry) {
+                Ok(bytes) => serde_json::from_slice::<Value>(&bytes).expect("a readable registry"),
+                Err(_) => json!({}),
+            };
+            written[name] = json!({"source": source, "lastUpdated": "whenever"});
+            std::fs::write(&registry, serde_json::to_vec(&written).expect("a writable value"))
+                .expect("a writable home");
+        }
+
+        /// What one clone looks like after a fetch that brought new commits
+        /// and moved nothing about where the marketplace points.
+        fn marketplace_fetched(&self, name: &str, content: &str) {
+            let clone = self.plugins_dir().join("marketplaces").join(name);
+            std::fs::write(clone.join("plugins.json"), content).expect("a writable home");
         }
 
         /// What a Surface Adapter would yield, written out here so the pass is
@@ -509,6 +713,101 @@ mod tests {
                 }
             }
 
+            let project = self.project().join("CLAUDE.md");
+            if let Ok(content) = host.read(&project) {
+                enumeration.items.push(Item::file(
+                    "claude-code",
+                    Scope::Project(self.project()),
+                    Kind::InstructionFile,
+                    "CLAUDE.md",
+                    project,
+                    Provenance::Repository {
+                        commit: "9".repeat(40),
+                    },
+                    Activation::Active,
+                    content,
+                ));
+            }
+
+            let settings = home.join(".claude").join("settings.json");
+            if let Ok(bytes) = host.read(&settings) {
+                let parsed: Value = serde_json::from_slice(&bytes).expect("readable settings");
+                for (key, value) in parsed.as_object().cloned().unwrap_or_default() {
+                    let item = Item::entry(
+                        "claude-code",
+                        Scope::User,
+                        Kind::SettingsEntry,
+                        &format!("~/.claude/settings.json#{key}"),
+                        settings.clone(),
+                        Provenance::Manual,
+                        Activation::Active,
+                        canonical_entry(&json!({ key.clone(): value.clone() })),
+                    )
+                    .with_view(ParsedView::Settings(SettingsView::of(&key, &value)));
+                    enumeration.items.push(item);
+                }
+            }
+
+            let installed = self.plugins_dir().join("installed.json");
+            if let Ok(bytes) = host.read(&installed) {
+                let parsed: Value = serde_json::from_slice(&bytes).expect("a readable registry");
+                for (id, record) in parsed.as_object().cloned().unwrap_or_default() {
+                    let version = record["version"].as_str().unwrap_or_default().to_string();
+                    let commit = record["commit"].as_str().unwrap_or_default().to_string();
+                    let directory = self.version_dir(&id, &version);
+                    let name = id.split('@').next().unwrap_or_default().to_string();
+                    let market = id.rsplit('@').next().unwrap_or_default().to_string();
+                    let item = Item::tree(
+                        "claude-code",
+                        Scope::User,
+                        Kind::Plugin,
+                        &id,
+                        directory.clone(),
+                        Provenance::Marketplace {
+                            name: market,
+                            pinned_ref: commit.clone(),
+                            official: false,
+                        },
+                        Activation::Active,
+                        Tree::of(&host, &directory, TreeCaps::default()),
+                    )
+                    .with_view(ParsedView::Plugin(PluginView::of(
+                        &name,
+                        &json!({}),
+                        Vec::new(),
+                    )))
+                    .noting(crate::drift::VERSION, version)
+                    .noting(crate::drift::INSTALL_PATH, directory.display().to_string())
+                    .noting(crate::drift::COMMIT, commit);
+                    enumeration.items.push(item);
+                }
+            }
+
+            let known = self.plugins_dir().join("known.json");
+            if let Ok(bytes) = host.read(&known) {
+                let parsed: Value = serde_json::from_slice(&bytes).expect("a readable registry");
+                for (name, entry) in parsed.as_object().cloned().unwrap_or_default() {
+                    let clone = self.plugins_dir().join("marketplaces").join(&name);
+                    let source = entry["source"].as_str().unwrap_or_default().to_string();
+                    let item = Item::tree(
+                        "claude-code",
+                        Scope::User,
+                        Kind::Marketplace,
+                        &name,
+                        clone.clone(),
+                        Provenance::Marketplace {
+                            name: name.clone(),
+                            pinned_ref: String::new(),
+                            official: false,
+                        },
+                        Activation::Active,
+                        Tree::of(&host, &clone, TreeCaps::default()),
+                    )
+                    .noting(crate::drift::SOURCE, source);
+                    enumeration.items.push(item);
+                }
+            }
+
             let skills = home.join(".claude").join("skills");
             let mut names: Vec<PathBuf> = host.read_dir(&skills).unwrap_or_default();
             names.sort();
@@ -542,8 +841,64 @@ mod tests {
         plan
     }
 
+    /// The coverage a Scan of everything this fake Host holds stands for: the
+    /// kinds the stand-in adapter yields in the user's own Scope, and the one
+    /// project root it knows.
+    fn wide(host: &FakeHost) -> CoveragePlan {
+        let mut plan = CoveragePlan::new();
+        for kind in [
+            Kind::InstructionFile,
+            Kind::McpServer,
+            Kind::Skill,
+            Kind::SettingsEntry,
+            Kind::Plugin,
+            Kind::Marketplace,
+        ] {
+            plan.covers("claude-code", &Scope::User, kind);
+        }
+        plan.covers(
+            "claude-code",
+            &Scope::Project(host.project()),
+            Kind::InstructionFile,
+        );
+        plan
+    }
+
+    /// The Drift Findings one Scan raised, in the order it raised them.
+    fn questions(outcome: &ScanOutcome) -> Vec<&Finding> {
+        outcome
+            .report
+            .findings
+            .iter()
+            .filter(|finding| finding.source == Source::Drift)
+            .collect()
+    }
+
     fn moment(text: &str) -> Timestamp {
         Timestamp::parse(text).expect("a readable moment")
+    }
+
+    /// What the fake adapter of these tests declares about its own keys: the
+    /// one key Claude Code writes for itself, so the exemption of spec section
+    /// 4.6.5 is proven by key and not by Provenance.
+    fn declarations() -> Declarations {
+        Declarations::none().and(&Descriptor {
+            agent: "claude-code",
+            display_name: "Claude Code",
+            kinds: &[
+                Kind::InstructionFile,
+                Kind::Skill,
+                Kind::McpServer,
+                Kind::Hook,
+                Kind::SettingsEntry,
+                Kind::Plugin,
+                Kind::Marketplace,
+            ],
+            default_config_dir: ".claude",
+            surfaces: &[],
+            capabilities: &[],
+            agent_written_keys: &["permissions.allow"],
+        })
     }
 
     /// The daemon's side of a Scan: read the Baseline and the Event Log, run
@@ -588,10 +943,11 @@ mod tests {
             let known = KnownActions::rebuild(&log.events);
 
             let mut enumeration = host.enumerate();
-            let outcome = ScanPass::full(&self.pack, &view, plan, &trusted, &known)
-                .at(moment(at))
-                .over(&mut enumeration)
-                .expect("the pass runs");
+            let outcome =
+                ScanPass::full(&self.pack, &view, plan, &trusted, &known, &declarations())
+                    .at(moment(at))
+                    .over(&mut enumeration)
+                    .expect("the pass runs");
 
             let (mut writer, state) =
                 BaselineWriter::open(&baseline, &self.keys).expect("the Baseline opens");
@@ -901,10 +1257,17 @@ mod tests {
         enumeration
             .items
             .retain(|item| item.id.as_str().ends_with("CLAUDE.md"));
-        let outcome = ScanPass::change(&daemon.pack, &view, &plan(), &trusted, &known)
-            .at(moment("2026-09-24T10:00:00.000Z"))
-            .over(&mut enumeration)
-            .expect("the pass runs");
+        let outcome = ScanPass::change(
+            &daemon.pack,
+            &view,
+            &plan(),
+            &trusted,
+            &known,
+            &declarations(),
+        )
+        .at(moment("2026-09-24T10:00:00.000Z"))
+        .over(&mut enumeration)
+        .expect("the pass runs");
 
         assert!(outcome.advances.is_empty());
         assert_eq!(outcome.items.len(), 1);
@@ -922,11 +1285,12 @@ mod tests {
         let trusted = TrustTable::rebuild(&[]);
         let known = KnownActions::none();
         let empty = CoveragePlan::new();
+        let declared = declarations();
 
         let mut enumeration = host.enumerate();
         let pass = ScanPass {
             kind: ScanKind::Folder,
-            ..ScanPass::full(&pack, &view, &empty, &trusted, &known)
+            ..ScanPass::full(&pack, &view, &empty, &trusted, &known, &declared)
         };
         let outcome = pass.over(&mut enumeration).expect("the pass runs");
 
@@ -961,7 +1325,14 @@ mod tests {
         let mut enumeration = host.enumerate();
         let outcome = ScanPass {
             kind: ScanKind::Folder,
-            ..ScanPass::full(&daemon.pack, &view, &plan(), &trusted, &known)
+            ..ScanPass::full(
+                &daemon.pack,
+                &view,
+                &plan(),
+                &trusted,
+                &known,
+                &declarations(),
+            )
         }
         .over(&mut enumeration)
         .expect("the pass runs");
@@ -1117,10 +1488,17 @@ mod tests {
             kind: Some(Kind::Skill),
             reason: crate::adapter::ProblemReason::Unsupported,
         });
-        let outcome = ScanPass::full(&daemon.pack, &view, &plan(), &trusted, &known)
-            .at(moment("2026-09-24T09:00:00.000Z"))
-            .over(&mut enumeration)
-            .expect("the pass runs");
+        let outcome = ScanPass::full(
+            &daemon.pack,
+            &view,
+            &plan(),
+            &trusted,
+            &known,
+            &declarations(),
+        )
+        .at(moment("2026-09-24T09:00:00.000Z"))
+        .over(&mut enumeration)
+        .expect("the pass runs");
         assert!(!outcome.report.is_clear());
     }
 

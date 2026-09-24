@@ -132,6 +132,15 @@ pub static EXECUTING_OR_REDIRECTING_KEYS: &[DeclaredKey] = &[
     record("hooks.state", FanOut::PerMember),
 ];
 
+/// The declared keys Codex writes for itself.
+///
+/// Both of them are `record` keys above, so neither is ever an Item and
+/// neither can raise a Drift Finding in the first place. They are named here
+/// as well because the exemption of spec section 4.6.5 is by key, and a later
+/// slice that does yield one of them as an Item must not start asking about
+/// what the Agent wrote itself.
+pub static AGENT_WRITTEN_KEYS: &[&str] = &["hooks.state", "projects"];
+
 /// One config key found in one document.
 #[derive(Clone, Debug)]
 pub struct Entry {

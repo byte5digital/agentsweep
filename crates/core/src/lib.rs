@@ -28,6 +28,7 @@ pub mod chain;
 pub mod composite;
 pub mod coverage;
 pub mod derived;
+pub mod drift;
 pub mod enforcement;
 pub mod entry_edit;
 pub mod envelope;

@@ -579,6 +579,21 @@ mod tests {
         assert!(enforcement.trusted().expect("a readable log").is_empty());
         let entry = only_entry(&enforcement);
         assert!(entry.restore_unfinished);
+
+        // Every outcome of a Restore goes into the Event Log step by step, so
+        // the Activity can say which step to do something about (spec section
+        // 5.4).
+        let view = enforcement.read().expect("a readable log");
+        let recorded = view.events.last().expect("the Restore").event.clone();
+        assert_eq!(recorded.action, crate::eventlog::Action::Restore);
+        assert_eq!(recorded.result, Outcome::Failed);
+        assert_eq!(recorded.steps.len(), 1);
+        assert_eq!(recorded.steps[0].outcome, Outcome::Failed);
+        assert!(
+            recorded.steps[0].detail.contains("restore beside it"),
+            "{:?}",
+            recorded.steps[0]
+        );
     }
 
     #[test]

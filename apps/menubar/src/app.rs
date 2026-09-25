@@ -25,7 +25,7 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Rect, WindowEvent};
 use crate::glyph::{self, Mark};
 use crate::link::{Link, Socket, Update};
 use crate::popover::View;
-use crate::supervision::{self, Services, SystemServices};
+use crate::supervision::{self, Services, SystemServices, Unsupervised};
 
 /// The tray icon's id.
 const TRAY: &str = "agentsweep";
@@ -127,7 +127,13 @@ fn toggle(app: &AppHandle, anchor: Rect) {
 
 /// Runs the app until it is quit.
 pub fn run() {
-    let services: Arc<dyn Services> = Arc::new(SystemServices);
+    // A debug build pointed at a developer's daemon supervises nothing, so a
+    // hand run never registers the real launch agent or a login item.
+    let socket = Socket::for_this_build();
+    let services: Arc<dyn Services> = match socket {
+        Socket::Installed => Arc::new(SystemServices),
+        Socket::At(_) => Arc::new(Unsupervised),
+    };
     let shell = Shell {
         view: Mutex::new(View::unknown()),
         services: Arc::clone(&services),
@@ -167,6 +173,14 @@ pub fn run() {
                         let _ = hide.hide();
                     }
                 });
+                // A debug build can open the popover at start, so a developer
+                // (or a screenshot) sees it without clicking the menu bar.
+                if cfg!(debug_assertions)
+                    && std::env::var_os("AGENTSWEEP_DEV_SHOW_POPOVER").is_some()
+                {
+                    let _ = window.set_position(PhysicalPosition::new(40.0, 80.0));
+                    let _ = window.show();
+                }
             }
 
             // The registrations and the link run off the main thread: both
@@ -179,8 +193,7 @@ pub fn run() {
                     for failure in &launched.failures {
                         eprintln!("agentsweep-menubar: {failure}");
                     }
-                    Link::new(Socket::for_this_build(), services)
-                        .run(|update| take(&handle, update));
+                    Link::new(socket, services).run(|update| take(&handle, update));
                 })?;
             Ok(())
         })

@@ -105,6 +105,15 @@ pub fn restart_daemon(services: &dyn Services) -> Result<(), String> {
     services.register_agent()
 }
 
+/// True when there is a registration to take off: one that runs, or one that
+/// waits for approval.
+fn registered(state: ServiceState) -> bool {
+    matches!(
+        state,
+        ServiceState::Enabled | ServiceState::RequiresApproval
+    )
+}
+
 /// Unregisters the daemon and the login item, whichever is registered, and
 /// answers with what could not be done.
 ///
@@ -114,12 +123,12 @@ pub fn restart_daemon(services: &dyn Services) -> Result<(), String> {
 /// (`docs/hand-checks.md`).
 pub fn unregister_everything(services: &dyn Services) -> Vec<String> {
     let mut failures = Vec::new();
-    if services.agent() != ServiceState::NotRegistered
+    if registered(services.agent())
         && let Err(error) = services.unregister_agent()
     {
         failures.push(format!("the daemon could not be unregistered: {error}"));
     }
-    if services.login_item() != ServiceState::NotRegistered
+    if registered(services.login_item())
         && let Err(error) = services.unregister_login_item()
     {
         failures.push(format!("the login item could not be unregistered: {error}"));
@@ -142,6 +151,35 @@ pub fn off_by_registration(agent: ServiceState) -> Option<Off> {
 /// SMAppService itself.
 #[derive(Debug, Default)]
 pub struct SystemServices;
+
+/// No service manager at all: what a developer run of the app supervises when
+/// it is pointed at a developer's daemon. It registers nothing and finds
+/// nothing, so the app reads the socket alone and never touches the real
+/// launch agent or Login Items.
+#[derive(Debug, Default)]
+pub struct Unsupervised;
+
+impl Services for Unsupervised {
+    fn agent(&self) -> ServiceState {
+        ServiceState::NotFound
+    }
+    fn register_agent(&self) -> Result<(), String> {
+        Err("a developer run registers nothing".to_string())
+    }
+    fn unregister_agent(&self) -> Result<(), String> {
+        Err("a developer run registers nothing".to_string())
+    }
+    fn login_item(&self) -> ServiceState {
+        ServiceState::NotFound
+    }
+    fn register_login_item(&self) -> Result<(), String> {
+        Err("a developer run registers nothing".to_string())
+    }
+    fn unregister_login_item(&self) -> Result<(), String> {
+        Err("a developer run registers nothing".to_string())
+    }
+    fn open_login_items(&self) {}
+}
 
 #[cfg(target_os = "macos")]
 mod system {
@@ -372,6 +410,15 @@ pub(crate) mod tests {
         let services = Recorded::with(ServiceState::NotRegistered, ServiceState::Enabled);
         restart_daemon(&services).expect("a restart");
         assert_eq!(services.calls(), vec!["register agent"]);
+    }
+
+    /// A developer run registers nothing and, finding nothing, leaves
+    /// Protection to what the socket says.
+    #[test]
+    fn a_developer_run_supervises_nothing() {
+        assert_eq!(on_launch(&Unsupervised), Launched::default());
+        assert_eq!(off_by_registration(Unsupervised.agent()), None);
+        assert!(unregister_everything(&Unsupervised).is_empty());
     }
 
     /// Taking a test install off the machine unregisters both, and only what

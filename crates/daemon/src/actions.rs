@@ -403,6 +403,18 @@ fn name_of(item_id: &str) -> &str {
     if locator.is_empty() { item_id } else { locator }
 }
 
+/// An Item as a sentence names it: its kind in words, then its name.
+fn named(kind: Option<Kind>, item_id: &str) -> String {
+    match kind {
+        Some(kind) => format!(
+            "{} '{}'",
+            kind.id_segment().replace('-', " "),
+            name_of(item_id)
+        ),
+        None => format!("'{}'", name_of(item_id)),
+    }
+}
+
 /// The line a manual Quarantine of a project's Item adds (spec section 8.4).
 const PROJECT_LINE: &str =
     "This file belongs to a project, so git will show the change. Restore undoes it.";
@@ -614,9 +626,8 @@ impl Daemon {
         let receipt_id = receipt.id.to_string();
         self.settle(|recorded| stop(recorded, &item.id, &item.content_hash, &receipt_id));
         let mut message = format!(
-            "Quarantined the {} '{}'. `agentsweep restore {receipt_id}` puts it back.",
-            item.kind,
-            name_of(item.id.as_str())
+            "Quarantined the {}. `agentsweep restore {receipt_id}` puts it back.",
+            named(Some(item.kind), item.id.as_str())
         );
         if item.id.is_project() {
             message = format!("{message} {PROJECT_LINE}");
@@ -747,9 +758,14 @@ impl Daemon {
         let message = match (done, trusted, report.conflicted) {
             (true, true, _) => format!(
                 "Restored the {} and trusted this exact version, so it is not stopped again.",
-                name_of(entry.item_id.as_str())
+                named(entry.kind, entry.item_id.as_str())
             ),
-            (true, false, _) => format!("Restored the {}.", name_of(entry.item_id.as_str())),
+            (true, false, _) => {
+                format!(
+                    "Restored the {}.",
+                    named(entry.kind, entry.item_id.as_str())
+                )
+            }
             (false, _, true) => "Something else is at the original place now, so nothing was \
                                  put back. Ask again with --replace to replace it or --beside to \
                                  restore beside it."
@@ -1097,6 +1113,18 @@ mod tests {
             name_of("claude-code/user/mcp-server/~/.claude.json#tracker"),
             "tracker"
         );
+    }
+
+    #[test]
+    fn a_sentence_names_the_kind_in_words_and_then_the_item() {
+        assert_eq!(
+            named(
+                Some(Kind::McpServer),
+                "claude-code/user/mcp-server/~/.claude.json#tracker"
+            ),
+            "mcp server 'tracker'"
+        );
+        assert_eq!(named(None, "claude-code/user/skill/x"), "'x'");
     }
 
     #[test]

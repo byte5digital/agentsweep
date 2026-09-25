@@ -6,10 +6,10 @@
 //! quarantine store, so what a peer may ask for is enumerated here rather than
 //! left to whatever a caller can spell (ADR 0008). Every action addresses a
 //! Finding, an Item or a Receipt by its id, which the daemon resolves against
-//! what it knows; an id it does not know is a clean refusal. The only request
-//! that takes a path is revealing a Receipt, and the Folder Scan will be the
-//! second when it arrives: [`Request::takes_a_path`] says so, and a message
-//! that carries a path on any other request is not a message at all.
+//! what it knows; an id it does not know is a clean refusal. The only requests
+//! that take a path are revealing a Receipt and the Folder Scan:
+//! [`Request::takes_a_path`] says so, and a message that carries a path on any
+//! other request is not a message at all.
 //!
 //! Every message is one JSON object with a `type`. The types are laid out here
 //! and nowhere else, so the daemon, the application and the command line
@@ -225,11 +225,23 @@ pub enum Request {
         /// The toggle's new position, absent to read it.
         enabled: Option<bool>,
     },
+    /// Whether Agent sessions appear to be running right now, detected
+    /// read-only the way every action detects it. What a client asks before
+    /// it confirms a Quarantine, so the confirmation can say so (spec section
+    /// 8.5). Nothing is acted on.
+    Sessions,
+    /// A Folder Scan of one folder the user pointed at: read and judged,
+    /// nothing recorded (spec section 6.4). The second request of this list
+    /// that takes a path (ADR 0008). Answers with a [`FolderScanResult`].
+    Folder {
+        /// The folder, as an absolute path.
+        path: String,
+    },
 }
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 11] = [
+    pub const NAMES: [&'static str; 13] = [
         "status",
         "scan-now",
         "subscribe",
@@ -241,6 +253,8 @@ impl Request {
         "re-enable",
         "reveal-receipt",
         "rule-feed",
+        "sessions",
+        "folder-scan",
     ];
 
     /// The spelling a request carries.
@@ -257,13 +271,15 @@ impl Request {
             Request::ReEnable { .. } => "re-enable",
             Request::RevealReceipt { .. } => "reveal-receipt",
             Request::RuleFeed { .. } => "rule-feed",
+            Request::Sessions => "sessions",
+            Request::Folder { .. } => "folder-scan",
         }
     }
 
-    /// True for the requests that may carry a path. Every other one addresses
-    /// ids only (ADR 0008).
+    /// True for the requests that may carry a path: revealing a Receipt and
+    /// the Folder Scan. Every other one addresses ids only (ADR 0008).
     pub fn takes_a_path(name: &str) -> bool {
-        name == "reveal-receipt"
+        matches!(name, "reveal-receipt" | "folder-scan")
     }
 
     /// The id the request addresses, where it addresses one.
@@ -292,7 +308,7 @@ impl Request {
                     Value::from(conflict_name(*conflict)),
                 );
             }
-            Request::RevealReceipt { path: Some(path) } => {
+            Request::RevealReceipt { path: Some(path) } | Request::Folder { path } => {
                 map.insert("path".to_string(), Value::from(path.as_str()));
             }
             Request::RuleFeed {
@@ -341,6 +357,10 @@ impl Request {
                     None | Some(Value::Null) => None,
                     Some(enabled) => Some(enabled.as_bool()?),
                 },
+            },
+            "sessions" => Request::Sessions,
+            "folder-scan" => Request::Folder {
+                path: text("path")?.to_string(),
             },
             _ => return None,
         })
@@ -1030,6 +1050,113 @@ pub fn receipts_from_value(value: &Value) -> Option<Vec<RevealedReceipt>> {
         .collect()
 }
 
+/// The answer of a Folder Scan that found nothing (spec section 8.9).
+pub const SAFE_TO_OPEN: &str = "Safe to open.";
+
+/// The answer of a Folder Scan that found something, a Problem included.
+pub const DO_NOT_OPEN_YET: &str = "Do not open yet.";
+
+/// What every Folder Scan answer says under its verdict.
+pub const NOTHING_RECORDED: &str = "Nothing was recorded.";
+
+/// One Finding of a Folder Scan, with the lines a person reads under it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FolderFinding {
+    /// The Finding, flattened the way the status carries one. It is open, and
+    /// nothing is offered on it: a Folder Scan records nothing to act on.
+    pub finding: RecordedFinding,
+    /// The Heuristics that fired on its Item, one line each: id, Weight and
+    /// plain sentence. Never matched text.
+    pub heuristics: Vec<String>,
+}
+
+/// What a Folder Scan found, which the daemon answers a `folder-scan` request
+/// with. Nothing of it was recorded anywhere.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FolderScanResult {
+    /// The folder as it resolved.
+    pub root: String,
+    /// How many Items it enumerated and judged.
+    pub items: usize,
+    /// How many of them fell in the Ambiguous Band: named, nothing to do.
+    pub ambiguous: usize,
+    /// Every Finding, a Problem included, in the order the Items were found.
+    pub findings: Vec<FolderFinding>,
+}
+
+impl FolderScanResult {
+    /// True when nothing was found: "safe to open". A Problem is a Finding, so
+    /// a Surface that could not be read through never counts as clear.
+    pub fn is_safe(&self) -> bool {
+        self.findings.is_empty()
+    }
+
+    /// The one-line answer.
+    pub fn verdict(&self) -> &'static str {
+        match self.is_safe() {
+            true => SAFE_TO_OPEN,
+            false => DO_NOT_OPEN_YET,
+        }
+    }
+
+    /// The result as the wire carries it.
+    pub fn to_value(&self) -> Value {
+        let mut map = Map::new();
+        map.insert("ambiguous".to_string(), Value::from(self.ambiguous as u64));
+        map.insert(
+            "findings".to_string(),
+            Value::Array(
+                self.findings
+                    .iter()
+                    .map(|one| {
+                        let mut finding = Map::new();
+                        finding.insert("finding".to_string(), one.finding.to_value());
+                        finding.insert(
+                            "heuristics".to_string(),
+                            Value::Array(
+                                one.heuristics
+                                    .iter()
+                                    .map(|line| Value::from(line.as_str()))
+                                    .collect(),
+                            ),
+                        );
+                        Value::Object(finding)
+                    })
+                    .collect(),
+            ),
+        );
+        map.insert("items".to_string(), Value::from(self.items as u64));
+        map.insert("root".to_string(), Value::from(self.root.as_str()));
+        Value::Object(map)
+    }
+
+    /// Reads back what [`FolderScanResult::to_value`] wrote.
+    pub fn from_value(value: &Value) -> Option<FolderScanResult> {
+        let findings = value
+            .get("findings")?
+            .as_array()?
+            .iter()
+            .map(|one| {
+                Some(FolderFinding {
+                    finding: RecordedFinding::from_value(one.get("finding")?)?,
+                    heuristics: one
+                        .get("heuristics")?
+                        .as_array()?
+                        .iter()
+                        .map(|line| line.as_str().map(str::to_string))
+                        .collect::<Option<Vec<_>>>()?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(FolderScanResult {
+            root: value.get("root")?.as_str()?.to_string(),
+            items: value.get("items")?.as_u64()? as usize,
+            ambiguous: value.get("ambiguous")?.as_u64()? as usize,
+            findings,
+        })
+    }
+}
+
 /// One action the daemon allows on a Finding as it stands, which is what a
 /// client offers beside it (spec section 8.5). A client never works this out
 /// for itself from anything but a Finding the daemon sent.
@@ -1531,20 +1658,24 @@ mod tests {
             Request::RuleFeed {
                 enabled: Some(true),
             },
+            Request::Sessions,
+            Request::Folder {
+                path: "/Users/someone/src/demo".to_string(),
+            },
         ]
     }
 
-    /// ADR 0008: no request takes a path except revealing a Receipt (and the
-    /// Folder Scan, which is not a daemon request yet). A path on any other
-    /// request makes the message one the daemon does not understand, so it is
-    /// never read and never ignored silently.
+    /// ADR 0008: no request takes a path except revealing a Receipt and the
+    /// Folder Scan. A path on any other request makes the message one the
+    /// daemon does not understand, so it is never read and never ignored
+    /// silently.
     #[test]
-    fn no_request_but_reveal_receipt_accepts_a_path() {
+    fn no_request_but_reveal_receipt_and_the_folder_scan_accepts_a_path() {
         let taking: Vec<&str> = Request::NAMES
             .into_iter()
             .filter(|name| Request::takes_a_path(name))
             .collect();
-        assert_eq!(taking, vec!["reveal-receipt"]);
+        assert_eq!(taking, vec!["reveal-receipt", "folder-scan"]);
 
         for name in Request::NAMES {
             let value = serde_json::json!({
@@ -1564,6 +1695,35 @@ mod tests {
         // request that should name one and does not is not a message either.
         let bare = serde_json::json!({"type": "request", "id": "1", "request": "quarantine"});
         assert_eq!(Message::from_value(&bare), None);
+        // A Folder Scan without its folder is not a request either.
+        let nowhere = serde_json::json!({"type": "request", "id": "1", "request": "folder-scan"});
+        assert_eq!(Message::from_value(&nowhere), None);
+    }
+
+    #[test]
+    fn a_folder_scan_result_round_trips_and_answers_safe_only_when_empty() {
+        let clear = FolderScanResult {
+            root: "/src/demo".to_string(),
+            items: 3,
+            ambiguous: 1,
+            findings: Vec::new(),
+        };
+        assert!(clear.is_safe());
+        assert_eq!(clear.verdict(), SAFE_TO_OPEN);
+        assert_eq!(FolderScanResult::from_value(&clear.to_value()), Some(clear));
+
+        let found = FolderScanResult {
+            root: "/src/demo".to_string(),
+            items: 3,
+            ambiguous: 0,
+            findings: vec![FolderFinding {
+                finding: recorded(FindingState::Open, Category::Threat, "rule 0001", 1),
+                heuristics: vec!["0501  weight 2  It downloads something.".to_string()],
+            }],
+        };
+        assert!(!found.is_safe());
+        assert_eq!(found.verdict(), DO_NOT_OPEN_YET);
+        assert_eq!(FolderScanResult::from_value(&found.to_value()), Some(found));
     }
 
     #[test]

@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use agentsweep_core::quarantine::Conflict;
 
 use crate::protocol::{
-    ActionReport, Hello, Message, Refusal, Request, RequestError, RevealedReceipt, Role,
-    StateEvent, Status, receipts_from_value,
+    ActionReport, FolderScanResult, Hello, Message, Refusal, Request, RequestError,
+    RevealedReceipt, Role, Sessions, StateEvent, Status, receipts_from_value,
 };
 use crate::socket::{Connection, connect, default_socket_path};
 
@@ -204,6 +204,26 @@ impl Client {
     pub fn set_rule_feed(&mut self, enabled: bool) -> Result<bool, ClientError> {
         self.feed(Request::RuleFeed {
             enabled: Some(enabled),
+        })
+    }
+
+    /// Whether Agent sessions appear to be running right now. Nothing is
+    /// acted on; a client asks before it confirms a Quarantine.
+    pub fn sessions(&mut self) -> Result<Sessions, ClientError> {
+        let answer = self.ask(Request::Sessions)?;
+        Sessions::from_value(&answer)
+            .ok_or_else(|| ClientError::Unexpected("the sessions could not be read".to_string()))
+    }
+
+    /// A Folder Scan of one folder, by the daemon, recording nothing. The
+    /// answer comes once the Scan has finished, so a client that wants to go
+    /// on asking other things meanwhile asks on a connection of its own.
+    pub fn folder_scan(&mut self, path: &str) -> Result<FolderScanResult, ClientError> {
+        let answer = self.ask(Request::Folder {
+            path: path.to_string(),
+        })?;
+        FolderScanResult::from_value(&answer).ok_or_else(|| {
+            ClientError::Unexpected("the Folder Scan result could not be read".to_string())
         })
     }
 

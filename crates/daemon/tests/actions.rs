@@ -18,7 +18,7 @@ use agentsweep_core::keychain::{ChainKey, KeyError, KeySource, MemoryKeySource};
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::quarantine::Conflict;
 use agentsweep_core::rules::{BUNDLED_RULES, RulePack, RuleSource};
-use agentsweep_core::state::{RecordedFinding, Trigger};
+use agentsweep_core::state::RecordedFinding;
 use agentsweep_daemon::Tuning;
 use agentsweep_daemon::options::{KeySourceChoice, Options};
 use agentsweep_daemon::service::{self, Background, Daemon};
@@ -257,6 +257,11 @@ fn until(condition: impl Fn() -> bool) -> bool {
 
 /// Asks for a Full Scan and waits until a newer one than the last has
 /// finished.
+///
+/// The request joins a Full Scan that is already running or waiting, and the
+/// watcher starts one of its own when an action moves a whole tree, so the
+/// Scan that answers may carry the watcher's trigger rather than "Scan now".
+/// Either one saw the action; the trigger is not what these tests are about.
 fn scan_again(sandbox: &Sandbox, daemon: &Background) {
     let before = sandbox.status().scan.map(|scan| scan.started_at);
     sandbox.client().scan_now().expect("a Full Scan");
@@ -265,10 +270,6 @@ fn scan_again(sandbox: &Sandbox, daemon: &Background) {
             let status = daemon.daemon().status();
             !daemon.daemon().health().scanning
                 && status.scan.as_ref().map(|scan| scan.started_at) != before
-                && status
-                    .scan
-                    .as_ref()
-                    .is_some_and(|scan| scan.trigger == Trigger::ScanNow)
         }),
         "the Full Scan finished"
     );

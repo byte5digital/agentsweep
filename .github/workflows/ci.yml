@@ -55,6 +55,16 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      # The command line interface is two builds with one name (ADR 0008). The
+      # workspace builds the in-bundle one; the crates.io one, which runs a
+      # Folder Scan and nothing else and links no IPC code, is built, linted
+      # and tested on its own features here.
+      - name: Build, lint and test the crates.io build of the command line interface
+        run: |
+          cargo build -p agentsweep --no-default-features --locked
+          cargo clippy -p agentsweep --no-default-features --all-targets --locked -- -D warnings
+          cargo test -p agentsweep --no-default-features --locked
+
       # cargo-auditable and cargo-deny are built from crates.io with the pinned
       # toolchain rather than pulled as prebuilt binaries by a third party
       # action, so the only code CI runs comes from the one registry the

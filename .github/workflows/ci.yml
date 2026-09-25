@@ -74,6 +74,43 @@ jobs:
           cargo install --locked cargo-auditable
           cargo auditable build --workspace --locked --release
 
+  app-bundle:
+    name: App bundle
+    # The menu bar app is built into a bundle the way the release builds it,
+    # with the daemon and the command line interface as external binaries and
+    # the launch agent's plist inside, and signed ad hoc. No notarization and
+    # no secret: that is the release pipeline's, behind its own environment.
+    runs-on: macos-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: .github/scripts/install-toolchain.sh
+
+      # Debug sidecars, because a debug daemon admits a peer of the same user
+      # and a release daemon admits nobody until the Team ID is filled in.
+      - name: Build the sidecars
+        run: apps/menubar/build-sidecars.sh debug
+
+      # The Tauri command line interface from npm, pinned to the exact version
+      # of the tauri crate the workspace locks.
+      - name: Build the bundle
+        working-directory: apps/menubar
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: npx --yes @tauri-apps/cli@2.11.5 build --debug --config tauri.bundle.conf.json
+
+      - name: Check what the bundle carries
+        run: |
+          app=target/debug/bundle/macos/AgentSweep.app
+          test -x "$app/Contents/MacOS/agentsweep-menubar"
+          test -x "$app/Contents/MacOS/agentsweepd"
+          test -x "$app/Contents/MacOS/agentsweep"
+          plutil -lint "$app/Contents/Library/LaunchAgents/de.byte5.agentsweep.daemon.plist"
+          test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = "14.0"
+          codesign --verify --deep --strict "$app"
+
   benign-corpus:
     name: Benign corpus
     # The corpus is scanned the way the Surface Adapters see it, and the adapters

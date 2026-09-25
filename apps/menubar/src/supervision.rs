@@ -22,8 +22,10 @@ pub enum ServiceState {
     Enabled,
     /// Registered and waiting for the user to allow it in Login Items.
     RequiresApproval,
-    /// The operating system cannot find the service: an app that does not run
-    /// out of its bundle, which is every developer run.
+    /// The operating system cannot find the service. SMAppService answers
+    /// this for a service that was never registered as well as for an app
+    /// that does not run out of its bundle, so a supervising app registers
+    /// on it like on [`ServiceState::NotRegistered`].
     NotFound,
 }
 
@@ -40,6 +42,11 @@ impl fmt::Display for ServiceState {
 
 /// The two registrations and the one pane the app reaches into.
 pub trait Services: Send + Sync {
+    /// Whether these services register anything at all. A developer run of
+    /// the app pointed at a developer's daemon does not.
+    fn supervises(&self) -> bool {
+        true
+    }
     /// Where the daemon's launch agent stands.
     fn agent(&self) -> ServiceState;
     /// Registers the daemon's launch agent, which starts it.
@@ -74,7 +81,12 @@ pub struct Launched {
 /// only the user can give it, in Login Items.
 pub fn on_launch(services: &dyn Services) -> Launched {
     let mut launched = Launched::default();
-    if services.agent() == ServiceState::NotRegistered {
+    if !services.supervises() {
+        return launched;
+    }
+    let unregistered =
+        |state| matches!(state, ServiceState::NotRegistered | ServiceState::NotFound);
+    if unregistered(services.agent()) {
         match services.register_agent() {
             Ok(()) => launched.registered_agent = true,
             Err(error) => launched
@@ -82,7 +94,7 @@ pub fn on_launch(services: &dyn Services) -> Launched {
                 .push(format!("the daemon could not be registered: {error}")),
         }
     }
-    if services.login_item() == ServiceState::NotRegistered {
+    if unregistered(services.login_item()) {
         match services.register_login_item() {
             Ok(()) => launched.registered_login_item = true,
             Err(error) => launched
@@ -160,6 +172,9 @@ pub struct SystemServices;
 pub struct Unsupervised;
 
 impl Services for Unsupervised {
+    fn supervises(&self) -> bool {
+        false
+    }
     fn agent(&self) -> ServiceState {
         ServiceState::NotFound
     }
@@ -358,6 +373,19 @@ pub(crate) mod tests {
         assert!(launched.registered_agent);
         assert!(launched.registered_login_item);
         assert!(launched.failures.is_empty());
+        assert_eq!(
+            services.calls(),
+            vec!["register agent", "register login item"]
+        );
+    }
+
+    /// SMAppService says "not found" for an agent that was never registered,
+    /// and that is a first launch like any other.
+    #[test]
+    fn a_service_the_system_cannot_find_yet_is_registered() {
+        let services = Recorded::with(ServiceState::NotFound, ServiceState::NotFound);
+        let launched = on_launch(&services);
+        assert!(launched.registered_agent && launched.registered_login_item);
         assert_eq!(
             services.calls(),
             vec!["register agent", "register login item"]

@@ -109,6 +109,7 @@ jobs:
           test -x "$app/Contents/MacOS/agentsweep"
           plutil -lint "$app/Contents/Library/LaunchAgents/de.byte5.agentsweep.daemon.plist"
           test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = "14.0"
+          test "$(plutil -extract LSUIElement raw "$app/Contents/Info.plist")" = "true"
           codesign --verify --deep --strict "$app"
 
   benign-corpus:

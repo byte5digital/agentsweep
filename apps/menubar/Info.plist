@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Tauri merges this into the bundle's Info.plist. The app starts as a
+	     menu bar agent, so no Dock icon flashes up before the activation
+	     policy is set; the window switches it to a regular app while open. -->
+	<key>LSUIElement</key>
+	<true/>
+</dict>
+</plist>

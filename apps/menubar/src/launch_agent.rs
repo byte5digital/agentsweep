@@ -128,6 +128,14 @@ mod tests {
         );
     }
 
+    /// The app starts as a menu bar agent, so no Dock icon shows before the
+    /// activation policy is set (spec section 8.1).
+    #[test]
+    fn the_app_starts_without_a_dock_icon() {
+        let info = manifest("Info.plist");
+        assert!(info.contains("<key>LSUIElement</key>\n\t<true/>"), "{info}");
+    }
+
     /// The app's own executable must not be called `agentsweep`: the command
     /// line interface is, and both sit in `Contents/MacOS` on a file system
     /// that does not tell `AgentSweep` from `agentsweep`.

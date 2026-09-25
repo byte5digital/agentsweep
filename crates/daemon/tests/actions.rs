@@ -20,7 +20,7 @@ use agentsweep_core::quarantine::Conflict;
 use agentsweep_core::rules::{BUNDLED_RULES, RulePack, RuleSource};
 use agentsweep_core::state::RecordedFinding;
 use agentsweep_daemon::Tuning;
-use agentsweep_daemon::options::{KeySourceChoice, Options};
+use agentsweep_daemon::options::{KeySourceChoice, LogChoice, Options};
 use agentsweep_daemon::service::{self, Background, Daemon};
 use agentsweep_daemon::watcher::Timings;
 use agentsweep_ipc::Client;
@@ -130,6 +130,7 @@ impl Sandbox {
             socket: self.socket.clone(),
             home: Some(self.home.clone()),
             key_source: KeySourceChoice::Memory,
+            log: LogChoice::Stderr,
         }
     }
 

@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_ipc::default_socket_path;
 
+pub use crate::log::LogChoice;
+
 /// The usage text, which says which flags are the developer's.
 pub const USAGE: &str = "\
 agentsweepd is the AgentSweep daemon. It watches the Surfaces of every Agent it
@@ -35,6 +37,9 @@ Developer only, off unless asked for by name:
                            beside it stands in for the Managed layers.
   --key-source <memory>    Hold the chain key in this process instead of in the
                            login Keychain. Nothing survives the run.
+  --log <stderr|file>      Write the log to the terminal, or to the rotated file
+                           in ~/Library/Logs/AgentSweep. The installed daemon
+                           writes the file and a developer run the terminal.
   --developer-budgets      Measure the Scan budgets of the specification
                            against this home, print them and stop. Binds no
                            socket and starts neither the watcher nor the due
@@ -96,6 +101,8 @@ pub struct Options {
     pub home: Option<PathBuf>,
     /// Where the chain key comes from.
     pub key_source: KeySourceChoice,
+    /// Where the log goes.
+    pub log: LogChoice,
 }
 
 impl Options {
@@ -107,7 +114,13 @@ impl Options {
             socket: default_socket_path(),
             home: None,
             key_source: KeySourceChoice::Keychain,
+            log: LogChoice::ByRun,
         })
+    }
+
+    /// Whether this run writes the rotated log file rather than the terminal.
+    pub fn writes_the_log_file(&self) -> bool {
+        self.log.writes_the_file(self.is_developer_run())
     }
 
     /// True when nothing about this run is the installed AgentSweep, which is
@@ -168,6 +181,7 @@ pub fn parse(arguments: &[String]) -> Result<Invocation, OptionsError> {
         socket: default_socket_path(),
         home: None,
         key_source: KeySourceChoice::Keychain,
+        log: LogChoice::ByRun,
     };
     let mut data_dir: Option<PathBuf> = None;
 
@@ -193,6 +207,13 @@ pub fn parse(arguments: &[String]) -> Result<Invocation, OptionsError> {
                         flag: "--key-source".to_string(),
                         value: asked,
                     })?;
+            }
+            "--log" => {
+                let asked = value("--log")?;
+                options.log = LogChoice::parse(&asked).ok_or_else(|| OptionsError::Bad {
+                    flag: "--log".to_string(),
+                    value: asked,
+                })?;
             }
             unknown => return Err(OptionsError::Unknown(unknown.to_string())),
         }
@@ -230,6 +251,7 @@ mod tests {
         assert_eq!(options.home, None);
         assert_eq!(options.key_source, KeySourceChoice::Keychain);
         assert!(!options.is_developer_run());
+        assert!(options.writes_the_log_file());
         assert_eq!(options.data_dir, DataDirectory::for_user().expect("a home"));
     }
 
@@ -258,6 +280,24 @@ mod tests {
         );
         assert_eq!(options.key_source, KeySourceChoice::Memory);
         assert!(options.is_developer_run());
+        assert!(!options.writes_the_log_file());
+    }
+
+    /// A hand run may ask for either destination by name; the installed
+    /// daemon, which names nothing, writes the file.
+    #[test]
+    fn the_log_goes_where_it_is_asked_to() {
+        assert!(!run(&["--log", "stderr"]).writes_the_log_file());
+        assert!(
+            run(&["--home", "/tmp/agentsweep-test/home", "--log", "file"]).writes_the_log_file()
+        );
+        assert_eq!(
+            parse(&arguments(&["--log", "syslog"])),
+            Err(OptionsError::Bad {
+                flag: "--log".to_string(),
+                value: "syslog".to_string()
+            })
+        );
     }
 
     #[test]
@@ -301,6 +341,7 @@ mod tests {
             "--socket",
             "--home",
             "--key-source",
+            "--log",
             "--developer-budgets",
         ] {
             assert!(USAGE.contains(flag), "{USAGE}");

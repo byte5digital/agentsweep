@@ -27,23 +27,25 @@
 
 #![warn(missing_docs)]
 
-/// Writes one line to the standard error stream.
+/// Writes one line to the daemon's log.
 ///
-/// The daemon's real log is `tracing` to a rotated file, which arrives with
-/// the application milestone. Until then a hand run reads its own output. A
-/// line names paths and ids and never content or a sensitive field (spec
-/// section 6.9).
+/// The log is `tracing`: the rotated file under `~/Library/Logs/AgentSweep`
+/// for the installed daemon, the standard error stream for a developer run
+/// (see [`log`]). A line names paths and ids and never content or a sensitive
+/// field (spec section 6.9).
 macro_rules! say {
     ($($argument:tt)*) => {
-        eprintln!("{} agentsweepd {}", agentsweep_core::envelope::Timestamp::now(), format_args!($($argument)*))
+        tracing::info!("{}", format_args!($($argument)*))
     };
 }
 
 pub mod actions;
 pub mod budgets;
+pub mod bundle_watch;
 pub mod change_scan;
 pub mod due;
 pub mod full_scan;
+pub mod log;
 pub mod machine;
 pub mod options;
 pub mod peer_check;

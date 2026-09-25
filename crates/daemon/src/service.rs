@@ -41,6 +41,7 @@ use agentsweep_ipc::protocol::{
 };
 use agentsweep_ipc::socket::{Connection, SocketListener};
 
+use crate::bundle_watch::{self, BundleWatch, Change, Own};
 use crate::change_scan::ChangeScan;
 use crate::due::{self, Occasion, PowerState, Schedule, SystemPower};
 use crate::full_scan::{FullScan, Progress, ScanRun};
@@ -210,6 +211,14 @@ pub struct Daemon {
     due: Mutex<Option<due::DueCheck>>,
     /// Everyone listening to the state events.
     subscribers: Mutex<Vec<Sender<StateEvent>>>,
+    /// The Health the subscribers were last told about, so a change is sent
+    /// once and a Health that did not move is not sent at all.
+    told: Mutex<Option<Health>>,
+    /// Set when the daemon's own bundle was replaced: no further piece of
+    /// work is taken off the queue, and the daemon exits once the write in
+    /// hand has finished, so `KeepAlive` starts the new binary (spec section
+    /// 9.5).
+    leaving: AtomicBool,
 }
 
 impl Daemon {
@@ -349,6 +358,8 @@ impl Daemon {
             watch: Mutex::new(None),
             due: Mutex::new(None),
             subscribers: Mutex::new(Vec::new()),
+            told: Mutex::new(None),
+            leaving: AtomicBool::new(false),
         }))
     }
 
@@ -460,11 +471,27 @@ impl Daemon {
                 loop {
                     let work = {
                         let mut queue = daemon.queue.lock().expect("the queue is not poisoned");
-                        match queue.next() {
+                        // A daemon whose bundle was replaced takes nothing
+                        // more: the Scan it was running is finished, and the
+                        // new binary runs the next one.
+                        let next = match daemon.is_leaving() {
+                            true => {
+                                queue.running = None;
+                                queue.draining = false;
+                                None
+                            }
+                            false => queue.next(),
+                        };
+                        match next {
                             Some(work) => work,
-                            None => return,
+                            None => {
+                                drop(queue);
+                                daemon.tell_health();
+                                return;
+                            }
                         }
                     };
+                    daemon.tell_health();
                     daemon.carry_out(work);
                 }
             })
@@ -673,6 +700,7 @@ impl Daemon {
         self.publish(StateEvent::ScanFinished {
             summary: Box::new(run.summary),
         });
+        self.tell_health();
     }
 
     /// Points the watcher at the roots this Full Scan declared.
@@ -812,6 +840,41 @@ impl Daemon {
         listening.retain(|subscriber| subscriber.send(event.clone()).is_ok());
     }
 
+    /// Tells every subscriber the Health as it stands now, when it differs
+    /// from what they were last told.
+    pub(crate) fn tell_health(&self) {
+        let health = self.health();
+        {
+            let mut told = self.told.lock().expect("the told Health is not poisoned");
+            if told.as_ref() == Some(&health) {
+                return;
+            }
+            *told = Some(health.clone());
+        }
+        self.publish(StateEvent::HealthChanged {
+            health: Box::new(health),
+        });
+    }
+
+    /// True once the daemon's own bundle was replaced and it is on its way
+    /// out.
+    pub fn is_leaving(&self) -> bool {
+        self.leaving.load(Ordering::SeqCst)
+    }
+
+    /// Stops taking work and waits for the write in hand to finish: a Scan
+    /// from start to end, or one action. What the daemon does before it exits
+    /// because its bundle was replaced, so no store is left half written and
+    /// the new binary starts from records that verify.
+    ///
+    /// A Scan writes the Baseline and the Event Log for all of its Items at
+    /// its end, not Item by Item, so the Scan in hand is the smallest unit
+    /// that can be finished without tearing a write.
+    pub fn finish_the_work_in_hand(&self) {
+        self.leaving.store(true, Ordering::SeqCst);
+        let _writing = self.writing.lock().expect("the write lock is not poisoned");
+    }
+
     /// Adds one listener and answers with the end it reads from.
     fn subscribe(&self) -> Receiver<StateEvent> {
         let (sender, receiver) = channel();
@@ -860,6 +923,11 @@ impl Daemon {
                     id,
                     result: Ok(serde_json::Value::Bool(true)),
                 });
+                // The stream opens with the Health as it stands, so a
+                // subscriber has something to show before anything changes.
+                let _ = connection.send(&Message::Event(StateEvent::HealthChanged {
+                    health: Box::new(self.health()),
+                }));
                 // A subscribed connection carries no more requests: the daemon
                 // writes events on it until the client goes away.
                 for event in receiver {
@@ -1066,6 +1134,7 @@ impl Daemon {
             "the Rule Feed was switched {}",
             if enabled { "on" } else { "off" }
         );
+        self.tell_health();
         let in_force = self.pack_in_force();
         match enabled {
             false => {
@@ -1236,6 +1305,7 @@ impl Daemon {
         }
 
         say!("the Rule Feed at {host}: {outcome:?}");
+        self.tell_health();
         // The toggle may have gone off while the request was on the wire. The
         // pack stays stored for the day it goes on again; off means the
         // bundled pack only.
@@ -1271,6 +1341,7 @@ impl Daemon {
         self.forget_evaluations();
         say!("{line}");
         self.publish(StateEvent::Activity { line });
+        self.tell_health();
         self.scan_with_the_new_pack();
     }
 
@@ -1340,6 +1411,8 @@ fn keychain() -> MemoryKeySource {
 pub struct Running {
     daemon: Arc<Daemon>,
     listener: Arc<SocketListener>,
+    /// The watch on the daemon's own bundle, absent when it runs out of none.
+    _bundle: Option<BundleWatch>,
 }
 
 impl Running {
@@ -1388,6 +1461,7 @@ impl Running {
         Background {
             daemon: self.daemon,
             listener: self.listener,
+            _bundle: self._bundle,
             stopping,
             handle: Some(handle),
         }
@@ -1398,6 +1472,7 @@ impl Running {
 pub struct Background {
     daemon: Arc<Daemon>,
     listener: Arc<SocketListener>,
+    _bundle: Option<BundleWatch>,
     stopping: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -1462,16 +1537,71 @@ pub fn start_with(options: &Options, daemon: Arc<Daemon>) -> Result<Running, Box
         None => say!("the Rule Feed is not asked in a developer run that names none"),
     }
     daemon.fetch_later();
+    let bundle = watch_the_bundle(&daemon, &options.socket);
     Ok(Running {
         daemon,
         listener: Arc::new(listener),
+        _bundle: bundle,
     })
 }
 
+/// Starts watching the daemon's own executable and bundle, when it runs out
+/// of one (spec section 9.5).
+fn watch_the_bundle(daemon: &Arc<Daemon>, socket: &std::path::Path) -> Option<BundleWatch> {
+    let Some(own) = Own::this_process() else {
+        say!("not running out of an app bundle, so no bundle is watched");
+        return None;
+    };
+    say!("watching its own bundle at {}", own.bundle.display());
+    let daemon = Arc::clone(daemon);
+    let socket = socket.to_path_buf();
+    let bundle = own.bundle.clone();
+    Some(bundle_watch::watch(
+        own,
+        bundle_watch::GRACE,
+        bundle_watch::BACKSTOP,
+        move |change| leave(&daemon, change, &bundle, &socket),
+    ))
+}
+
+/// Exits because the bundle changed, once the work in hand is finished.
+///
+/// Replaced exits with [`bundle_watch::EXIT_REPLACED`], which `KeepAlive`
+/// answers by starting the binary that is there now; gone exits with zero,
+/// which it answers by leaving the daemon down.
+fn leave(daemon: &Daemon, change: Change, bundle: &std::path::Path, socket: &std::path::Path) {
+    let code = match change {
+        Change::Same => return,
+        Change::Replaced => {
+            say!(
+                "the bundle at {} was replaced: finishing the work in hand, then exiting so the new binary starts",
+                bundle.display()
+            );
+            i32::from(bundle_watch::EXIT_REPLACED)
+        }
+        Change::Gone => {
+            say!(
+                "the bundle at {} is gone: finishing the work in hand, then exiting for good",
+                bundle.display()
+            );
+            0
+        }
+    };
+    daemon.finish_the_work_in_hand();
+    let _ = std::fs::remove_file(socket);
+    say!("exiting with status {code}");
+    std::process::exit(code);
+}
+
 /// Runs the daemon until the process is stopped.
+///
+/// It never answers with success: the only successful exit is the one a
+/// daemon whose bundle is gone makes, because success is what keeps the
+/// launch agent down. A socket that stopped answering is a failure, and
+/// `KeepAlive` starts the daemon again.
 pub fn run(options: &Options) -> Result<(), Box<dyn Error>> {
     start(options)?.serve_forever();
-    Ok(())
+    Err("the socket stopped answering".into())
 }
 
 #[cfg(test)]

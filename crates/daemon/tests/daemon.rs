@@ -26,7 +26,7 @@ use agentsweep_daemon::Tuning;
 use agentsweep_daemon::due::{self, Schedule, Stated};
 use agentsweep_daemon::full_scan::{self, Unwatched};
 use agentsweep_daemon::machine::Machine;
-use agentsweep_daemon::options::{KeySourceChoice, Options};
+use agentsweep_daemon::options::{KeySourceChoice, LogChoice, Options};
 use agentsweep_daemon::service::{self, Background, Daemon};
 use agentsweep_daemon::watcher::{Batch, Decision, Escalation, PATHS_PER_BATCH, Timings};
 use agentsweep_ipc::peer::{Nobody, Peer, PeerCheck, SameUser, this_user};
@@ -147,6 +147,7 @@ impl Sandbox {
             socket: self.socket(),
             home: Some(home),
             key_source: KeySourceChoice::Memory,
+            log: LogChoice::Stderr,
         }
     }
 
@@ -539,6 +540,10 @@ fn a_subscriber_is_told_when_a_scan_starts_gets_on_and_finishes() {
                 assert!(!line.is_empty());
                 seen.push("activity".to_string());
             }
+            Some(StateEvent::HealthChanged { health }) => {
+                assert!(!health.protection.is_off());
+                seen.push("health-changed".to_string());
+            }
             None => panic!("the stream ended before the Scan did"),
         }
     }
@@ -548,6 +553,50 @@ fn a_subscriber_is_told_when_a_scan_starts_gets_on_and_finishes() {
     let summary = finished.expect("a finished Scan");
     assert_eq!(summary.trigger, Trigger::ScanNow);
     assert!(summary.items >= 1);
+}
+
+/// The stream opens with the Health as it stands and carries it again every
+/// time it moves, which is what the popover renders from (spec section 6.3).
+#[test]
+fn a_subscriber_is_told_the_health_first_and_again_when_it_moves() {
+    let sandbox = Sandbox::with_a_planted_skill("health-changed");
+    let daemon = sandbox.start();
+
+    let listener = Client::connect_at(&daemon.socket(), Role::App).expect("a connected client");
+    let mut stream = listener.subscribe().expect("a subscription");
+    match stream.next_event().expect("an event") {
+        Some(StateEvent::HealthChanged { health }) => {
+            assert!(!health.protection.is_off());
+            assert!(health.last_full_scan.is_some(), "the first Full Scan ran");
+        }
+        other => panic!("the stream opens with the Health, not {other:?}"),
+    }
+
+    let mut asking = Client::connect_at(&daemon.socket(), Role::Cli).expect("a second client");
+    asking.scan_now().expect("a Full Scan");
+
+    let mut scanning = false;
+    let mut settled = false;
+    let began = std::time::Instant::now();
+    while !settled {
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(120),
+            "the Health never settled"
+        );
+        match stream.next_event().expect("an event") {
+            Some(StateEvent::HealthChanged { health }) if health.scanning => scanning = true,
+            Some(StateEvent::HealthChanged { health }) if scanning => {
+                assert!(
+                    health.headline().starts_with("All clear"),
+                    "{}",
+                    health.headline()
+                );
+                settled = true;
+            }
+            Some(_) => {}
+            None => panic!("the stream ended before the Health settled"),
+        }
+    }
 }
 
 /// One Scan at a time: a second "Scan now" while one is running joins it

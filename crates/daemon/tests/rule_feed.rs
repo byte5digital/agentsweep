@@ -30,7 +30,7 @@ use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::state::{RecordedFinding, Trigger};
 use agentsweep_daemon::Tuning;
 use agentsweep_daemon::due::Schedule;
-use agentsweep_daemon::options::{KeySourceChoice, Options};
+use agentsweep_daemon::options::{KeySourceChoice, LogChoice, Options};
 use agentsweep_daemon::rule_feed::{Endpoints, FeedTuning, user_agent};
 use agentsweep_daemon::service::{self, Background, Daemon, FeedOutcome};
 use agentsweep_daemon::watcher::Timings;
@@ -448,6 +448,7 @@ impl Sandbox {
             socket: self.socket.clone(),
             home: Some(self.home.clone()),
             key_source: KeySourceChoice::Memory,
+            log: LogChoice::Stderr,
         }
     }
 

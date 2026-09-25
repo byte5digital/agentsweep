@@ -440,6 +440,14 @@ pub enum StateEvent {
         /// The line, free of content and of sensitive values.
         line: String,
     },
+    /// Health moved: a Scan started or ended, a chain was verified, the Rule
+    /// Feed or the pack in force changed, or an action settled a Finding. It
+    /// carries the whole struct, so a subscriber renders the sentence without
+    /// asking for the status again (spec section 6.3).
+    HealthChanged {
+        /// Every state the machine is in now.
+        health: Box<Health>,
+    },
 }
 
 impl StateEvent {
@@ -451,6 +459,7 @@ impl StateEvent {
             StateEvent::ScanFinished { .. } => "scan-finished",
             StateEvent::FindingChanged { .. } => "finding-changed",
             StateEvent::Activity { .. } => "activity",
+            StateEvent::HealthChanged { .. } => "health-changed",
         }
     }
 }
@@ -1207,6 +1216,9 @@ impl Message {
                     StateEvent::Activity { line } => {
                         map.insert("line".to_string(), Value::from(line.as_str()));
                     }
+                    StateEvent::HealthChanged { health } => {
+                        map.insert("health".to_string(), health_to_value(health));
+                    }
                 }
             }
         }
@@ -1274,6 +1286,9 @@ impl Message {
                     },
                     "activity" => StateEvent::Activity {
                         line: text("line")?.to_string(),
+                    },
+                    "health-changed" => StateEvent::HealthChanged {
+                        health: Box::new(health_from_value(value.get("health")?)?),
                     },
                     _ => return None,
                 }))
@@ -1393,6 +1408,13 @@ mod tests {
         }));
         round_trip(Message::Event(StateEvent::Activity {
             line: "Rule Pack 2 accepted".to_string(),
+        }));
+        round_trip(Message::Event(StateEvent::HealthChanged {
+            health: Box::new(Health {
+                scanning: true,
+                open_findings: 2,
+                ..Health::running()
+            }),
         }));
     }
 

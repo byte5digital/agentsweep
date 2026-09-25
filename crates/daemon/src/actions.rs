@@ -1041,6 +1041,7 @@ impl Daemon {
         for (id, state) in changed {
             self.publish(StateEvent::FindingChanged { id, state });
         }
+        self.tell_health();
     }
 
     /// The answer to an action that acted on one Finding.

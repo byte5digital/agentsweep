@@ -30,21 +30,45 @@ fn main() -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        Invocation::Run(options) => match agentsweep_daemon::run(&options) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("agentsweepd: {error}");
-                ExitCode::FAILURE
+        Invocation::Run(options) => {
+            if let Err(error) = start_the_log(&options) {
+                eprintln!("agentsweepd: the log could not be started: {error}");
             }
-        },
-        Invocation::Budgets(options) => match agentsweep_daemon::budgets::measure(&options) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("agentsweepd: {error}");
-                ExitCode::FAILURE
+            match agentsweep_daemon::run(&options) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    tracing::error!("{error}");
+                    eprintln!("agentsweepd: {error}");
+                    ExitCode::FAILURE
+                }
             }
-        },
+        }
+        Invocation::Budgets(options) => {
+            // A measurement prints to the terminal and never adds to the log.
+            let _ = agentsweep_daemon::log::start(None);
+            match agentsweep_daemon::budgets::measure(&options) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("agentsweepd: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
     }
+}
+
+/// Starts the log where this run writes it: the rotated file under the home's
+/// `Library/Logs/AgentSweep` for the installed daemon, the terminal for a
+/// developer run.
+fn start_the_log(options: &agentsweep_daemon::Options) -> std::io::Result<()> {
+    if !options.writes_the_log_file() {
+        return agentsweep_daemon::log::start(None);
+    }
+    let home = std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| std::io::Error::other("there is no home directory"))?;
+    agentsweep_daemon::log::start(Some(&agentsweep_daemon::log::log_directory(&home)))
 }
 
 #[cfg(test)]

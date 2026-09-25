@@ -40,6 +40,12 @@ libc = "0.2.180"
 # is not what an event debouncer does per path.
 notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
 serde_json = "1.0.151"
+# The log (spec section 6.9): `tracing` to a file under ~/Library/Logs/AgentSweep
+# that AgentSweep rotates itself at five files of five megabytes, or to the
+# terminal for a developer run. No colours and no `log` bridge: the formatter
+# and nothing else.
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
 # The Rule Feed fetch, the one outbound request the daemon makes (spec section
 # 1.1). The client and configuration the pack build already uses: rustls, no
 # compression, no cookies.

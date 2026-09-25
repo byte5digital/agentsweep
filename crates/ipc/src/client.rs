@@ -121,9 +121,15 @@ impl Client {
     }
 
     /// Asks for a Full Scan and returns once it has been taken on, not once it
-    /// has finished. A Scan that is already running is joined.
-    pub fn scan_now(&mut self) -> Result<(), ClientError> {
-        self.ask(Request::ScanNow).map(|_| ())
+    /// has finished. A Full Scan that is already running or waiting is joined,
+    /// which the answer says: true when this request started one, false when
+    /// it joined one.
+    pub fn scan_now(&mut self) -> Result<bool, ClientError> {
+        let answer = self.ask(Request::ScanNow)?;
+        answer
+            .get("started")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| ClientError::Unexpected("the answer could not be read".to_string()))
     }
 
     /// Takes the Item of one Threat Finding out of its Surface. The target is

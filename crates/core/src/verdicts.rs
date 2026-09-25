@@ -27,7 +27,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::envelope::{Timestamp, canonical, hex_to_bytes, hmac_sha256_hex, hmac_sha256_verify};
+// Sealing is the daemon's alone; any process may verify.
+#[cfg(feature = "daemon")]
+use crate::envelope::hmac_sha256_hex;
+use crate::envelope::{Timestamp, canonical, hex_to_bytes, hmac_sha256_verify};
 use crate::keychain::{ChainKey, KeyError, KeySource};
 use crate::paths::DataDirectory;
 

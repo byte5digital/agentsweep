@@ -121,6 +121,7 @@ rm -rf ~/Library/Application\ Support/de.byte5.agentsweep ~/Library/Logs/AgentSw
 rm -rf ~/Library/Caches/de.byte5.agentsweep ~/Library/WebKit/de.byte5.agentsweep
 rm -rf ~/Library/Caches/agentsweep-menubar ~/Library/WebKit/agentsweep-menubar   # left by a run of the bare binary
 rm -f "$TMPDIR"de.byte5.agentsweep.sock
+rm -rf "$TMPDIR"de.byte5.agentsweep "$TMPDIR"agentsweep-menubar   # the webview's scratch folders
 security delete-generic-password -s de.byte5.agentsweep.daemon -a chain-key
 ```
 

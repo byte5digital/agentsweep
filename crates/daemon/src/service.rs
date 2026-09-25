@@ -192,6 +192,11 @@ pub struct Daemon {
     fetching: Mutex<()>,
     /// True while a fetch is waiting out its jitter or running.
     fetch_pending: AtomicBool,
+    /// Held by whatever decides which pack is in force from the toggle: the
+    /// toggle itself, and a fetch putting what it accepted in force. Without
+    /// it a fetch that read the toggle on could put its pack in force just
+    /// after the user switched the feed off.
+    switching: Mutex<()>,
     /// The Tier outcomes this daemon has already produced. In memory only,
     /// empty at start, thrown away when a Rule Pack is accepted.
     cache: Arc<EvaluationCache>,
@@ -338,6 +343,7 @@ impl Daemon {
             feed,
             fetching: Mutex::new(()),
             fetch_pending: AtomicBool::new(false),
+            switching: Mutex::new(()),
             cache: Arc::new(EvaluationCache::new()),
             roots: Mutex::new(Vec::new()),
             watch: Mutex::new(None),
@@ -1040,6 +1046,7 @@ impl Daemon {
     /// switching the feed on again puts it back in force without a request.
     /// On asks the feed at once, after the jitter.
     pub fn set_rule_feed(self: &Arc<Daemon>, enabled: bool) -> bool {
+        let _switching = self.switching.lock().expect("the switch is not poisoned");
         {
             let mut state = self.state.lock().expect("the state is not poisoned");
             state.feed.enabled = enabled;
@@ -1229,7 +1236,13 @@ impl Daemon {
         }
 
         say!("the Rule Feed at {host}: {outcome:?}");
-        if let Some(pack) = accepted {
+        // The toggle may have gone off while the request was on the wire. The
+        // pack stays stored for the day it goes on again; off means the
+        // bundled pack only.
+        let _switching = self.switching.lock().expect("the switch is not poisoned");
+        if let Some(pack) = accepted
+            && self.rule_feed_enabled()
+        {
             self.adopt(Arc::new(*pack));
         }
         outcome

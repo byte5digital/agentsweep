@@ -26,6 +26,9 @@ agentsweep-adapter-workspace.workspace = true
 # touches the Keychain (spec section 6.2).
 agentsweep-core = { workspace = true, features = ["daemon"] }
 agentsweep-ipc.workspace = true
+# The jitter of the Rule Feed fetch: up to an hour, drawn from the operating
+# system's generator, so a fleet of clients does not ask in the same minute.
+getrandom = "0.4.3"
 # Whether the process a Claude Code session file names is still running: a
 # `kill` with signal zero, which sends nothing. Never a process listing, never
 # a program run (spec section 5.3).
@@ -37,6 +40,10 @@ libc = "0.2.180"
 # is not what an event debouncer does per path.
 notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
 serde_json = "1.0.151"
+# The Rule Feed fetch, the one outbound request the daemon makes (spec section
+# 1.1). The client and configuration the pack build already uses: rustls, no
+# compression, no cookies.
+ureq ={ version = "3.4.2", default-features = false, features = ["rustls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The peer check of ADR 0008: whether the process on the other end of the
@@ -52,4 +59,7 @@ security-framework-sys = "2.17.0"
 # real home.
 agentsweep-adapter-conformance = { version = "0.1.0", path = "../adapter-conformance" }
 agentsweep-adapter-workspace = { workspace = true, features = ["testing"] }
+# Signs the test Rule Packs a fixture Rule Feed serves, with the development
+# keys the binary pins until the real key pairs exist.
+agentsweep-core = { workspace = true, features = ["daemon", "development-keys"] }
 tempfile = "3.27.0"

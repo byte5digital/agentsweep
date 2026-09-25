@@ -14,12 +14,23 @@ authors.workspace = true
 [dependencies]
 getrandom = "0.4.3"
 hmac = "0.13.0"
+# The signing half of minisign, for the development key pairs alone. Only the
+# `development-keys` feature pulls it in, and only a test build asks for that:
+# a shipped binary verifies Rule Packs and never signs one.
+minisign = { version = "0.10.0", optional = true }
+# Verifies the detached signature of a fetched Rule Pack's manifest against the
+# keys pinned in the binary, offline (spec section 9.4). MIT, no dependencies.
+minisign-verify = "0.3.0"
 # `preserve_order` is what makes the JSON writer of `entry_edit` order
 # preserving, and it is asked for here rather than inherited from another
 # crate's feature: a config file both Agents write is rewritten key for key in
 # the order it was written in.
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 sha2 = "0.11.0"
+# Reads and writes the archive a Rule Pack travels in from the Rule Feed. Only
+# the format: no extended attributes, and the crate unpacks nothing itself,
+# because every entry is checked against the signed manifest first.
+tar = { version = "0.4.46", default-features = false }
 # The format-preserving TOML editor behind RemoveEntry on a Codex config layer.
 # Only the editor: reading a layer is the Codex adapter's `toml` parser.
 toml_edit = { version = "0.25.15", features = ["display", "parse"] }
@@ -36,9 +47,14 @@ security-framework = { version = "3.7.0", default-features = false, optional = t
 # CLI can compile a call that appends to the Event Log or the Baseline, or that
 # reads the login Keychain (spec section 6.2).
 daemon = ["dep:security-framework"]
+# Signs with the development key pairs of the Rule Feed. For tests alone: the
+# real key pairs do not exist yet (spec section 9.8), and a shipped binary
+# never signs anything.
+development-keys = ["dep:minisign"]
 
 [dev-dependencies]
 # The core's own tests cover the write side, so a test build turns the daemon
-# feature on for the core itself. Nothing here reaches a shipped binary.
-agentsweep-core = { path = ".", features = ["daemon"] }
+# feature on for the core itself, and signs its test packs with the development
+# keys. Nothing here reaches a shipped binary.
+agentsweep-core = { path = ".", features = ["daemon", "development-keys"] }
 tempfile = "3.27.0"

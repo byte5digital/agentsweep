@@ -8,7 +8,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use agentsweep_core::pack::Manifest;
+use agentsweep_core::pack::{Manifest, STATEMENT_FILE};
+use agentsweep_core::pack_archive::{self, ARCHIVE_FILE};
 use agentsweep_core::rules::RulePack;
 use agentsweep_xtask::{benign, corpus, iocs, repo_root};
 
@@ -23,11 +24,17 @@ agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
                                 the manifest instead of holding the fetch to it
     render-iocs [--check]       render the Indicator Lists into rules 0900 to 0903,
                                 or with --check only report a stale rendering
-    pack [options]              write a Rule Pack manifest
+    pack [options]              write a Rule Pack release: manifest.json, which the
+                                release workflow signs with minisign, one detached
+                                <KEY ID>.minisig per key, and pack.tar with both trees
         --pack-version <n>      the pack version, a monotonic integer
         --minimum-engine <v>    the lowest engine version that may load it
-        --out <dir>             where the manifest lands
+        --released-at <t>       the release moment, RFC 3339 (default now, UTC)
+        --out <dir>             where the release lands
                                 (default target/agentsweep-pack)
+        --statement             instead, write the bundled pack's own statement,
+                                pack.json at the repository root, with the options
+                                above and no file hashes
 ";
 
 fn main() -> ExitCode {
@@ -183,15 +190,23 @@ fn render_iocs(check: bool) -> Result<String, String> {
     Ok(format!("rendered {}\n", written.join(", ")))
 }
 
-/// Writes a Rule Pack manifest for the corpus as it stands. What the pack says
-/// about itself, thresholds included, comes from the committed `pack.json`;
-/// the options below override it for a release that needs something else.
+/// Writes a Rule Pack release for the corpus as it stands: the manifest and
+/// the archive of both trees, which the release workflow signs and uploads
+/// (spec section 9.4). What the pack says about itself, thresholds included,
+/// comes from the committed `pack.json`; the options below override it for a
+/// release that needs something else.
+///
+/// With `--statement` it writes `pack.json` itself instead: the bundled pack's
+/// statement, which lists no hashes because the bundled pack travels inside
+/// the binary and the code signature stands behind it.
 fn build_pack(arguments: &[String]) -> Result<String, String> {
     let root = repo_root();
     let stated = Manifest::bundled();
     let mut pack_version = stated.pack_version;
     let mut minimum_engine = stated.minimum_engine_version.clone();
+    let mut released_at: Option<String> = None;
     let mut out = root.join("target").join("agentsweep-pack");
+    let mut statement = false;
 
     let mut rest = arguments.iter();
     while let Some(argument) = rest.next() {
@@ -207,22 +222,58 @@ fn build_pack(arguments: &[String]) -> Result<String, String> {
                     .map_err(|_| "the pack version is a monotonic integer\n".to_string())?;
             }
             "--minimum-engine" => minimum_engine = value()?,
+            "--released-at" => released_at = Some(value()?),
             "--out" => out = PathBuf::from(value()?),
+            "--statement" => statement = true,
             other => return Err(format!("`{other}` is not an option of pack\n\n{USAGE}")),
         }
     }
+    let released_at = released_at.unwrap_or_else(now_rfc3339);
 
-    let manifest = Manifest::of_pack(&root, pack_version, &minimum_engine, stated.bands)
-        .map_err(|error| format!("{error}\n"))?;
+    let mut manifest = Manifest::of_pack(
+        &root,
+        pack_version,
+        &minimum_engine,
+        stated.bands,
+        &released_at,
+    )
+    .map_err(|error| format!("{error}\n"))?;
+
+    if statement {
+        manifest.files.clear();
+        let path = root.join(STATEMENT_FILE);
+        fs::write(&path, manifest.to_json())
+            .map_err(|error| format!("{}: {error}\n", path.display()))?;
+        return Ok(format!(
+            "the bundled pack states version {}, engine {} and up, released {}\n{}\n",
+            manifest.pack_version,
+            manifest.minimum_engine_version,
+            manifest.released_at,
+            path.display()
+        ));
+    }
+
     fs::create_dir_all(&out).map_err(|error| format!("{}: {error}\n", out.display()))?;
     let path = manifest.write(&out).map_err(|error| format!("{error}\n"))?;
+    let archive = pack_archive::write(&root, &manifest).map_err(|error| format!("{error}\n"))?;
+    let archive_path = out.join(ARCHIVE_FILE);
+    fs::write(&archive_path, archive)
+        .map_err(|error| format!("{}: {error}\n", archive_path.display()))?;
     Ok(format!(
-        "pack {} for engine {} and up, {} files, bands {} and {}\n{}\n",
+        "pack {} for engine {} and up, released {}, {} files, bands {} and {}\n{}\n{}\n",
         manifest.pack_version,
         manifest.minimum_engine_version,
+        manifest.released_at,
         manifest.files.len(),
         manifest.bands.ambiguous_at,
         manifest.bands.suspicious_at,
-        path.display()
+        path.display(),
+        archive_path.display()
     ))
+}
+
+/// The moment this runs, in RFC 3339 to the second, UTC.
+fn now_rfc3339() -> String {
+    let moment = agentsweep_core::envelope::Timestamp::now().to_string();
+    format!("{}Z", &moment[..19])
 }

@@ -523,6 +523,7 @@ mod tests {
         let pack = a_pack();
         let retuned = Manifest::parse(
             r#"{"pack_version":2,"minimum_engine_version":"0.1.0",
+                "released_at":"2026-09-25T08:00:00Z",
                 "heuristics":{"ambiguous_at":1,"suspicious_at":2},"files":{}}"#,
         )
         .expect("the retuned manifest reads back")
@@ -535,6 +536,7 @@ mod tests {
 
         let quiet = Manifest::parse(
             r#"{"pack_version":3,"minimum_engine_version":"0.1.0",
+                "released_at":"2026-09-25T08:00:00Z",
                 "heuristics":{"ambiguous_at":6,"suspicious_at":9},"files":{}}"#,
         )
         .expect("the quiet manifest reads back")

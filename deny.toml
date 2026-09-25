@@ -63,11 +63,11 @@ allow = [
 confidence-threshold = 0.93
 exceptions = [
     # The Mozilla root certificate bundle, carried by the HTTPS client that
-    # fetches the benign corpus in CI. CDLA-Permissive-2.0 is a permissive data
-    # licence with no copyleft and no attribution requirement on a binary, and
-    # the bundle is data rather than code. It reaches nothing a user installs:
-    # the client is a dependency of `agentsweep-xtask`, which is `publish =
-    # false` and is never built into the app, the daemon or the CLI.
+    # fetches the benign corpus in CI and, in the daemon, the Rule Feed (spec
+    # section 9.4). CDLA-Permissive-2.0 is a permissive data licence with no
+    # copyleft and no attribution requirement on a binary, and the bundle is
+    # data rather than code. Since the Rule Feed it reaches the daemon a user
+    # installs; it never reaches the app or the CLI.
     { name = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
     # The watcher. CC0-1.0 is a dedication to the public domain, so it obliges
     # a binary to carry neither a notice nor a copyright line and asks strictly

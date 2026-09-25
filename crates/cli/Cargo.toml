@@ -3,6 +3,16 @@ name = "agentsweep"
 description = "Scans the local configuration surfaces of Claude Code and Codex and quarantines what a deterministic rule proves bad."
 # The CLI is the crate that goes to crates.io at the first tagged release, as an
 # on-demand scanner. It stays publishable on purpose.
+#
+# One binary name, two builds (ADR 0008):
+# - The in-bundle build, feature `bundle`, on by default. It is what the
+#   AgentSweep app ships in its bundle: a client of the daemon (`status`, the
+#   action commands, `rule-feed` and a bare `scan`, which asks the daemon for a
+#   Full Scan), and it runs `scan <dir>` in-process as well.
+# - The crates.io build, `--no-default-features`. It runs `scan <dir>` in-process
+#   and nothing else. It has no code path to the daemon at all: the IPC crate
+#   is not even linked, because the daemon answers only the signed tools of its
+#   own bundle and a `cargo install`ed binary is not one of them.
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,14 +24,21 @@ authors.workspace = true
 name = "agentsweep"
 path = "src/main.rs"
 
+[features]
+default = ["bundle"]
+# The in-bundle build: the daemon client. Everything that reaches the daemon is
+# behind it, and so is the IPC crate.
+bundle = ["dep:agentsweep-ipc"]
+
 [dependencies]
 agentsweep-adapter-claude-code.workspace = true
 agentsweep-adapter-codex.workspace = true
 agentsweep-adapter-workspace.workspace = true
 agentsweep-core.workspace = true
 # The vocabulary the daemon speaks. It is not the daemon: this crate links the
-# protocol and the client, never the write side of a store (ADR 0008).
-agentsweep-ipc.workspace = true
+# protocol and the client, never the write side of a store (ADR 0008). Only the
+# in-bundle build links it.
+agentsweep-ipc = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The repository the Folder Scan tests point at is written by this builder,

@@ -29,7 +29,10 @@ pub fn status(socket: Option<&Path>) -> (String, u8) {
     let mut client = match connected {
         Ok(client) => client,
         Err(error) if error.is_unreachable() => {
-            return (render(&Status::unreachable(&error.unreachable())), 1);
+            return (
+                render(&Status::unreachable(&error.unreachable())),
+                crate::actions::UNREACHABLE,
+            );
         }
         Err(error) => return (format!("AgentSweep could not be asked: {error}\n"), 2),
     };
@@ -168,7 +171,7 @@ fn name_of(item_id: &str) -> String {
 }
 
 /// The last Scan, on one line.
-fn scan_line(scan: &ScanSummary) -> String {
+pub fn scan_line(scan: &ScanSummary) -> String {
     format!(
         "Last {} Scan ({}) at {}: {}, {}, {} in the Ambiguous Band, {} ms, Rule Pack {}.",
         scan.kind,
@@ -191,7 +194,7 @@ fn probation(finding: &RecordedFinding) -> &'static str {
     }
 }
 
-fn count(n: usize, one: &str, many: &str) -> String {
+pub fn count(n: usize, one: &str, many: &str) -> String {
     match n {
         0 => format!("no {many}"),
         1 => format!("1 {one}"),
@@ -414,7 +417,7 @@ mod tests {
     /// The whole command, against a socket nothing is listening on. It never
     /// touches the documented socket, because the path is named.
     #[test]
-    fn the_command_reads_protection_off_and_exits_one_when_no_daemon_answers() {
+    fn the_command_reads_protection_off_and_exits_three_when_no_daemon_answers() {
         let nowhere = std::env::temp_dir().join(format!(
             "agentsweep-status-nobody-{}.sock",
             std::process::id()
@@ -422,7 +425,7 @@ mod tests {
         let _ = std::fs::remove_file(&nowhere);
         let (rendered, code) = status(Some(&nowhere));
         assert!(rendered.starts_with("Protection is off."), "{rendered}");
-        assert_eq!(code, 1);
+        assert_eq!(code, crate::actions::UNREACHABLE);
     }
 
     #[test]

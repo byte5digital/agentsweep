@@ -994,6 +994,13 @@ impl Daemon {
                 };
                 Ok(serde_json::json!({ "enabled": enabled }))
             }
+            Request::Sessions => Ok(crate::sessions::detect(self.machine.home()).to_value()),
+            // Runs here, on this connection's thread, beside any other Scan,
+            // and records nothing.
+            Request::Folder { path } => {
+                let pack = self.pack_in_force();
+                crate::folder_scan::folder_scan(&pack.rules, path).map(|result| result.to_value())
+            }
             // Everything else acts, and is carried out where acting lives.
             _ => self.act(request),
         }

@@ -30,6 +30,7 @@ use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::ScanKind;
 use agentsweep_core::state::Trigger;
 
+use crate::actions::Acting;
 use crate::full_scan::{Covering, Judgement, ScanError, ScanRun, pool, survey};
 use crate::machine::{Machine, adapters};
 use crate::watcher::Batch;
@@ -54,6 +55,8 @@ pub struct ChangeScan<'a> {
     pub cache: &'a dyn Evaluations,
     /// How many worker threads run the Tiers.
     pub workers: usize,
+    /// Whether the Scan may act by itself, as a Full Scan may.
+    pub acts: bool,
 }
 
 impl ChangeScan<'_> {
@@ -133,6 +136,10 @@ impl ChangeScan<'_> {
             .iter()
             .map(|adapter| *adapter.descriptor())
             .collect();
+        let acting = Acting {
+            machine: self.machine,
+            roots: &touched,
+        };
         let judged = Judgement {
             kind: ScanKind::Change,
             directory: self.directory,
@@ -145,6 +152,7 @@ impl ChangeScan<'_> {
             at: started_at,
             cache: self.cache,
             workers: self.workers,
+            acting: self.acts.then_some(&acting),
         }
         .over(&mut survey.enumeration, began)?;
 
@@ -161,6 +169,8 @@ impl ChangeScan<'_> {
             events: judged.events,
             baseline: judged.baseline,
             last_compaction: judged.last_compaction,
+            acted: judged.acted,
+            fixed_versions: judged.fixed_versions,
         }))
     }
 }

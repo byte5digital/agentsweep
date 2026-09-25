@@ -66,6 +66,8 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
         cache: &cache,
         workers: BACKGROUND_WORKERS,
         progress: &Unwatched,
+        // A measurement reads the machine and never acts on it.
+        acts: false,
     };
     let cold = scan.run(Trigger::DaemonStart)?;
     cache.sweep();
@@ -117,6 +119,7 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
         pooled: &warm.roots,
         cache: &cache,
         workers: BACKGROUND_WORKERS,
+        acts: false,
     }
     .run(&Batch::of([registry]))?;
     match change {

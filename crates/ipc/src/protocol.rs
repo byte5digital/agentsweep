@@ -4,9 +4,12 @@
 //! It is a closed list on purpose. The daemon holds the machine's file access,
 //! the Keychain key behind both chains and the only write path into the
 //! quarantine store, so what a peer may ask for is enumerated here rather than
-//! left to whatever a caller can spell (ADR 0008). No request takes a path in
-//! this milestone at all; the two that will, a Folder Scan and revealing a
-//! Receipt, arrive with theirs.
+//! left to whatever a caller can spell (ADR 0008). Every action addresses a
+//! Finding, an Item or a Receipt by its id, which the daemon resolves against
+//! what it knows; an id it does not know is a clean refusal. The only request
+//! that takes a path is revealing a Receipt, and the Folder Scan will be the
+//! second when it arrives: [`Request::takes_a_path`] says so, and a message
+//! that carries a path on any other request is not a message at all.
 //!
 //! Every message is one JSON object with a `type`. The types are laid out here
 //! and nowhere else, so the daemon, the application and the command line
@@ -19,8 +22,11 @@ use serde_json::{Map, Value};
 
 use agentsweep_core::chain::{BreakReason, ChainState};
 use agentsweep_core::envelope::Timestamp;
-use agentsweep_core::finding::FindingId;
+use agentsweep_core::eventlog::{Actor, Outcome, Primitive, ReceiptStep, SessionsRunning};
+use agentsweep_core::finding::{Category, FindingId, FindingState};
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
+use agentsweep_core::item::{ItemId, Kind};
+use agentsweep_core::quarantine::Conflict;
 use agentsweep_core::state::{RecordedFinding, ScanSummary, Trigger};
 
 /// Which peer is speaking. The daemon answers both the same way in this
@@ -149,8 +155,13 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// What a peer may ask the daemon for. The closed list of this milestone.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// What a peer may ask the daemon for. The closed list.
+///
+/// A target is the id of a Finding, an Item or a Receipt, as the status and
+/// the Activity print them. It is a string on the wire and nothing else: the
+/// daemon looks it up among what it knows and never treats it as a place on
+/// disk.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Request {
     /// Health, the last Scan summary and the Findings that stand.
     Status,
@@ -159,32 +170,184 @@ pub enum Request {
     ScanNow,
     /// Send every state event from now until the connection closes.
     Subscribe,
+    /// Take the Item of one Threat Finding out of its Surface, by the
+    /// primitive table of spec section 5.2. A manual Quarantine: any Tier, any
+    /// Threat, never a Managed Item.
+    Quarantine {
+        /// A Finding id, or the id of an Item with one open Threat Finding.
+        target: String,
+    },
+    /// Put a quarantined Item back by replaying its Receipt in reverse. What
+    /// AgentSweep took out by itself comes back with Trust for that exact
+    /// content (spec section 5.4).
+    Restore {
+        /// A Receipt id, or a Finding or Item id that one Receipt stopped.
+        target: String,
+        /// What to do when the original place holds something else now.
+        conflict: Conflict,
+    },
+    /// Record that the content of one Finding's Item is safe, bound to its
+    /// hash and kind ("Trust this version", "Keep it as it is").
+    Trust {
+        /// A Finding id, or the id of an Item with open Findings.
+        target: String,
+    },
+    /// Answer a Drift Finding with "that was me": the accepted hash moves to
+    /// the content as it is now and nothing else (spec section 4.6.5).
+    Acknowledge {
+        /// A Drift Finding id, or the id of an Item with an open one.
+        target: String,
+    },
+    /// The one-click fix of Exposures 0018 and 0019: the entry is taken out
+    /// of its settings file, restorably (spec section 8.5).
+    Fix {
+        /// The Exposure Finding's id, or its Item's.
+        target: String,
+    },
+    /// Switch a quarantined plugin back on for its newer, clean version,
+    /// reversing only the native disable (spec section 5.4).
+    ReEnable {
+        /// A Receipt id, or the stopped plugin Finding's or Item's id.
+        target: String,
+    },
+    /// Every Receipt in the quarantine store with the path its Item was taken
+    /// from, or only those taken from at or below one path. The one request of
+    /// this list that takes a path (ADR 0008).
+    RevealReceipt {
+        /// The original place to look for, absent for every Receipt.
+        path: Option<String>,
+    },
 }
 
 impl Request {
-    /// Every request.
-    pub const ALL: [Request; 3] = [Request::Status, Request::ScanNow, Request::Subscribe];
+    /// The spelling of every request.
+    pub const NAMES: [&'static str; 10] = [
+        "status",
+        "scan-now",
+        "subscribe",
+        "quarantine",
+        "restore",
+        "trust",
+        "acknowledge",
+        "fix",
+        "re-enable",
+        "reveal-receipt",
+    ];
 
     /// The spelling a request carries.
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Request::Status => "status",
             Request::ScanNow => "scan-now",
             Request::Subscribe => "subscribe",
+            Request::Quarantine { .. } => "quarantine",
+            Request::Restore { .. } => "restore",
+            Request::Trust { .. } => "trust",
+            Request::Acknowledge { .. } => "acknowledge",
+            Request::Fix { .. } => "fix",
+            Request::ReEnable { .. } => "re-enable",
+            Request::RevealReceipt { .. } => "reveal-receipt",
         }
     }
 
-    /// Reads back that spelling.
-    pub fn parse(text: &str) -> Option<Request> {
-        Request::ALL
-            .into_iter()
-            .find(|request| request.as_str() == text)
+    /// True for the requests that may carry a path. Every other one addresses
+    /// ids only (ADR 0008).
+    pub fn takes_a_path(name: &str) -> bool {
+        name == "reveal-receipt"
+    }
+
+    /// The id the request addresses, where it addresses one.
+    pub fn target(&self) -> Option<&str> {
+        match self {
+            Request::Quarantine { target }
+            | Request::Restore { target, .. }
+            | Request::Trust { target }
+            | Request::Acknowledge { target }
+            | Request::Fix { target }
+            | Request::ReEnable { target } => Some(target),
+            _ => None,
+        }
+    }
+
+    /// The request's fields, beside its name.
+    fn write_into(&self, map: &mut Map<String, Value>) {
+        map.insert("request".to_string(), Value::from(self.as_str()));
+        if let Some(target) = self.target() {
+            map.insert("target".to_string(), Value::from(target));
+        }
+        match self {
+            Request::Restore { conflict, .. } => {
+                map.insert(
+                    "conflict".to_string(),
+                    Value::from(conflict_name(*conflict)),
+                );
+            }
+            Request::RevealReceipt { path: Some(path) } => {
+                map.insert("path".to_string(), Value::from(path.as_str()));
+            }
+            _ => {}
+        }
+    }
+
+    /// Reads one request back out of a message, or nothing when it is not
+    /// one of the closed list: an unknown name, a missing target, or a path on
+    /// a request that takes none.
+    fn read_from(value: &Value) -> Option<Request> {
+        let text = |field: &str| value.get(field).and_then(Value::as_str);
+        let name = text("request")?;
+        if value.get("path").is_some() && !Request::takes_a_path(name) {
+            return None;
+        }
+        let target = || text("target").map(str::to_string);
+        Some(match name {
+            "status" => Request::Status,
+            "scan-now" => Request::ScanNow,
+            "subscribe" => Request::Subscribe,
+            "quarantine" => Request::Quarantine { target: target()? },
+            "restore" => Request::Restore {
+                target: target()?,
+                conflict: match text("conflict") {
+                    None => Conflict::Refuse,
+                    Some(name) => parse_conflict(name)?,
+                },
+            },
+            "trust" => Request::Trust { target: target()? },
+            "acknowledge" => Request::Acknowledge { target: target()? },
+            "fix" => Request::Fix { target: target()? },
+            "re-enable" => Request::ReEnable { target: target()? },
+            "reveal-receipt" => Request::RevealReceipt {
+                path: match value.get("path") {
+                    None | Some(Value::Null) => None,
+                    Some(path) => Some(path.as_str()?.to_string()),
+                },
+            },
+            _ => return None,
+        })
     }
 }
 
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// The spelling of a Restore's conflict choice.
+pub fn conflict_name(conflict: Conflict) -> &'static str {
+    match conflict {
+        Conflict::Refuse => "refuse",
+        Conflict::Replace => "replace",
+        Conflict::Beside => "beside",
+    }
+}
+
+/// Reads back that spelling.
+pub fn parse_conflict(text: &str) -> Option<Conflict> {
+    match text {
+        "refuse" => Some(Conflict::Refuse),
+        "replace" => Some(Conflict::Replace),
+        "beside" => Some(Conflict::Beside),
+        _ => None,
     }
 }
 
@@ -444,6 +607,419 @@ fn chain_state_from_value(value: &Value) -> Option<ChainState> {
     }
 }
 
+/// Whether the sessions of one Agent appear to be running.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentSessions {
+    /// The Agent, by adapter id.
+    pub agent: String,
+    /// What detection found for it.
+    pub running: SessionsRunning,
+    /// How many live sessions it found, zero when it could not tell.
+    pub live: usize,
+}
+
+/// Whether Agent sessions appear to be running, which every action result
+/// states (spec section 5.3).
+///
+/// Detected read-only, from the session files an Agent keeps and a liveness
+/// check on the process id they name. AgentSweep never signals or stops a
+/// session; it tells the user to restart one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Sessions {
+    /// The answer across every Agent: yes when any session is live, unknown
+    /// when an installed Agent could not be asked, no otherwise.
+    pub running: SessionsRunning,
+    /// The answer per Agent.
+    pub agents: Vec<AgentSessions>,
+}
+
+impl Sessions {
+    /// Nothing was detected, which is what a request that acted on nothing
+    /// carries.
+    pub fn unknown() -> Sessions {
+        Sessions {
+            running: SessionsRunning::Unknown,
+            agents: Vec::new(),
+        }
+    }
+
+    /// The answer across Agents, from the answers per Agent.
+    pub fn of(agents: Vec<AgentSessions>) -> Sessions {
+        let running = if agents.iter().any(|one| one.running == SessionsRunning::Yes) {
+            SessionsRunning::Yes
+        } else if agents
+            .iter()
+            .any(|one| one.running == SessionsRunning::Unknown)
+        {
+            SessionsRunning::Unknown
+        } else {
+            SessionsRunning::No
+        };
+        Sessions { running, agents }
+    }
+
+    /// The sentence a person reads under an action.
+    pub fn sentence(&self) -> String {
+        let named = |wanted: SessionsRunning| -> Vec<String> {
+            self.agents
+                .iter()
+                .filter(|one| one.running == wanted)
+                .map(|one| match one.live {
+                    0 => one.agent.clone(),
+                    live => format!("{} ({live})", one.agent),
+                })
+                .collect()
+        };
+        match self.running {
+            SessionsRunning::Yes => format!(
+                "Agent sessions appear to be running: {}. Restart them so they stop using what \
+                 changed.",
+                named(SessionsRunning::Yes).join(", ")
+            ),
+            SessionsRunning::No => "No Agent session appears to be running.".to_string(),
+            SessionsRunning::Unknown => {
+                let unknown = named(SessionsRunning::Unknown);
+                match unknown.is_empty() {
+                    true => "AgentSweep could not tell whether Agent sessions are running; \
+                             restart any that are open."
+                        .to_string(),
+                    false => format!(
+                        "AgentSweep could not tell whether sessions of {} are running; restart \
+                         any that are open.",
+                        unknown.join(", ")
+                    ),
+                }
+            }
+        }
+    }
+
+    /// The answer as the wire carries it.
+    pub fn to_value(&self) -> Value {
+        let mut map = Map::new();
+        map.insert(
+            "agents".to_string(),
+            Value::Array(
+                self.agents
+                    .iter()
+                    .map(|one| {
+                        let mut agent = Map::new();
+                        agent.insert("agent".to_string(), Value::from(one.agent.as_str()));
+                        agent.insert("live".to_string(), Value::from(one.live as u64));
+                        agent.insert("running".to_string(), Value::from(one.running.as_str()));
+                        Value::Object(agent)
+                    })
+                    .collect(),
+            ),
+        );
+        map.insert("running".to_string(), Value::from(self.running.as_str()));
+        Value::Object(map)
+    }
+
+    /// Reads back what [`Sessions::to_value`] wrote.
+    pub fn from_value(value: &Value) -> Option<Sessions> {
+        let agents = value
+            .get("agents")?
+            .as_array()?
+            .iter()
+            .map(|one| {
+                Some(AgentSessions {
+                    agent: one.get("agent")?.as_str()?.to_string(),
+                    running: SessionsRunning::parse(one.get("running")?.as_str()?)?,
+                    live: one.get("live")?.as_u64()? as usize,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Sessions {
+            running: SessionsRunning::parse(value.get("running")?.as_str()?)?,
+            agents,
+        })
+    }
+}
+
+/// What one action did, which the daemon answers every action request with.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActionReport {
+    /// Which request it answers, as [`Request::as_str`] spells it.
+    pub action: String,
+    /// The Finding it acted on, empty when it addressed a Receipt alone.
+    pub finding_id: String,
+    /// The Item it acted on.
+    pub item_id: String,
+    /// The Receipt it wrote or replayed, empty for Trust and Acknowledge.
+    pub receipt_id: String,
+    /// Where the Finding stands now, as [`FindingState`] spells it.
+    pub state: String,
+    /// How it came out as a whole.
+    pub result: Outcome,
+    /// What it physically did, step by step, with each step's outcome.
+    pub steps: Vec<ReceiptStep>,
+    /// True when it wrote a Trust record: a Trust, or the Restore of what
+    /// AgentSweep took out by itself.
+    pub trusted: bool,
+    /// Whether Agent sessions appear to be running.
+    pub sessions: Sessions,
+    /// The sentence a person reads first.
+    pub message: String,
+}
+
+impl ActionReport {
+    /// The report as the wire carries it.
+    pub fn to_value(&self) -> Value {
+        let mut map = Map::new();
+        map.insert("action".to_string(), Value::from(self.action.as_str()));
+        map.insert(
+            "finding_id".to_string(),
+            Value::from(self.finding_id.as_str()),
+        );
+        map.insert("item_id".to_string(), Value::from(self.item_id.as_str()));
+        map.insert("message".to_string(), Value::from(self.message.as_str()));
+        map.insert(
+            "receipt_id".to_string(),
+            Value::from(self.receipt_id.as_str()),
+        );
+        map.insert("result".to_string(), Value::from(self.result.as_str()));
+        map.insert("sessions".to_string(), self.sessions.to_value());
+        map.insert("state".to_string(), Value::from(self.state.as_str()));
+        map.insert(
+            "steps".to_string(),
+            Value::Array(self.steps.iter().map(step_to_value).collect()),
+        );
+        map.insert("trusted".to_string(), Value::from(self.trusted));
+        Value::Object(map)
+    }
+
+    /// Reads back what [`ActionReport::to_value`] wrote.
+    pub fn from_value(value: &Value) -> Option<ActionReport> {
+        let text = |field: &str| value.get(field).and_then(Value::as_str).map(str::to_string);
+        Some(ActionReport {
+            action: text("action")?,
+            finding_id: text("finding_id")?,
+            item_id: text("item_id")?,
+            receipt_id: text("receipt_id")?,
+            state: text("state")?,
+            result: Outcome::parse(&text("result")?)?,
+            steps: value
+                .get("steps")?
+                .as_array()?
+                .iter()
+                .map(step_from_value)
+                .collect::<Option<Vec<_>>>()?,
+            trusted: value.get("trusted")?.as_bool()?,
+            sessions: Sessions::from_value(value.get("sessions")?)?,
+            message: text("message")?,
+        })
+    }
+}
+
+/// One Receipt step as the wire carries it.
+fn step_to_value(step: &ReceiptStep) -> Value {
+    let mut map = Map::new();
+    map.insert("detail".to_string(), Value::from(step.detail.as_str()));
+    map.insert("locator".to_string(), Value::from(step.locator.as_str()));
+    map.insert("outcome".to_string(), Value::from(step.outcome.as_str()));
+    map.insert("path".to_string(), Value::from(step.path.as_str()));
+    map.insert(
+        "primitive".to_string(),
+        Value::from(step.primitive.as_str()),
+    );
+    Value::Object(map)
+}
+
+/// Reads back what [`step_to_value`] wrote.
+fn step_from_value(value: &Value) -> Option<ReceiptStep> {
+    let text = |field: &str| value.get(field).and_then(Value::as_str);
+    Some(ReceiptStep {
+        primitive: Primitive::parse(text("primitive")?)?,
+        outcome: Outcome::parse(text("outcome")?)?,
+        path: text("path")?.to_string(),
+        locator: text("locator")?.to_string(),
+        detail: text("detail")?.to_string(),
+    })
+}
+
+/// One Receipt in the quarantine store, with the place its Item was taken
+/// from printed beside its id (spec section 5.1). The store's own names say
+/// nothing; this is where the legibility comes from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevealedReceipt {
+    /// The Receipt's id.
+    pub receipt_id: String,
+    /// The Item it took out.
+    pub item_id: ItemId,
+    /// That Item's kind, absent when the record named none.
+    pub kind: Option<Kind>,
+    /// Where the Item sat before it was taken out.
+    pub original_path: String,
+    /// Where its payload sits in the store, empty when nothing moved (an entry
+    /// taken out of its file keeps no payload).
+    pub payload_path: String,
+    /// Whether AgentSweep or the user took it out.
+    pub actor: Actor,
+    /// When.
+    pub quarantined_at: Timestamp,
+    /// The Finding behind it.
+    pub finding_id: String,
+    /// The Rule behind it, zero where none applies.
+    pub rule_id: i64,
+    /// How often it came back and was taken out again.
+    pub re_enforced: u32,
+}
+
+impl RevealedReceipt {
+    /// The Receipt as the wire carries it.
+    pub fn to_value(&self) -> Value {
+        let mut map = Map::new();
+        map.insert("actor".to_string(), Value::from(self.actor.as_str()));
+        map.insert(
+            "finding_id".to_string(),
+            Value::from(self.finding_id.as_str()),
+        );
+        map.insert("item_id".to_string(), Value::from(self.item_id.as_str()));
+        map.insert(
+            "kind".to_string(),
+            Value::from(self.kind.map(Kind::as_str).unwrap_or_default()),
+        );
+        map.insert(
+            "original_path".to_string(),
+            Value::from(self.original_path.as_str()),
+        );
+        map.insert(
+            "payload_path".to_string(),
+            Value::from(self.payload_path.as_str()),
+        );
+        map.insert(
+            "quarantined_at".to_string(),
+            Value::from(self.quarantined_at.to_string()),
+        );
+        map.insert("re_enforced".to_string(), Value::from(self.re_enforced));
+        map.insert(
+            "receipt_id".to_string(),
+            Value::from(self.receipt_id.as_str()),
+        );
+        map.insert("rule_id".to_string(), Value::from(self.rule_id));
+        Value::Object(map)
+    }
+
+    /// Reads back what [`RevealedReceipt::to_value`] wrote.
+    pub fn from_value(value: &Value) -> Option<RevealedReceipt> {
+        let text = |field: &str| value.get(field).and_then(Value::as_str);
+        Some(RevealedReceipt {
+            receipt_id: text("receipt_id")?.to_string(),
+            item_id: ItemId::from_recorded(text("item_id")?),
+            kind: match text("kind")? {
+                "" => None,
+                kind => Some(Kind::parse(kind)?),
+            },
+            original_path: text("original_path")?.to_string(),
+            payload_path: text("payload_path")?.to_string(),
+            actor: Actor::parse(text("actor")?)?,
+            quarantined_at: Timestamp::parse(text("quarantined_at")?)?,
+            finding_id: text("finding_id")?.to_string(),
+            rule_id: value.get("rule_id")?.as_i64()?,
+            re_enforced: value.get("re_enforced")?.as_u64()? as u32,
+        })
+    }
+}
+
+/// The answer to a reveal-receipt request.
+pub fn receipts_to_value(receipts: &[RevealedReceipt]) -> Value {
+    Value::Array(receipts.iter().map(RevealedReceipt::to_value).collect())
+}
+
+/// Reads back what [`receipts_to_value`] wrote.
+pub fn receipts_from_value(value: &Value) -> Option<Vec<RevealedReceipt>> {
+    value
+        .as_array()?
+        .iter()
+        .map(RevealedReceipt::from_value)
+        .collect()
+}
+
+/// One action the daemon allows on a Finding as it stands, which is what a
+/// client offers beside it (spec section 8.5). A client never works this out
+/// for itself from anything but a Finding the daemon sent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Offer {
+    /// Take the Item out: any open Threat Finding, never a Managed Item.
+    Quarantine,
+    /// Put a stopped Item back.
+    Restore,
+    /// Switch a stopped plugin back on for its newer, clean version.
+    ReEnable,
+    /// Call this exact content safe ("Trust this version", "Keep it as it
+    /// is" on an Exposure).
+    Trust,
+    /// "Yes, that was me" on a Drift Finding.
+    Acknowledge,
+    /// The one-click fix of Exposures 0018 and 0019.
+    Fix,
+}
+
+impl Offer {
+    /// The request name each offer is carried out by.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Offer::Quarantine => "quarantine",
+            Offer::Restore => "restore",
+            Offer::ReEnable => "re-enable",
+            Offer::Trust => "trust",
+            Offer::Acknowledge => "acknowledge",
+            Offer::Fix => "fix",
+        }
+    }
+}
+
+/// The source spelling a Drift Finding carries.
+const DRIFT_SOURCE: &str = "drift";
+
+/// The Rule ids whose Exposure offers the one-click fix.
+const FIXABLE_EXPOSURES: [i64; 2] = agentsweep_core::enforcement::FIXABLE_EXPOSURES;
+
+/// What the daemon allows on one Finding as it stands.
+///
+/// A Managed Item is only ever flagged, an Exposure is never quarantined, a
+/// Problem has no content to trust, and a Finding that is no longer open is
+/// only restored or re-enabled (spec sections 5.2 and 8.5).
+pub fn offers(finding: &RecordedFinding) -> Vec<Offer> {
+    let managed = finding.item_id.in_scope("managed");
+    let problem = finding.content_hash.is_empty() || finding.source.starts_with("problem");
+    match finding.state {
+        FindingState::Stopped => {
+            let mut offered = vec![Offer::Restore];
+            if !finding.fixed_version.is_empty() {
+                offered.push(Offer::ReEnable);
+            }
+            offered
+        }
+        FindingState::Open if problem => Vec::new(),
+        FindingState::Open => {
+            let mut offered = Vec::new();
+            match finding.category {
+                Category::Threat => {
+                    if !managed {
+                        offered.push(Offer::Quarantine);
+                    }
+                    offered.push(Offer::Trust);
+                    if finding.source == DRIFT_SOURCE {
+                        offered.push(Offer::Acknowledge);
+                    }
+                }
+                Category::Exposure => {
+                    offered.push(Offer::Trust);
+                    if !managed
+                        && FIXABLE_EXPOSURES.contains(&finding.rule_id)
+                        && finding.kind == Kind::SettingsEntry
+                    {
+                        offered.push(Offer::Fix);
+                    }
+                }
+            }
+            offered
+        }
+        FindingState::Trusted | FindingState::Acknowledged | FindingState::Gone => Vec::new(),
+    }
+}
+
 /// One message on the wire.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Message {
@@ -504,7 +1080,7 @@ impl Message {
             Message::Request { id, request } => {
                 map.insert("type".to_string(), Value::from("request"));
                 map.insert("id".to_string(), Value::from(id.as_str()));
-                map.insert("request".to_string(), Value::from(request.as_str()));
+                request.write_into(&mut map);
             }
             Message::Response { id, result } => {
                 map.insert("type".to_string(), Value::from("response"));
@@ -574,7 +1150,7 @@ impl Message {
             }
             "request" => Some(Message::Request {
                 id: text("id")?.to_string(),
-                request: Request::parse(text("request")?)?,
+                request: Request::read_from(value)?,
             }),
             "response" => {
                 let id = text("id")?.to_string();
@@ -694,7 +1270,7 @@ mod tests {
         round_trip(Message::Refused(Refusal::NotAHandshake {
             detail: "a request".to_string(),
         }));
-        for request in Request::ALL {
+        for request in every_request() {
             round_trip(Message::Request {
                 id: "7".to_string(),
                 request,
@@ -787,9 +1363,215 @@ mod tests {
         for role in Role::ALL {
             assert_eq!(Role::parse(role.as_str()), Some(role));
         }
-        for request in Request::ALL {
-            assert_eq!(Request::parse(request.as_str()), Some(request));
+        let mut spelled: Vec<&str> = every_request().iter().map(Request::as_str).collect();
+        spelled.dedup();
+        assert_eq!(spelled, Request::NAMES);
+    }
+
+    /// One of every request, with the fields it carries.
+    fn every_request() -> Vec<Request> {
+        let finding = "claude-code/user/skill/~/.claude/skills/x|rule/0001|abc".to_string();
+        vec![
+            Request::Status,
+            Request::ScanNow,
+            Request::Subscribe,
+            Request::Quarantine {
+                target: finding.clone(),
+            },
+            Request::Restore {
+                target: "q-0123456789abcdef0123456789abcdef".to_string(),
+                conflict: Conflict::Beside,
+            },
+            Request::Trust {
+                target: finding.clone(),
+            },
+            Request::Acknowledge {
+                target: finding.clone(),
+            },
+            Request::Fix {
+                target: finding.clone(),
+            },
+            Request::ReEnable {
+                target: finding.clone(),
+            },
+            Request::RevealReceipt {
+                path: Some("/Users/someone/.claude.json".to_string()),
+            },
+            Request::RevealReceipt { path: None },
+        ]
+    }
+
+    /// ADR 0008: no request takes a path except revealing a Receipt (and the
+    /// Folder Scan, which is not a daemon request yet). A path on any other
+    /// request makes the message one the daemon does not understand, so it is
+    /// never read and never ignored silently.
+    #[test]
+    fn no_request_but_reveal_receipt_accepts_a_path() {
+        let taking: Vec<&str> = Request::NAMES
+            .into_iter()
+            .filter(|name| Request::takes_a_path(name))
+            .collect();
+        assert_eq!(taking, vec!["reveal-receipt"]);
+
+        for name in Request::NAMES {
+            let value = serde_json::json!({
+                "type": "request",
+                "id": "1",
+                "request": name,
+                "target": "claude-code/user/skill/x",
+                "path": "/etc",
+            });
+            let read = Message::from_value(&value);
+            match Request::takes_a_path(name) {
+                true => assert!(read.is_some(), "{name}"),
+                false => assert_eq!(read, None, "{name} took a path"),
+            }
         }
+        // Every request that addresses something addresses an id, and a
+        // request that should name one and does not is not a message either.
+        let bare = serde_json::json!({"type": "request", "id": "1", "request": "quarantine"});
+        assert_eq!(Message::from_value(&bare), None);
+    }
+
+    #[test]
+    fn an_action_report_and_the_receipts_round_trip() {
+        let report = ActionReport {
+            action: "quarantine".to_string(),
+            finding_id: "claude-code/user/skill/x|rule/0001|abc".to_string(),
+            item_id: "claude-code/user/skill/x".to_string(),
+            receipt_id: "q-0123456789abcdef0123456789abcdef".to_string(),
+            state: "stopped".to_string(),
+            result: Outcome::Ok,
+            steps: vec![ReceiptStep::new(
+                Primitive::MoveOut,
+                "/home/.claude/skills/x",
+            )],
+            trusted: false,
+            sessions: Sessions::of(vec![
+                AgentSessions {
+                    agent: "claude-code".to_string(),
+                    running: SessionsRunning::Yes,
+                    live: 2,
+                },
+                AgentSessions {
+                    agent: "codex".to_string(),
+                    running: SessionsRunning::Unknown,
+                    live: 0,
+                },
+            ]),
+            message: "Stopped.".to_string(),
+        };
+        assert_eq!(report.sessions.running, SessionsRunning::Yes);
+        assert!(
+            report.sessions.sentence().contains("claude-code (2)"),
+            "{}",
+            report.sessions.sentence()
+        );
+        assert_eq!(
+            ActionReport::from_value(&report.to_value()),
+            Some(report.clone())
+        );
+
+        let receipts = vec![RevealedReceipt {
+            receipt_id: report.receipt_id.clone(),
+            item_id: ItemId::from_recorded(&report.item_id),
+            kind: Some(Kind::Skill),
+            original_path: "/home/.claude/skills/x".to_string(),
+            payload_path: "/data/quarantine/q-0123456789abcdef0123456789abcdef/payload".to_string(),
+            actor: Actor::Auto,
+            quarantined_at: moment("2026-09-24T08:00:00.000Z"),
+            finding_id: report.finding_id.clone(),
+            rule_id: 1,
+            re_enforced: 2,
+        }];
+        assert_eq!(
+            receipts_from_value(&receipts_to_value(&receipts)),
+            Some(receipts)
+        );
+    }
+
+    /// Nobody running and nobody askable read differently, and an Agent that
+    /// could not be asked is named.
+    #[test]
+    fn the_sessions_sentence_says_what_detection_found() {
+        let none = Sessions::of(vec![AgentSessions {
+            agent: "claude-code".to_string(),
+            running: SessionsRunning::No,
+            live: 0,
+        }]);
+        assert_eq!(none.running, SessionsRunning::No);
+        assert!(none.sentence().starts_with("No Agent session"));
+        let unknown = Sessions::of(vec![AgentSessions {
+            agent: "codex".to_string(),
+            running: SessionsRunning::Unknown,
+            live: 0,
+        }]);
+        assert!(
+            unknown.sentence().contains("codex"),
+            "{}",
+            unknown.sentence()
+        );
+    }
+
+    fn recorded(
+        state: FindingState,
+        category: Category,
+        source: &str,
+        rule_id: i64,
+    ) -> RecordedFinding {
+        use agentsweep_core::finding::{RuleStatus, Severity, Tier};
+        RecordedFinding {
+            id: FindingId::from_recorded("claude-code/user/settings-entry/x|rule/0018|abc"),
+            item_id: ItemId::from_recorded("claude-code/user/settings-entry/x"),
+            kind: Kind::SettingsEntry,
+            source: source.to_string(),
+            rule_id,
+            category,
+            severity: Severity::Medium,
+            tier: Tier::Rules,
+            status: RuleStatus::Probation,
+            state,
+            content_hash: "abc".to_string(),
+            title: String::new(),
+            plain: String::new(),
+            file: String::new(),
+            drift: String::new(),
+            receipt_id: String::new(),
+            fixed_version: String::new(),
+            first_seen: moment("2026-09-24T08:00:00.000Z"),
+            notified_at: None,
+        }
+    }
+
+    /// What a client offers comes from the Finding as the daemon sent it
+    /// (spec section 8.5).
+    #[test]
+    fn the_offers_follow_the_primitive_table_and_the_state() {
+        let threat = recorded(FindingState::Open, Category::Threat, "rule 0001", 1);
+        assert_eq!(offers(&threat), vec![Offer::Quarantine, Offer::Trust]);
+
+        let drift = recorded(FindingState::Open, Category::Threat, "drift", 0);
+        assert_eq!(
+            offers(&drift),
+            vec![Offer::Quarantine, Offer::Trust, Offer::Acknowledge]
+        );
+
+        let exposure = recorded(FindingState::Open, Category::Exposure, "rule 0018", 18);
+        assert_eq!(offers(&exposure), vec![Offer::Trust, Offer::Fix]);
+        let other = recorded(FindingState::Open, Category::Exposure, "rule 0010", 10);
+        assert_eq!(offers(&other), vec![Offer::Trust]);
+
+        let mut managed = threat.clone();
+        managed.item_id = ItemId::from_recorded("claude-code/managed/settings-entry/x");
+        assert_eq!(offers(&managed), vec![Offer::Trust]);
+
+        let mut stopped = recorded(FindingState::Stopped, Category::Threat, "rule 0001", 1);
+        assert_eq!(offers(&stopped), vec![Offer::Restore]);
+        stopped.fixed_version = "def".to_string();
+        assert_eq!(offers(&stopped), vec![Offer::Restore, Offer::ReEnable]);
+
+        let trusted = recorded(FindingState::Trusted, Category::Threat, "rule 0001", 1);
+        assert!(offers(&trusted).is_empty());
     }
 
     /// The vocabulary is closed: a request nobody defined is not one.

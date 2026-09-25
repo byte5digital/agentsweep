@@ -48,18 +48,6 @@ use crate::options::{KeySourceChoice, Options};
 use crate::stores::{open_the_baseline, open_the_event_log};
 use crate::watcher::{self, Batch, Decision, Timings, Watch};
 
-/// Writes one line to the standard error stream.
-///
-/// The daemon's real log is `tracing` to a rotated file, which arrives with
-/// the application milestone. Until then a hand run reads its own output. A
-/// line names paths and ids and never content or a sensitive field (spec
-/// section 6.9).
-macro_rules! say {
-    ($($argument:tt)*) => {
-        eprintln!("{} agentsweepd {}", agentsweep_core::envelope::Timestamp::now(), format_args!($($argument)*))
-    };
-}
-
 /// How the daemon is timed, so a test runs a day of Protection in a second.
 ///
 /// Every field has the value the shipped daemon takes; a test names the ones
@@ -76,6 +64,10 @@ pub struct Tuning {
     /// How many worker threads a Scan nobody is waiting for runs the Tiers
     /// with.
     pub workers: usize,
+    /// The Rule Pack in force, the bundled one unless a test names another.
+    /// The seam a test flips one Rule to stable through, since every bundled
+    /// Rule is on Probation and none may be flipped in place.
+    pub pack: Option<Arc<RulePack>>,
 }
 
 impl Default for Tuning {
@@ -85,6 +77,7 @@ impl Default for Tuning {
             due: Schedule::default(),
             power: Arc::new(SystemPower),
             workers: BACKGROUND_WORKERS,
+            pack: None,
         }
     }
 }
@@ -95,6 +88,7 @@ impl std::fmt::Debug for Tuning {
             .field("watch", &self.watch)
             .field("due", &self.due)
             .field("workers", &self.workers)
+            .field("pack", &self.pack)
             .finish_non_exhaustive()
     }
 }
@@ -158,15 +152,19 @@ enum Work {
 
 /// Everything the daemon holds while it runs.
 pub struct Daemon {
-    directory: DataDirectory,
-    keys: Box<dyn KeySource + Send + Sync>,
-    machine: Machine,
+    pub(crate) directory: DataDirectory,
+    pub(crate) keys: Box<dyn KeySource + Send + Sync>,
+    pub(crate) machine: Machine,
     check: Arc<dyn PeerCheck>,
     tuning: Tuning,
     /// The cached derivation, which is what a client is answered out of.
-    state: Mutex<State>,
+    pub(crate) state: Mutex<State>,
     /// Every state a client is shown, by the precedence of spec section 6.6.
-    health: Mutex<Health>,
+    pub(crate) health: Mutex<Health>,
+    /// Held by whatever writes the Event Log or the Baseline: a Scan from
+    /// start to end, and one action at a time. Each opens its own writer, and
+    /// a chain has one head, so two writers at once would fork it.
+    pub(crate) writing: Mutex<()>,
     /// The Findings the last Scan raised, which the next one compares against
     /// to know what is gone. Never stored: a restart derives them again.
     raised: Mutex<Vec<Finding>>,
@@ -269,7 +267,10 @@ impl Daemon {
         // The bundled pack is compiled once, here, and every Scan of this
         // daemon runs it. A daemon that cannot compile its own pack has
         // nothing to protect with and says so rather than starting.
-        let pack = RulePack::bundled()?;
+        let pack = match &tuning.pack {
+            Some(pack) => Arc::clone(pack),
+            None => Arc::new(RulePack::bundled()?),
+        };
 
         let health = Health {
             protection: Protection::On,
@@ -291,9 +292,10 @@ impl Daemon {
             tuning,
             state: Mutex::new(state),
             health: Mutex::new(health),
+            writing: Mutex::new(()),
             raised: Mutex::new(Vec::new()),
             queue: Mutex::new(Queue::default()),
-            pack: Arc::new(pack),
+            pack,
             cache: Arc::new(EvaluationCache::new()),
             roots: Mutex::new(Vec::new()),
             watch: Mutex::new(None),
@@ -418,6 +420,9 @@ impl Daemon {
 
     /// Runs one piece of work and takes what it decided.
     fn carry_out(self: &Arc<Daemon>, work: Work) {
+        // A Scan writes the Baseline and may write the Event Log, so no action
+        // runs while it does, and it waits for one that is running.
+        let _writing = self.writing.lock().expect("the write lock is not poisoned");
         let previous = self
             .raised
             .lock()
@@ -445,6 +450,7 @@ impl Daemon {
                     cache: &*self.cache,
                     workers,
                     progress: &watching,
+                    acts: true,
                 }
                 .run(trigger);
                 match run {
@@ -464,6 +470,7 @@ impl Daemon {
                     pooled: &pooled,
                     cache: &*self.cache,
                     workers: self.tuning.workers,
+                    acts: true,
                 }
                 .run(&batch);
                 match run {
@@ -515,7 +522,11 @@ impl Daemon {
             findings.extend(run.standing.iter().map(|found| {
                 let first_seen = state.first_seen(&found.id).unwrap_or(at);
                 let notified = state.notified_at(&found.id);
-                RecordedFinding::of(found, first_seen).notified(notified)
+                let mut recorded = RecordedFinding::of(found, first_seen).notified(notified);
+                if let Some(fixed) = run.fixed_versions.get(&recorded.receipt_id) {
+                    recorded.fixed_version = fixed.clone();
+                }
+                recorded
             }));
 
             for finding in &findings {
@@ -728,7 +739,7 @@ impl Daemon {
     }
 
     /// Sends one event to everyone listening, dropping whoever has gone away.
-    fn publish(&self, event: StateEvent) {
+    pub(crate) fn publish(&self, event: StateEvent) {
         let mut listening = self
             .subscribers
             .lock()
@@ -793,7 +804,7 @@ impl Daemon {
                 }
                 return;
             }
-            let result = self.answer(request);
+            let result = self.answer(&request);
             if connection.send(&Message::Response { id, result }).is_err() {
                 return;
             }
@@ -834,7 +845,7 @@ impl Daemon {
     }
 
     /// Carries out one request.
-    fn answer(self: &Arc<Daemon>, request: Request) -> Result<serde_json::Value, RequestError> {
+    fn answer(self: &Arc<Daemon>, request: &Request) -> Result<serde_json::Value, RequestError> {
         match request {
             Request::Status => Ok(self.status().to_value()),
             Request::ScanNow => {
@@ -843,6 +854,8 @@ impl Daemon {
             }
             // Handled by the caller, which turns the connection into a stream.
             Request::Subscribe => Ok(serde_json::Value::Bool(true)),
+            // Everything else acts, and is carried out where acting lives.
+            _ => self.act(request),
         }
     }
 }

@@ -26,6 +26,10 @@ agentsweep-adapter-workspace.workspace = true
 # touches the Keychain (spec section 6.2).
 agentsweep-core = { workspace = true, features = ["daemon"] }
 agentsweep-ipc.workspace = true
+# Whether the process a Claude Code session file names is still running: a
+# `kill` with signal zero, which sends nothing. Never a process listing, never
+# a program run (spec section 5.3).
+libc = "0.2.180"
 # The watcher. FSEvents and never kqueue, which is a file descriptor per file
 # and runs out at a few hundred of them (spec section 6.1). The debounce and
 # the batching are AgentSweep's own, because what the specification asks for,

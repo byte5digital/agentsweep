@@ -96,6 +96,7 @@ dependencies = [
  "agentsweep-core",
  "agentsweep-ipc",
  "core-foundation",
+ "libc",
  "notify",
  "objc2-foundation",
  "security-framework-sys",

@@ -22,12 +22,14 @@ use agentsweep_core::adapter::{Descriptor, Enumeration, SurfaceAdapter, WatchRoo
 use agentsweep_core::baseline::{Baseline, BaselineWriter};
 use agentsweep_core::chain::{ChainError, ChainState};
 use agentsweep_core::coverage::CoveragePlan;
+use agentsweep_core::derived::QuarantineEntry;
 use agentsweep_core::derived::{KnownActions, QuarantineManifest, TrustTable};
 use agentsweep_core::drift::Declarations;
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::evaluation::{Evaluations, NoCache};
 use agentsweep_core::eventlog::{Action, EventLog};
 use agentsweep_core::finding::{Category, Decided, Finding, Standing, standing};
+use agentsweep_core::finding::{FindingId, FindingState, RuleStatus, Severity, Source, Tier};
 use agentsweep_core::heuristics::Band;
 use agentsweep_core::item::{ItemId, Kind, Scope};
 use agentsweep_core::keychain::KeySource;
@@ -37,6 +39,7 @@ use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::{BACKGROUND_WORKERS, ScanKind, ScanPass};
 use agentsweep_core::state::{ScanSummary, Trigger};
 
+use crate::actions::{Acting, ScanActions, act_in_scan};
 use crate::machine::{Machine, adapters, agents};
 
 /// Why a Scan could not be run.
@@ -94,6 +97,12 @@ pub struct ScanRun {
     pub baseline: ChainState,
     /// When the Baseline was last compacted, as the Event Log records it.
     pub last_compaction: Option<Timestamp>,
+    /// What the Scan did by itself: automatic Quarantines, re-enforces and
+    /// the Items that keep coming back.
+    pub acted: ScanActions,
+    /// The newer, clean version found for each quarantined plugin, by the
+    /// Receipt that stopped it, which is what offers Re-enable.
+    pub fixed_versions: BTreeMap<String, String>,
 }
 
 /// What a Scan reports as it goes.
@@ -135,6 +144,7 @@ pub fn run(
         cache: &NoCache,
         workers: BACKGROUND_WORKERS,
         progress,
+        acts: true,
     }
     .run(trigger)
 }
@@ -159,6 +169,10 @@ pub struct FullScan<'a> {
     pub workers: usize,
     /// Who is told how far it has got.
     pub progress: &'a dyn Progress,
+    /// Whether the Scan may act by itself: quarantine what a stable Rule
+    /// proves bad and take out again what came back. The daemon's Scans do; a
+    /// measurement of the budgets never touches the machine it measures.
+    pub acts: bool,
 }
 
 impl FullScan<'_> {
@@ -181,6 +195,10 @@ impl FullScan<'_> {
             .iter()
             .map(|adapter| *adapter.descriptor())
             .collect();
+        let acting = Acting {
+            machine: self.machine,
+            roots: &inventory.roots,
+        };
         let judged = Judgement {
             kind: ScanKind::Full,
             directory: self.directory,
@@ -193,6 +211,7 @@ impl FullScan<'_> {
             at: started_at,
             cache: self.cache,
             workers: self.workers,
+            acting: self.acts.then_some(&acting),
         }
         .over(&mut survey.enumeration, began)?;
         self.progress.at(
@@ -211,6 +230,8 @@ impl FullScan<'_> {
             events: judged.events,
             baseline: judged.baseline,
             last_compaction: judged.last_compaction,
+            acted: judged.acted,
+            fixed_versions: judged.fixed_versions,
         })
     }
 }
@@ -354,6 +375,10 @@ pub struct Judged {
     pub baseline: ChainState,
     /// When the Baseline was last compacted, as the Event Log records it.
     pub last_compaction: Option<Timestamp>,
+    /// What the pass did by itself.
+    pub acted: ScanActions,
+    /// The newer, clean version of each quarantined plugin, by Receipt.
+    pub fixed_versions: BTreeMap<String, String>,
 }
 
 /// Reading the stores, running one pass and writing what it decided.
@@ -380,6 +405,8 @@ pub struct Judgement<'a> {
     pub cache: &'a dyn Evaluations,
     /// How many worker threads run the Tiers.
     pub workers: usize,
+    /// Where the pass may act by itself, absent when it may not.
+    pub acting: Option<&'a Acting<'a>>,
 }
 
 impl Judgement<'_> {
@@ -415,19 +442,56 @@ impl Judgement<'_> {
             .over(enumeration)
             .map_err(|error| ScanError::Pass(error.to_string()))?;
 
+        // The Tiers have decided. What a stable Rule proves bad on a kind
+        // that may be taken out by itself is taken out now, in the per-Item
+        // order, and what AgentSweep took out before and came back is taken
+        // out again: both before the Baseline advances (spec section 6.4). A
+        // chain that was tampered with freezes all of it until the user has
+        // looked (ADR 0003).
+        let frozen = view.state.freezes_automatic_quarantine()
+            || baseline_state.freezes_automatic_quarantine();
+        let acted = match self.acting {
+            Some(acting) => act_in_scan(
+                acting,
+                self.directory,
+                self.keys,
+                enumeration,
+                &outcome.report.findings,
+                &quarantined,
+                frozen,
+                self.at,
+            ),
+            None => ScanActions::default(),
+        };
+
         // Coverage first, because a Surface is covered before it is
         // enumerated, then one record per Item the Scan moved.
         for entry in outcome.entries() {
             writer.append(&entry)?;
         }
 
+        // Whatever the pass did by itself is in the Event Log now, and where
+        // every Finding stands is read from what the log says after it.
+        let (quarantined, trusted, known) = match acted.wrote() {
+            true => {
+                let after = log.read(self.keys)?;
+                (
+                    QuarantineManifest::rebuild(&after.events),
+                    TrustTable::rebuild(&after.events),
+                    KnownActions::rebuild(&after.events),
+                )
+            }
+            false => (quarantined, trusted, known),
+        };
+
         let kinds: BTreeMap<ItemId, Kind> = enumeration
             .items
             .iter()
             .map(|item| (item.id.clone(), item.kind))
             .collect();
-        let raised = outcome.report.findings.clone();
-        let standing = standing(
+        let mut raised = outcome.report.findings.clone();
+        raised.extend(acted.keeps_coming_back.iter().cloned());
+        let mut standing = standing(
             self.previous,
             &raised,
             &kinds,
@@ -437,6 +501,37 @@ impl Judgement<'_> {
                 known: &known,
             },
         );
+        // An Item that is back on its Surface with the content a Receipt took
+        // out, and was not taken out again, is not stopped: the Agent would
+        // load it. Its Findings are open, beside the one that says it keeps
+        // coming back.
+        for placed in standing.iter_mut() {
+            if placed.state == FindingState::Stopped
+                && acted.returned.contains(&placed.finding.item_id)
+            {
+                placed.state = FindingState::Open;
+                placed.receipt_id.clear();
+            }
+        }
+        // A Full Scan speaks for everything, so what the store holds stands
+        // as stopped even when no Scan since raised it: the Item is not on
+        // its Surface to raise anything about, and the Receipt is the record.
+        if self.kind == ScanKind::Full {
+            let present: BTreeSet<&ItemId> = kinds.keys().collect();
+            let mut held: Vec<&QuarantineEntry> = quarantined
+                .entries()
+                .filter(|entry| !present.contains(&entry.item_id))
+                .collect();
+            held.sort_by_key(|entry| entry.quarantined_at);
+            for entry in held {
+                let stopped = stopped_by(entry, self.pack);
+                if standing.iter().any(|placed| placed.id == stopped.id) {
+                    continue;
+                }
+                standing.push(stopped);
+            }
+        }
+        let fixed_versions = fixed_versions(&quarantined, enumeration, &raised);
 
         let bands = count_bands(&outcome);
         let summary = ScanSummary {
@@ -473,8 +568,100 @@ impl Judgement<'_> {
                 .filter(|recorded| recorded.event.action == Action::BaselineCompacted)
                 .map(|recorded| recorded.recorded_at)
                 .next_back(),
+            acted,
+            fixed_versions,
         })
     }
+}
+
+/// The stopped Finding one Receipt stands for, built from the Event Log and
+/// the Rule Pack alone, for an Item no Scan raises anything about any more
+/// because it is in the store.
+fn stopped_by(entry: &QuarantineEntry, pack: &RulePack) -> Standing {
+    let source = entry
+        .finding_id
+        .split('|')
+        .nth(1)
+        .and_then(|segment| match segment {
+            "score" => Some(Source::Score(0)),
+            "drift" => Some(Source::Drift),
+            "keeps-coming-back" => Some(Source::KeepsComingBack),
+            rule => rule
+                .strip_prefix("rule/")
+                .and_then(|id| id.parse::<i64>().ok())
+                .map(Source::Rule),
+        })
+        .unwrap_or(Source::Rule(entry.rule_id));
+    let meta = pack.metas().find(|meta| meta.id == entry.rule_id);
+    let finding = Finding {
+        item_id: entry.item_id.clone(),
+        source,
+        content_hash: entry.content_hash.clone(),
+        category: meta.map(|meta| meta.category).unwrap_or(Category::Threat),
+        severity: meta.map(|meta| meta.severity).unwrap_or(Severity::High),
+        tier: entry
+            .tier
+            .or(meta.map(|meta| meta.tier))
+            .unwrap_or(Tier::Rules),
+        status: meta
+            .map(|meta| meta.status)
+            .unwrap_or(RuleStatus::Probation),
+        title: meta
+            .map(|meta| meta.title.clone())
+            .unwrap_or_else(|| "Quarantined by AgentSweep".to_string()),
+        plain: meta.map(|meta| meta.plain.clone()).unwrap_or_else(|| {
+            "AgentSweep took this out of its place, so the Agent cannot load it.".to_string()
+        }),
+        sensitive: meta.is_some_and(|meta| meta.sensitive),
+        file: String::new(),
+        matches: Vec::new(),
+        heuristics: Vec::new(),
+        drift: None,
+    };
+    let id = match entry.finding_id.is_empty() {
+        true => FindingId::of(&finding),
+        false => FindingId::from_recorded(&entry.finding_id),
+    };
+    Standing {
+        id,
+        finding,
+        state: FindingState::Stopped,
+        receipt_id: entry.receipt_id.clone(),
+    }
+}
+
+/// The newer version of each quarantined plugin that this Scan found and
+/// raised no Threat Finding on, by the Receipt that stopped the old one.
+///
+/// Nothing is switched on because of it: it is what offers the one-click
+/// Re-enable, which the user asks for (spec section 5.4).
+fn fixed_versions(
+    quarantined: &QuarantineManifest,
+    enumeration: &Enumeration,
+    raised: &[Finding],
+) -> BTreeMap<String, String> {
+    let mut fixed = BTreeMap::new();
+    for entry in quarantined.entries() {
+        if entry.kind != Some(Kind::Plugin) || !entry.natively_disabled {
+            continue;
+        }
+        let Some(newer) = enumeration
+            .items
+            .iter()
+            .find(|item| item.id == entry.item_id && item.content_hash != entry.content_hash)
+        else {
+            continue;
+        };
+        let threatened = raised.iter().any(|finding| {
+            finding.item_id == newer.id
+                && finding.content_hash == newer.content_hash
+                && finding.category == Category::Threat
+        });
+        if !threatened {
+            fixed.insert(entry.receipt_id.clone(), newer.content_hash.clone());
+        }
+    }
+    fixed
 }
 
 /// How many Items fell in each Band.

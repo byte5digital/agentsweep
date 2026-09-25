@@ -13,8 +13,10 @@
 //! them, runs the daily Full Scan when it is due, compacts the Baseline behind
 //! a completed Full Scan, caches what a Scan derived in the state file, and
 //! answers a signed peer of the same version with Health, the Scan summary and
-//! the Findings that stand. The actions and the Rule Feed arrive with the
-//! tickets after this one.
+//! the Findings that stand. It carries out the actions a client asks for by
+//! Finding, Item or Receipt id, quarantines by itself what a stable Rule proves
+//! bad during a Scan, and takes out again what keeps coming back. The Rule
+//! Feed arrives with the ticket after this one.
 //!
 //! The binary is a few lines around [`run`]; everything else is here so that a
 //! test can start a daemon against a temporary home, a temporary data
@@ -23,6 +25,19 @@
 
 #![warn(missing_docs)]
 
+/// Writes one line to the standard error stream.
+///
+/// The daemon's real log is `tracing` to a rotated file, which arrives with
+/// the application milestone. Until then a hand run reads its own output. A
+/// line names paths and ids and never content or a sensitive field (spec
+/// section 6.9).
+macro_rules! say {
+    ($($argument:tt)*) => {
+        eprintln!("{} agentsweepd {}", agentsweep_core::envelope::Timestamp::now(), format_args!($($argument)*))
+    };
+}
+
+pub mod actions;
 pub mod budgets;
 pub mod change_scan;
 pub mod due;
@@ -31,6 +46,7 @@ pub mod machine;
 pub mod options;
 pub mod peer_check;
 pub mod service;
+pub mod sessions;
 pub mod stores;
 pub mod watcher;
 

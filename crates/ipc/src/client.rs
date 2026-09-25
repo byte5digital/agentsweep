@@ -10,7 +10,12 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::protocol::{Hello, Message, Refusal, Request, RequestError, Role, StateEvent, Status};
+use agentsweep_core::quarantine::Conflict;
+
+use crate::protocol::{
+    ActionReport, Hello, Message, Refusal, Request, RequestError, RevealedReceipt, Role,
+    StateEvent, Status, receipts_from_value,
+};
 use crate::socket::{Connection, connect, default_socket_path};
 
 /// Why a client could not be answered.
@@ -119,6 +124,74 @@ impl Client {
     /// has finished. A Scan that is already running is joined.
     pub fn scan_now(&mut self) -> Result<(), ClientError> {
         self.ask(Request::ScanNow).map(|_| ())
+    }
+
+    /// Takes the Item of one Threat Finding out of its Surface. The target is
+    /// a Finding id, or the id of an Item with one open Threat Finding.
+    pub fn quarantine(&mut self, target: &str) -> Result<ActionReport, ClientError> {
+        self.act(Request::Quarantine {
+            target: target.to_string(),
+        })
+    }
+
+    /// Puts a quarantined Item back. The target is a Receipt id, or the id of
+    /// a Finding or an Item that one Receipt stopped.
+    pub fn restore(
+        &mut self,
+        target: &str,
+        conflict: Conflict,
+    ) -> Result<ActionReport, ClientError> {
+        self.act(Request::Restore {
+            target: target.to_string(),
+            conflict,
+        })
+    }
+
+    /// Calls the content of one Finding's Item safe, bound to its hash.
+    pub fn trust(&mut self, target: &str) -> Result<ActionReport, ClientError> {
+        self.act(Request::Trust {
+            target: target.to_string(),
+        })
+    }
+
+    /// Answers a Drift Finding with "that was me".
+    pub fn acknowledge(&mut self, target: &str) -> Result<ActionReport, ClientError> {
+        self.act(Request::Acknowledge {
+            target: target.to_string(),
+        })
+    }
+
+    /// The one-click fix of Exposures 0018 and 0019.
+    pub fn fix(&mut self, target: &str) -> Result<ActionReport, ClientError> {
+        self.act(Request::Fix {
+            target: target.to_string(),
+        })
+    }
+
+    /// Switches a quarantined plugin back on for its newer, clean version.
+    pub fn re_enable(&mut self, target: &str) -> Result<ActionReport, ClientError> {
+        self.act(Request::ReEnable {
+            target: target.to_string(),
+        })
+    }
+
+    /// Every Receipt in the quarantine store with the path its Item was taken
+    /// from, or only those taken from at or below one path.
+    pub fn reveal_receipts(
+        &mut self,
+        path: Option<&str>,
+    ) -> Result<Vec<RevealedReceipt>, ClientError> {
+        let answer = self.ask(Request::RevealReceipt {
+            path: path.map(str::to_string),
+        })?;
+        receipts_from_value(&answer)
+            .ok_or_else(|| ClientError::Unexpected("the Receipts could not be read".to_string()))
+    }
+
+    fn act(&mut self, request: Request) -> Result<ActionReport, ClientError> {
+        let answer = self.ask(request)?;
+        ActionReport::from_value(&answer)
+            .ok_or_else(|| ClientError::Unexpected("the answer could not be read".to_string()))
     }
 
     /// Turns the connection into a stream of state events.

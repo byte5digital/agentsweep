@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentSweep</title>
+    <link rel="stylesheet" href="window.css" />
+    <script type="module" src="window.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>AgentSweep</h1>
+      <p class="off" id="off" hidden></p>
+      <div class="scan" id="scan">
+        <button type="button" id="scan-now">Scan now</button>
+        <button type="button" id="scan-folder">Scan a folder</button>
+        <p class="muted" id="scan-line"></p>
+      </div>
+    </header>
+
+    <main>
+      <section class="notice" id="notice" hidden>
+        <p class="message" id="notice-message"></p>
+        <p class="muted" id="notice-sessions"></p>
+        <div class="actions" id="notice-choices"></div>
+        <details id="notice-details">
+          <summary>Details</summary>
+          <pre id="notice-lines"></pre>
+        </details>
+      </section>
+
+      <section class="folder" id="folder" hidden>
+        <h2>Scan a folder</h2>
+        <p class="verdict" id="folder-verdict"></p>
+        <p class="muted" id="folder-root"></p>
+        <p id="folder-summary"></p>
+        <p class="muted" id="folder-ambiguous"></p>
+        <p class="muted" id="folder-recorded"></p>
+        <div id="folder-cards"></div>
+      </section>
+
+      <section>
+        <h2>Open Findings <span class="muted" id="counts"></span></h2>
+        <p class="muted" id="empty" hidden>Nothing is open.</p>
+        <div id="open"></div>
+      </section>
+
+      <section id="decided-section" hidden>
+        <h2>Stopped and decided</h2>
+        <div id="decided"></div>
+      </section>
+    </main>
+
+    <dialog id="confirm">
+      <form method="dialog">
+        <p class="message" id="confirm-question"></p>
+        <p id="confirm-sessions"></p>
+        <p class="muted" id="confirm-project"></p>
+        <div class="actions">
+          <button value="cancel">Cancel</button>
+          <button value="ok" class="primary" id="confirm-ok"></button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

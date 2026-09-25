@@ -14,13 +14,24 @@
         "title": "AgentSweep",
         "url": "index.html",
         "width": 300,
-        "height": 180,
+        "height": 300,
         "visible": false,
         "decorations": false,
         "resizable": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "focus": false
+      },
+      {
+        "label": "findings",
+        "title": "AgentSweep",
+        "url": "window.html",
+        "width": 820,
+        "height": 640,
+        "minWidth": 560,
+        "minHeight": 400,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {

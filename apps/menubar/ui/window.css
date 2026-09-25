@@ -1,0 +1,195 @@
+/* The Findings window. Placeholder layout; spec section 8 is not committed
+   to here. */
+
+:root {
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --surface: #ffffff;
+  --card: #f5f5f7;
+  --rule: #d2d2d7;
+  --threat: #c7372f;
+  --exposure: #d98b00;
+  --clear: #2e9d4f;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #f5f5f7;
+    --muted: #a1a1a6;
+    --surface: #1e1e20;
+    --card: #2a2a2d;
+    --rule: #3a3a3c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+
+header {
+  position: sticky;
+  top: 0;
+  padding: 14px 20px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
+}
+
+main {
+  padding: 4px 20px 24px;
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+h2 {
+  margin: 20px 0 8px;
+  font-size: 14px;
+}
+
+p {
+  margin: 4px 0;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.off {
+  color: var(--threat);
+  font-weight: 600;
+}
+
+.scan {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+button {
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  cursor: default;
+}
+
+button:hover {
+  border-color: var(--muted);
+}
+
+button.primary {
+  border-color: var(--threat);
+}
+
+.card {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border-left: 4px solid var(--rule);
+  background: var(--card);
+}
+
+.card[data-category="threat"] {
+  border-left-color: var(--threat);
+}
+
+.card[data-category="exposure"] {
+  border-left-color: var(--exposure);
+}
+
+.card .title {
+  font-weight: 600;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0;
+}
+
+.chip {
+  padding: 0 6px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.id {
+  font: 11px/1.4 ui-monospace, Menlo, monospace;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.notice,
+.folder {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+
+.message {
+  font-weight: 600;
+}
+
+.verdict {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.folder[data-safe="true"] .verdict {
+  color: var(--clear);
+}
+
+.folder[data-safe="false"] .verdict {
+  color: var(--threat);
+}
+
+pre {
+  margin: 6px 0 0;
+  font: 11px/1.4 ui-monospace, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+dialog {
+  max-width: 460px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* The hidden attribute wins over every display rule above. */
+[hidden] {
+  display: none !important;
+}

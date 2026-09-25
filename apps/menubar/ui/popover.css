@@ -115,3 +115,8 @@ button.quiet {
 button:hover {
   background: var(--rule);
 }
+
+/* The hidden attribute wins over every display rule above. */
+[hidden] {
+  display: none !important;
+}

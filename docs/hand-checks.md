@@ -109,6 +109,49 @@ Move the bundle back to `~/agentsweep-hand-check/` for the clean-up; the daemon 
 - [ ] `~/Library/Logs/AgentSweep/daemon.log` exists, names paths and ids and never file content, MCP env values, headers or tokens.
 - [ ] Rotation at five files of five megabytes is covered by `log::tests::the_log_rotates_at_its_size_and_keeps_its_count_of_files` on a temporary directory; filling 25 MB by hand is not needed.
 
+## 7. The Findings window acts through the daemon and follows the stream
+
+This check needs no hand install. It runs a debug daemon on a temporary home with the chain key in memory, and the bare debug app pointed at it; neither touches the real home, the real socket, the real data directory, the Keychain or Login Items, and the daemon never asks the Rule Feed. Build both with `cargo build -p agentsweep-daemon -p agentsweep-menubar`, then make a home with something to find: a skill whose `SKILL.md` pipes a download from a `.invalid` host into `sh` (Rule 0001), a `.claude.json` holding `{"projects": {}}`, and a `.claude/settings.json` whose `permissions.defaultMode` is `bypassPermissions` (Exposure 0019). Keep the socket path short; macOS allows about a hundred characters.
+
+```sh
+w=$(mktemp -d /tmp/asw.XXXX)
+# ... lay out $w/home as above, and mkdir $w/data
+target/debug/agentsweepd --home $w/home --data-dir $w/data --socket $w/d.sock --key-source memory --log stderr &
+AGENTSWEEP_DEV_SOCKET=$w/d.sock AGENTSWEEP_DEV_SHOW_WINDOW=1 target/debug/agentsweep-menubar &
+target/debug/agentsweep status --socket $w/d.sock
+```
+
+- [ ] The window lists the same open Findings, with the same ids, as `agentsweep status`: kind and name, Severity, Tier, category, Probation state, the plain line and, where there is one, the Drift line.
+- [ ] The skill offers Quarantine and Trust this version; the 0019 Exposure offers Keep it as it is and Take this setting out, and never Quarantine.
+- [ ] Quarantine asks first, and the question says whether Agent sessions appear to be running (write `$w/home/.claude/sessions/<pid>.json` naming a live pid, for example the shell's, to see the other answer).
+- [ ] After Quarantine the card moves to Stopped and decided with its Receipt id without any refresh, and `agentsweep status` says the same; Restore moves it back, Trust this version moves it to trusted.
+- [ ] An action the daemon refuses shows one sentence beginning "Nothing was done:" and changes nothing.
+- [ ] Scan now shows "Checked N of M Items." while it runs and the last Scan line when it ends, in the window and in the popover.
+- [ ] Scan a folder opens the macOS folder picker; a folder with a planted `CLAUDE.md` answers "Do not open yet." with the Finding beneath, a clean one "Safe to open.", both with "Nothing was recorded.", and `agentsweep status` is unchanged afterwards.
+- [ ] Killing the daemon turns the window to "Protection is off" and hides Scan now and Scan a folder; starting it again brings the list back without reopening the window.
+- [ ] With the window open, `lsappinfo info -only ApplicationType -app agentsweep-menubar` says `Foreground` and the app has a Dock icon and a Cmd-Tab entry; after closing the window it says `UIElement` and both are gone. On an installed bundle this is the Tauri issue 15005 check of the release draft.
+
+Stop both with `pkill -x agentsweep-menubar; pkill -x agentsweepd`, then `rm -rf $w` and the three folders a run of the bare binary leaves: `~/Library/Caches/agentsweep-menubar`, `~/Library/WebKit/agentsweep-menubar` and `"$TMPDIR"agentsweep-menubar`.
+
+Seams in the suite: `findings::tests` (the list, the offers per source and state, the stream reducer and the confirmation), `asking::tests` (the answers in the command line interface's words), `folder::tests`, the `window` integration tests of the app (a real daemon on a temporary home: every action followed from the stream, the Folder Scan recording nothing) and, in the daemon, `a_folder_scan_on_request_answers_and_records_nothing` and `a_path_on_a_request_that_takes_none_is_never_answered`.
+
+## Dogfooding: one day with the app
+
+The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.
+
+- [ ] Is the Health sentence right when Findings are open? The popover can say "All clear" in its sentence while its detail line says Findings are open, because the precedence of spec section 6.6 has no rung for open Findings.
+- [ ] Which ids, paths, Tiers and Rule ids does the Simple Posture hide, and which stay one click away? The window shows them all today.
+- [ ] Is "Restore" enough, or must the button say "Restore and trust this version" before it is pressed? The status does not say whether AgentSweep or the user took an Item out, so the app cannot tell the two apart until the answer comes back.
+- [ ] Drift questions offer "Yes, that was me", "No, remove it" and "Trust this version" side by side; spec section 8.5 hides Trust behind technical details in the Simple Posture.
+- [ ] Where does an action's answer belong? It shows at the top of the window, with the sessions sentence and the Receipt lines folded under Details.
+- [ ] Is the Quarantine confirmation's sessions sentence the one to keep, and should it name the sessions it found?
+- [ ] Exposures need "Show me how to fix this" with Open the file; only the 0018 and 0019 fix exists.
+- [ ] Scan a folder needs its drop zone and, in the Developer Posture, the equivalent `agentsweep scan <dir>`. Should the daemon's Folder Scan and the command line's agree on the Rule Pack? The daemon uses the pack in force, the command line the bundled one.
+- [ ] The sidebar of spec section 8.1 (Overview, Needs your decision, Worth fixing, Quarantine, Activity, Settings) with counts, and where the list of what was stopped and decided goes.
+- [ ] Delete permanently, Reveal in Finder, Untrust and the "rule was withdrawn" line are not offered yet.
+- [ ] Closing the window hides it; is that what a person expects of Cmd-W and of the red button, and does Cmd-Q from the regular app's menu quit the menu bar app too?
+- [ ] Should Scan now's progress show in the popover, or only the sentence "Checking now."?
+
 ## Clean up, completely
 
 Unregister both services from the bundle that registered them, then remove everything the run created:
@@ -130,6 +173,8 @@ Then run the "Before" commands again: every one must report nothing. Login Items
 ## Record of runs
 
 2026-09-25, ticket 24, macOS 26.6, debug sidecars, ad-hoc signature, bundle in a temporary directory: checks 1, 3 (the launchd side), 4 (with a copy of the same build, so the version did not change), 5 and the Dock half of 6 passed. The log showed "was replaced ... exiting with status 75" once the Scan in hand had finished, and "is gone ... exiting with status 0" with launchd's last exit code 0 and no restart. The popover was not looked at (no screen access in that session), and check 4 was not run with a higher version. Everything the run created was removed as in the clean-up section, including the Keychain item and the WebKit and cache folders.
+
+2026-09-25, ticket 25, macOS 26.6, a developer run only (no hand install): a debug daemon on a temporary home with `--key-source memory` and a socket under `/private/tmp`, and the bare debug app with `AGENTSWEEP_DEV_SOCKET` and `AGENTSWEEP_DEV_SHOW_WINDOW`. The app started without an error, opened its subscription and asked the daemon for the status (two app connections in the daemon's log), and `lsappinfo` said `Foreground` with the window open. The window was not looked at and no button was pressed (no screen access in that session); check 7 is otherwise covered by the suite's seams only. Both processes were stopped, and the temporary home, the socket and the three folders the bare binary left (`~/Library/Caches/agentsweep-menubar`, `~/Library/WebKit/agentsweep-menubar`, `$TMPDIR/agentsweep-menubar`) were removed.
 
 ## Release draft additions
 

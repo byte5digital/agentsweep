@@ -789,3 +789,102 @@ fn the_switch_a_plugin_quarantine_flips_is_a_known_action_and_never_drift() {
     let status = sandbox.status();
     assert!(!is_drift_on_the_switch(&status), "{:?}", status.findings);
 }
+
+/// A newer version of a quarantined plugin that the Scan raises no Threat
+/// Finding on is a fixed version: the stopped Finding offers Re-enable, which
+/// switches the plugin back on and leaves the old version in the store (spec
+/// section 5.4). Nothing flips by itself, and the switch is never Drift.
+#[test]
+fn a_clean_newer_plugin_version_offers_re_enable_and_re_enable_switches_it_back_on() {
+    let fixture = fixtures::Copy::of("claude-code", "installed-plugin-and-marketplace");
+    let sandbox = Sandbox::over_fixture("re-enable", &fixture);
+    let daemon = sandbox.start();
+    let settings = sandbox.home.join(".claude/settings.json");
+    let plugins = sandbox.home.join(".claude/plugins");
+
+    let status = sandbox.status();
+    let plugin = status
+        .open()
+        .find(|finding| {
+            finding
+                .item_id
+                .as_str()
+                .ends_with("plugin/notes@demo-marketplace")
+                && finding.category == Category::Threat
+        })
+        .unwrap_or_else(|| panic!("a Threat Finding on the plugin: {:?}", status.findings))
+        .clone();
+    let stopped = sandbox
+        .client()
+        .quarantine(plugin.id.as_str())
+        .expect("a Quarantine");
+
+    // The Agent updates the plugin: a new version directory without the
+    // shadowing `bin/npx`, and the install registry moved to it as a whole.
+    let newer = plugins.join("cache/demo-marketplace/notes/1.3.0");
+    std::fs::create_dir_all(newer.join(".claude-plugin")).expect("a version directory");
+    std::fs::write(
+        newer.join(".claude-plugin/plugin.json"),
+        "{\n  \"name\": \"notes\",\n  \"version\": \"1.3.0\",\n  \"description\": \"Keeps one note file per project.\"\n}\n",
+    )
+    .expect("a manifest");
+    let registry = plugins.join("installed_plugins.json");
+    let moved = std::fs::read_to_string(&registry)
+        .expect("the install registry")
+        .replace("1.2.0", "1.3.0")
+        .replace("9f1c2bd4e7a0", "0c1d2e3f4a5b");
+    std::fs::write(&registry, moved).expect("an updated registry");
+    scan_again(&sandbox, &daemon);
+
+    let status = sandbox.status();
+    let held = status
+        .findings
+        .iter()
+        .find(|finding| finding.receipt_id == stopped.receipt_id)
+        .unwrap_or_else(|| panic!("the stopped Finding: {:?}", status.findings));
+    assert_eq!(held.state, FindingState::Stopped);
+    assert!(!held.fixed_version.is_empty(), "{:?}", status.findings);
+    assert!(
+        agentsweep_ipc::protocol::offers(held).contains(&agentsweep_ipc::protocol::Offer::ReEnable)
+    );
+    assert!(
+        std::fs::read_to_string(&settings)
+            .expect("the settings file")
+            .contains("\"notes@demo-marketplace\": false"),
+        "nothing flips by itself"
+    );
+
+    let report = sandbox
+        .client()
+        .re_enable(&stopped.receipt_id)
+        .expect("a Re-enable");
+    assert_eq!(
+        report.state, "stopped",
+        "the old version stays in the store"
+    );
+    assert!(
+        std::fs::read_to_string(&settings)
+            .expect("the settings file")
+            .contains("\"notes@demo-marketplace\": true")
+    );
+    assert_eq!(last_event(&sandbox).action, Action::ReEnable);
+    let status = sandbox.status();
+    let held = status
+        .findings
+        .iter()
+        .find(|finding| finding.receipt_id == stopped.receipt_id)
+        .expect("the stopped Finding");
+    assert!(held.fixed_version.is_empty(), "offered once");
+
+    scan_again(&sandbox, &daemon);
+    let status = sandbox.status();
+    assert!(
+        !status
+            .findings
+            .iter()
+            .any(|finding| finding.source == "drift"
+                && finding.item_id.as_str().contains("enabledPlugins")),
+        "{:?}",
+        status.findings
+    );
+}

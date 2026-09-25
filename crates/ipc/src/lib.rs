@@ -4,7 +4,8 @@
 //! command line interface are clients of it (spec section 6.2). What they say
 //! to each other is here: the socket, the length-prefixed JSON frame, the
 //! `hello` handshake that refuses a version mismatch or an unsigned peer, the
-//! closed list of requests and their answers, and the one stream of state
+//! closed list of requests and their answers (the actions among them, each
+//! addressing a Finding, Item or Receipt id), and the one stream of state
 //! events.
 //!
 //! The crate sits beside the daemon rather than inside it on purpose. A client
@@ -24,8 +25,9 @@ pub use client::{Client, ClientError, Subscription};
 pub use frame::{MAX_FRAME, read_frame, write_frame};
 pub use peer::{Nobody, Peer, PeerCheck, SameUser};
 pub use protocol::{
-    Hello, Message, RESTART_AGENTSWEEP, Refusal, Request, RequestError, Role, StateEvent, Status,
-    check_version, welcome,
+    ActionReport, AgentSessions, Hello, Message, Offer, RESTART_AGENTSWEEP, Refusal, Request,
+    RequestError, RevealedReceipt, Role, Sessions, StateEvent, Status, check_version, offers,
+    welcome,
 };
 pub use socket::{Connection, SOCKET_NAME, SocketListener, connect, default_socket_path};
 

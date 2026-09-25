@@ -45,9 +45,12 @@ pub struct QuarantineEntry {
     pub steps: Vec<ReceiptStep>,
     /// How the Quarantine came out.
     pub result: Outcome,
-    /// How often the entry came back and was removed again. Three within an
-    /// hour raises the "keeps coming back" Finding.
+    /// How often the entry came back and was removed again. Three
+    /// reappearances within an hour raise the "keeps coming back" Finding.
     pub re_enforced: u32,
+    /// When each of those removals was recorded, oldest first, which is what
+    /// the hour is counted over.
+    pub re_enforced_at: Vec<Timestamp>,
     /// False once Re-enable reversed the native disable step of a plugin.
     pub natively_disabled: bool,
     /// True when a Restore was tried and did not finish.
@@ -57,7 +60,57 @@ pub struct QuarantineEntry {
     pub verified: bool,
 }
 
+/// The window reappearances are counted over (spec section 5.3).
+pub const REAPPEARANCE_WINDOW_MS: i64 = 60 * 60 * 1000;
+
+/// How many reappearances within [`REAPPEARANCE_WINDOW_MS`] make AgentSweep
+/// stop taking an Item out again and raise the "keeps coming back" Finding.
+pub const REAPPEARANCES_TOLERATED: usize = 3;
+
 impl QuarantineEntry {
+    /// How many times the Item was taken out again within the hour before
+    /// `at`.
+    pub fn re_enforced_within_the_hour(&self, at: Timestamp) -> usize {
+        let since = at.as_unix_ms() - REAPPEARANCE_WINDOW_MS;
+        self.re_enforced_at
+            .iter()
+            .filter(|moment| moment.as_unix_ms() > since)
+            .count()
+    }
+
+    /// True when one more reappearance at `at` is the third within an hour,
+    /// which AgentSweep answers with the "keeps coming back" Finding instead
+    /// of taking the Item out again (spec section 5.3).
+    ///
+    /// Every earlier reappearance within the hour was taken out again and left
+    /// a `re-enforce` record, so the one that has just happened is that count
+    /// plus one.
+    pub fn keeps_coming_back(&self, at: Timestamp) -> bool {
+        self.re_enforced_within_the_hour(at) + 1 >= REAPPEARANCES_TOLERATED
+    }
+
+    /// Where the Item sat on its Surface before it was taken out: the file or
+    /// tree that moved, or the file the entry was taken out of. Kept in the
+    /// Event Log only, never in the name of anything in the store (spec
+    /// section 5.1).
+    ///
+    /// A composite's first step is the Agent's switch or its registry record,
+    /// so for a plugin and a marketplace the Item is the directory that moved.
+    /// Everything else starts with the step that took the Item itself: a hook
+    /// whose script moved with it sat in the file its first step edited.
+    pub fn original_path(&self) -> Option<&str> {
+        let composite = matches!(self.kind, Some(Kind::Plugin | Kind::Marketplace));
+        let step = match composite {
+            true => self
+                .steps
+                .iter()
+                .find(|step| step.primitive == Primitive::MoveOut),
+            false => None,
+        };
+        step.or_else(|| self.steps.first())
+            .map(|step| step.path.as_str())
+    }
+
     /// True when a payload sits in the store for this Receipt: a file or a
     /// tree was moved out.
     pub fn has_payload(&self) -> bool {
@@ -102,6 +155,7 @@ impl QuarantineManifest {
                             steps: event.steps.clone(),
                             result: event.result,
                             re_enforced: 0,
+                            re_enforced_at: Vec::new(),
                             natively_disabled: event
                                 .steps
                                 .iter()
@@ -130,6 +184,7 @@ impl QuarantineManifest {
                 Action::ReEnforce => {
                     if let Some(entry) = manifest.entries.get_mut(&event.receipt_id) {
                         entry.re_enforced += 1;
+                        entry.re_enforced_at.push(recorded.recorded_at);
                     }
                 }
                 _ => {}

@@ -190,6 +190,10 @@ pub enum Source {
     /// ever ran over it, which is the whole point: what was not read cannot be
     /// called clear.
     Problem(ProblemReason),
+    /// An Item AgentSweep quarantined by itself came back three times within
+    /// an hour, and AgentSweep stopped taking it out again (spec section
+    /// 5.3). The Finding is about the Item as it stands, back on the Surface.
+    KeepsComingBack,
 }
 
 impl fmt::Display for Source {
@@ -199,6 +203,7 @@ impl fmt::Display for Source {
             Source::Score(score) => write!(f, "score {score}"),
             Source::Drift => f.write_str("drift"),
             Source::Problem(reason) => write!(f, "problem {}", reason.as_str()),
+            Source::KeepsComingBack => f.write_str("keeps coming back"),
         }
     }
 }
@@ -312,6 +317,43 @@ impl Finding {
         }
     }
 
+    /// The Finding an Item that keeps coming back becomes (spec section 5.3).
+    ///
+    /// AgentSweep took the Item out by itself, something put it back three
+    /// times within an hour, and AgentSweep stopped taking it out again: a
+    /// running Agent session that holds its configuration in memory and writes
+    /// it back whole is the usual reason. It is the Threat the Quarantine was
+    /// about, as bad as that Finding was, and it asks the user to close the
+    /// Agent and quarantine it once more by hand.
+    pub fn keeps_coming_back(
+        item_id: &ItemId,
+        kind: Kind,
+        content_hash: &str,
+        severity: Severity,
+        status: RuleStatus,
+    ) -> Finding {
+        let named = kind.id_segment().replace('-', " ");
+        Finding {
+            item_id: item_id.clone(),
+            source: Source::KeepsComingBack,
+            content_hash: content_hash.to_string(),
+            category: Category::Threat,
+            severity,
+            tier: Tier::Rules,
+            status,
+            title: format!("A dangerous {named} keeps coming back"),
+            plain: format!(
+                "AgentSweep removed this {named} and it came back, three times in the last hour, \
+                 so it stopped removing it. Close every Agent window, then quarantine it once more."
+            ),
+            sensitive: false,
+            file: String::new(),
+            matches: Vec::new(),
+            heuristics: Vec::new(),
+            drift: None,
+        }
+    }
+
     /// True when the Rule behind the Finding is still on Probation, which is
     /// what keeps it from quarantining by itself.
     pub fn on_probation(&self) -> bool {
@@ -362,6 +404,7 @@ impl FindingId {
             Source::Score(_) => "score".to_string(),
             Source::Drift => "drift".to_string(),
             Source::Problem(reason) => format!("problem/{}", reason.as_str()),
+            Source::KeepsComingBack => "keeps-coming-back".to_string(),
         };
         FindingId(format!("{item_id}|{source}|{content_hash}"))
     }

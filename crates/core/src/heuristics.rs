@@ -288,6 +288,7 @@ fn order(finding: &Finding) -> (u8, i64) {
         Source::Score(score) => (1, score),
         Source::Drift => (2, 0),
         Source::Problem(_) => (3, 0),
+        Source::KeepsComingBack => (4, 0),
     }
 }
 

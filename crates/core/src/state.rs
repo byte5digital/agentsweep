@@ -224,6 +224,11 @@ pub struct RecordedFinding {
     pub drift: String,
     /// The Receipt that stopped it, empty unless it is stopped.
     pub receipt_id: String,
+    /// The content hash of a newer version of a quarantined plugin that the
+    /// last Scan found and raised no Threat Finding on, which is what offers
+    /// Re-enable ("Fixed version available", spec section 5.4). Empty
+    /// otherwise.
+    pub fixed_version: String,
     /// When AgentSweep first saw it.
     pub first_seen: Timestamp,
     /// When the user was told about it, absent when they have not been.
@@ -258,6 +263,7 @@ impl RecordedFinding {
                 .map(|drift| drift.line.clone())
                 .unwrap_or_default(),
             receipt_id: standing.receipt_id.clone(),
+            fixed_version: String::new(),
             first_seen,
             notified_at: None,
         }
@@ -287,6 +293,10 @@ impl RecordedFinding {
         map.insert(
             "first_seen".to_string(),
             Value::from(self.first_seen.to_string()),
+        );
+        map.insert(
+            "fixed_version".to_string(),
+            Value::from(self.fixed_version.as_str()),
         );
         map.insert("id".to_string(), Value::from(self.id.as_str()));
         map.insert("item_id".to_string(), Value::from(self.item_id.as_str()));
@@ -340,6 +350,9 @@ impl RecordedFinding {
             file: text("file")?.to_string(),
             drift: text("drift")?.to_string(),
             receipt_id: text("receipt_id")?.to_string(),
+            // Absent in a state file written before Re-enable was offered,
+            // which reads as no fixed version known.
+            fixed_version: text("fixed_version").unwrap_or_default().to_string(),
             first_seen: Timestamp::parse(text("first_seen")?)?,
             notified_at: moment("notified_at")?,
         })

@@ -57,7 +57,9 @@ impl Cause {
             status: finding.status,
             rule_id: match finding.source {
                 Source::Rule(id) => id,
-                Source::Score(_) | Source::Drift | Source::Problem(_) => 0,
+                Source::Score(_) | Source::Drift | Source::Problem(_) | Source::KeepsComingBack => {
+                    0
+                }
             },
             finding_id: FindingId::of(finding),
             drift: finding.is_drift(),
@@ -108,9 +110,13 @@ pub fn may_quarantine(item: &Item, cause: &Cause) -> Result<(), EnforcementError
     if cause.category != Category::Threat {
         return refuse("an Exposure is never quarantined, only fixed");
     }
-    if cause.drift {
+    // Drift alone never quarantines by itself. The user answering the
+    // question with "No, remove it" is a manual Quarantine like any other
+    // (spec section 8.5): they are the one saying the change was not theirs.
+    if cause.drift && cause.actor != Actor::User {
         return refuse(
-            "a change with nothing known behind it is a question, not a verdict: Drift alone              never quarantines",
+            "a change with nothing known behind it is a question, not a verdict: Drift alone \
+             never quarantines",
         );
     }
     if item.scope == crate::item::Scope::Managed {
@@ -138,6 +144,52 @@ pub fn may_quarantine(item: &Item, cause: &Cause) -> Result<(), EnforcementError
     }
 }
 
+/// The Exposure Rules whose Finding offers the one-click fix: an unrestricted
+/// shell allowed without asking (0018) and approvals or the sandbox turned off
+/// (0019). The fix takes the entry out of its settings file, which is the
+/// RemoveEntry primitive under the hood (spec section 5.2).
+pub const FIXABLE_EXPOSURES: [i64; 2] = [18, 19];
+
+/// Whether this Exposure Finding on this Item may be fixed with one click,
+/// with the sentence that says why not.
+///
+/// A fix is the user's own decision about their own configuration, so only a
+/// person asks for it, only on the two Rules that offer it, and only where the
+/// kind is an entry the adapter takes out of its file: an Exposure is never
+/// moved away, and a Managed Item is never touched at all.
+pub fn may_fix(item: &Item, cause: &Cause) -> Result<(), EnforcementError> {
+    let refuse = |reason: &str| {
+        Err(EnforcementError::NotEligible {
+            reason: reason.to_string(),
+        })
+    };
+    if cause.category != Category::Exposure || !FIXABLE_EXPOSURES.contains(&cause.rule_id) {
+        return refuse("only the Exposures of Rules 0018 and 0019 offer the one-click fix");
+    }
+    if cause.actor != Actor::User {
+        return refuse("a fix is the user's to ask for, never AgentSweep's");
+    }
+    if item.scope == crate::item::Scope::Managed {
+        return refuse("a Managed Item is read-only for AgentSweep, so it is only ever flagged");
+    }
+    if eligibility(item.kind).primitives != [Primitive::RemoveEntry] {
+        return Err(EnforcementError::NotEligible {
+            reason: format!(
+                "a {} has no one-click fix: it is not an entry AgentSweep can take out of its file",
+                item.kind
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// What else one of AgentSweep's own writes moved, besides the Item it was
+/// about: the settings entry a native disable flipped, the registry record a
+/// marketplace composite took out. Asked once the write is done and before it
+/// is recorded, so the record names every hash the write left (ADR 0007).
+pub type Collateral<'c> =
+    &'c mut dyn FnMut(&crate::quarantine::Receipt) -> Vec<(crate::item::ItemId, String)>;
+
 /// The primitives one Quarantine of this Item applies, in order, refusing when
 /// the adapter cannot carry out every one of them.
 pub fn primitives_for(
@@ -158,11 +210,11 @@ pub fn primitives_for(
 }
 
 #[cfg(feature = "daemon")]
-pub use writer::Enforcement;
+pub use writer::{Enforcement, ReEnforced};
 
 #[cfg(feature = "daemon")]
 mod writer {
-    use super::{Cause, left_in_place, may_quarantine, primitives_for};
+    use super::{Cause, Collateral, left_in_place, may_fix, may_quarantine, primitives_for};
 
     use crate::adapter::SurfaceAdapter;
     use crate::chain::ChainState;
@@ -239,25 +291,143 @@ mod writer {
             item: &Item,
             cause: &Cause,
         ) -> Result<Receipt, EnforcementError> {
+            self.quarantine_with(adapter, host, item, cause, &mut |_| Vec::new())
+        }
+
+        /// The same, recording every other Item the write moved as a known
+        /// action too.
+        pub fn quarantine_with(
+            &mut self,
+            adapter: &dyn SurfaceAdapter,
+            host: &Host,
+            item: &Item,
+            cause: &Cause,
+            collateral: Collateral<'_>,
+        ) -> Result<Receipt, EnforcementError> {
             may_quarantine(item, cause)?;
             let primitives = primitives_for(adapter, item)?;
             let receipt = adapter.enforce(host, &self.store, item, primitives)?;
+            self.record_quarantine(host, item, cause, &receipt, collateral, None)?;
+            Ok(receipt)
+        }
 
+        /// Takes one entry of the user's own risky configuration out of its
+        /// file, the one-click fix of Rules 0018 and 0019 (spec section 8.5).
+        ///
+        /// It is recorded as the Quarantine it physically is, with a Receipt a
+        /// Restore replays, so the fix can be undone like anything else
+        /// AgentSweep took out. The record says it was a fix.
+        pub fn fix_with(
+            &mut self,
+            adapter: &dyn SurfaceAdapter,
+            host: &Host,
+            item: &Item,
+            cause: &Cause,
+            collateral: Collateral<'_>,
+        ) -> Result<Receipt, EnforcementError> {
+            may_fix(item, cause)?;
+            let primitives = primitives_for(adapter, item)?;
+            let receipt = adapter.enforce(host, &self.store, item, primitives)?;
+            self.record_quarantine(host, item, cause, &receipt, collateral, Some("fix"))?;
+            Ok(receipt)
+        }
+
+        fn record_quarantine(
+            &mut self,
+            host: &Host,
+            item: &Item,
+            cause: &Cause,
+            receipt: &Receipt,
+            collateral: Collateral<'_>,
+            noted: Option<&str>,
+        ) -> Result<(), EnforcementError> {
             let mut event = Event::new(Action::Quarantine, cause.actor)
                 .about(&item.id, item.kind, &item.content_hash)
                 .because_of(cause.finding_id.as_str(), cause.tier, cause.rule_id);
             // What AgentSweep's own write left on the Surface is a known
             // action, so the next Scan does not ask the user about it (ADR
             // 0007). A neutralised Item is still there, at a new hash.
-            if let Some(hash) = left_in_place(host, item, &receipt) {
+            if let Some(hash) = left_in_place(host, item, receipt) {
                 event = event.leaving(&hash);
+            }
+            event = also_left(event, &item.id, collateral(receipt));
+            if let Some(noted) = noted {
+                event = event.noting("action", noted);
             }
             event.receipt_id = receipt.id.to_string();
             event.steps = receipt.steps.clone();
             event.result = receipt.result();
             event.sessions_running = cause.sessions_running;
             self.writer.append(&event)?;
-            Ok(receipt)
+            Ok(())
+        }
+
+        /// Takes an Item that AgentSweep quarantined by itself out again,
+        /// after something put it back (spec section 5.3).
+        ///
+        /// A running Claude Code session holds `~/.claude.json` in memory and
+        /// writes it back whole, so a removed entry can reappear with exactly
+        /// the content it was removed on. The Item's own Receipt already holds
+        /// that content, so what this removal keeps is thrown away and the
+        /// record counts against the Receipt the Item was first taken out
+        /// under: that count is what the hour of three reappearances is
+        /// measured on, and that Receipt is what a Restore replays.
+        pub fn re_enforce_with(
+            &mut self,
+            adapter: &dyn SurfaceAdapter,
+            host: &Host,
+            item: &Item,
+            entry: &QuarantineEntry,
+            sessions: crate::eventlog::SessionsRunning,
+            collateral: Collateral<'_>,
+        ) -> Result<ReEnforced, EnforcementError> {
+            let refuse = |reason: &str| EnforcementError::NotEligible {
+                reason: reason.to_string(),
+            };
+            if entry.actor != Actor::Auto {
+                return Err(refuse(
+                    "only what AgentSweep took out by itself is taken out again by itself",
+                ));
+            }
+            if entry.item_id != item.id || entry.content_hash != item.content_hash {
+                return Err(refuse(
+                    "this is not the content that was quarantined, so it is not a reappearance",
+                ));
+            }
+            if item.scope == crate::item::Scope::Managed {
+                return Err(refuse(
+                    "a Managed Item is read-only for AgentSweep, so it is only ever flagged",
+                ));
+            }
+            let primitives = primitives_for(adapter, item)?;
+            let again = adapter.enforce(host, &self.store, item, primitives)?;
+
+            let mut event = Event::new(Action::ReEnforce, Actor::Auto)
+                .about(&item.id, item.kind, &item.content_hash)
+                .because_of(
+                    &entry.finding_id,
+                    entry.tier.unwrap_or(crate::finding::Tier::Rules),
+                    entry.rule_id,
+                )
+                .noting("removed_under", again.id.as_str());
+            if let Some(hash) = left_in_place(host, item, &again) {
+                event = event.leaving(&hash);
+            }
+            event = also_left(event, &item.id, collateral(&again));
+            event.receipt_id = entry.receipt_id.clone();
+            event.steps = again.steps.clone();
+            event.result = again.result();
+            event.sessions_running = sessions;
+            self.writer.append(&event)?;
+            // Recorded first, then the duplicate thrown away: a store that
+            // keeps one directory too many is untidy, a record that is missing
+            // is an action nobody can account for.
+            let _ = self.store.discard(&again.id);
+            Ok(ReEnforced {
+                receipt_id: entry.receipt_id.clone(),
+                steps: again.steps,
+                times: entry.re_enforced + 1,
+            })
         }
 
         /// Puts one quarantined Item back, and grants Trust in the same
@@ -272,6 +442,20 @@ mod writer {
             entry: &QuarantineEntry,
             conflict: Conflict,
         ) -> Result<RestoreReport, EnforcementError> {
+            self.restore_with(adapter, host, entry, conflict, &mut |_| Vec::new())
+        }
+
+        /// The same, recording every other Item the Restore moved as a known
+        /// action too: the plugin switch it turned back on, the registry record
+        /// it put back.
+        pub fn restore_with(
+            &mut self,
+            adapter: &dyn SurfaceAdapter,
+            host: &Host,
+            entry: &QuarantineEntry,
+            conflict: Conflict,
+            collateral: Collateral<'_>,
+        ) -> Result<RestoreReport, EnforcementError> {
             let receipt =
                 Receipt::from_entry(entry).ok_or_else(|| EnforcementError::NotEligible {
                     reason: "the Event Log does not describe a Receipt that can be replayed"
@@ -282,6 +466,7 @@ mod writer {
             let mut event = Event::new(Action::Restore, Actor::User)
                 .about(&receipt.item_id, receipt.kind, &receipt.content_hash)
                 .because_of(&entry.finding_id, cause_tier(entry), entry.rule_id);
+            event = also_left(event, &receipt.item_id, collateral(&receipt));
             event.receipt_id = receipt.id.to_string();
             event.steps = report.steps.clone();
             event.result = report.result;
@@ -314,6 +499,18 @@ mod writer {
             entry: &QuarantineEntry,
             fixed: &Item,
         ) -> Result<RestoreReport, EnforcementError> {
+            self.re_enable_with(host, entry, fixed, &mut |_| Vec::new())
+        }
+
+        /// The same, recording the switch it turned back on as a known action,
+        /// so the settings entry that moved is never asked about as Drift.
+        pub fn re_enable_with(
+            &mut self,
+            host: &Host,
+            entry: &QuarantineEntry,
+            fixed: &Item,
+            collateral: Collateral<'_>,
+        ) -> Result<RestoreReport, EnforcementError> {
             let refuse = |reason: &str| EnforcementError::NotEligible {
                 reason: reason.to_string(),
             };
@@ -343,6 +540,7 @@ mod writer {
             let mut event = Event::new(Action::ReEnable, Actor::User)
                 .about(&receipt.item_id, receipt.kind, &receipt.content_hash)
                 .noting("fixed_version", fixed.content_hash.as_str());
+            event = also_left(event, &receipt.item_id, collateral(&receipt));
             event.receipt_id = receipt.id.to_string();
             event.steps = report.steps.clone();
             event.result = report.result;
@@ -385,6 +583,31 @@ mod writer {
             self.writer.append(&event)?;
             Ok(())
         }
+    }
+
+    /// What one re-enforce did.
+    #[derive(Clone, Debug)]
+    pub struct ReEnforced {
+        /// The Receipt the Item was first taken out under, which the record
+        /// counts against.
+        pub receipt_id: String,
+        /// What taking it out again did, step by step.
+        pub steps: Vec<crate::eventlog::ReceiptStep>,
+        /// How many times it has now been taken out again.
+        pub times: u32,
+    }
+
+    /// The record with every other Item the write moved named beside the hash
+    /// it left there. The Item the record is about is never collateral of
+    /// itself.
+    fn also_left(mut event: Event, own: &ItemId, left: Vec<(ItemId, String)>) -> Event {
+        for (item_id, hash) in left {
+            if &item_id == own || hash.is_empty() {
+                continue;
+            }
+            event = event.also_leaving(&item_id, &hash);
+        }
+        event
     }
 
     /// The Tier a restored Quarantine names, defaulting to the Rules where the
@@ -774,11 +997,13 @@ mod tests {
         );
     }
 
-    /// Drift alone never quarantines, whoever asks: a change with nothing
-    /// known behind it is a question about who made it, never a verdict on
-    /// what the content says.
+    /// Drift alone never quarantines by itself: a change with nothing known
+    /// behind it is a question about who made it, never a verdict on what the
+    /// content says. The user answering "No, remove it" is the one exception,
+    /// because they are the one saying the change was not theirs (spec
+    /// section 8.5).
     #[test]
-    fn drift_alone_never_quarantines() {
+    fn drift_alone_never_quarantines_by_itself() {
         let bench = Bench::new();
         let item = bench.item("CLAUDE.md", "# demo\n");
         let drifted = crate::drift::Drift {
@@ -791,12 +1016,43 @@ mod tests {
         };
         let finding = crate::drift::finding(&item, &drifted);
 
-        for actor in [Actor::Auto, Actor::User] {
-            let cause = Cause::of(&finding, actor);
-            assert!(cause.drift);
-            let error = may_quarantine(&item, &cause).expect_err("a refusal");
-            assert!(error.to_string().contains("never quarantines"), "{error}");
+        let cause = Cause::of(&finding, Actor::Auto);
+        assert!(cause.drift);
+        let error = may_quarantine(&item, &cause).expect_err("a refusal");
+        assert!(error.to_string().contains("never quarantines"), "{error}");
+
+        let answered = Cause::of(&finding, Actor::User);
+        assert!(may_quarantine(&item, &answered).is_ok());
+    }
+
+    /// The one-click fix of Rules 0018 and 0019 takes a settings entry out and
+    /// is refused for anything else: another Exposure, a Threat, a kind that is
+    /// not an entry, and AgentSweep acting by itself.
+    #[test]
+    fn only_the_exposures_of_0018_and_0019_on_an_entry_offer_the_fix() {
+        let bench = Bench::new();
+        let mut entry = bench.item("settings.json", "{}\n");
+        entry.kind = Kind::SettingsEntry;
+        let exposure = |rule_id: i64, actor: Actor| Cause {
+            category: Category::Exposure,
+            rule_id,
+            ..cause(actor)
+        };
+
+        assert!(may_fix(&entry, &exposure(18, Actor::User)).is_ok());
+        assert!(may_fix(&entry, &exposure(19, Actor::User)).is_ok());
+        for (item, cause, expected) in [
+            (&entry, exposure(10, Actor::User), "0018 and 0019"),
+            (&entry, cause(Actor::User), "0018 and 0019"),
+            (&entry, exposure(18, Actor::Auto), "never AgentSweep"),
+        ] {
+            let error = may_fix(item, &cause).expect_err("a refusal");
+            assert!(error.to_string().contains(expected), "{error}");
         }
+        let mut policy = bench.item("default.rules", "prefix_rule()\n");
+        policy.kind = Kind::ExecPolicy;
+        let error = may_fix(&policy, &exposure(18, Actor::User)).expect_err("a refusal");
+        assert!(error.to_string().contains("no one-click fix"), "{error}");
     }
 
     #[test]
@@ -997,6 +1253,160 @@ mod tests {
             .re_enable(&bench.host, &entry, &file)
             .expect_err("a refusal");
         assert!(error.to_string().contains("only a plugin"), "{error}");
+    }
+
+    /// Something put back what AgentSweep took out by itself: it is taken out
+    /// again, the record counts against the first Receipt, and the store keeps
+    /// one copy of the content, not two (spec section 5.3).
+    #[test]
+    fn a_reappearance_is_taken_out_again_and_counted_on_the_first_receipt() {
+        let bench = Bench::new();
+        let mut enforcement = bench.enforcement();
+        let item = bench.item("CLAUDE.md", "# demo\n");
+        enforcement
+            .quarantine(&Moves, &bench.host, &item, &cause(Actor::Auto))
+            .expect("a Quarantine");
+        let first = only_entry(&enforcement);
+
+        for round in 1..=2u32 {
+            let back = bench.item("CLAUDE.md", "# demo\n");
+            let entry = only_entry(&enforcement);
+            let done = enforcement
+                .re_enforce_with(
+                    &Moves,
+                    &bench.host,
+                    &back,
+                    &entry,
+                    SessionsRunning::Yes,
+                    &mut |_| Vec::new(),
+                )
+                .expect("a re-enforce");
+            assert_eq!(done.receipt_id, first.receipt_id);
+            assert_eq!(done.times, round);
+            assert!(!back.path.exists(), "taken out again");
+        }
+
+        let entry = only_entry(&enforcement);
+        assert_eq!(entry.re_enforced, 2);
+        assert_eq!(entry.re_enforced_at.len(), 2);
+        let now = crate::envelope::Timestamp::now();
+        assert_eq!(entry.re_enforced_within_the_hour(now), 2);
+        assert!(
+            entry.keeps_coming_back(now),
+            "the third reappearance within the hour is one too many"
+        );
+        let later = crate::envelope::Timestamp::from_unix_ms(
+            now.as_unix_ms() + crate::derived::REAPPEARANCE_WINDOW_MS + 1,
+        );
+        assert!(
+            !entry.keeps_coming_back(later),
+            "an hour on, it counts again"
+        );
+
+        // One Receipt, one directory in the store: the copies each re-enforce
+        // took are the same bytes the first Receipt already holds.
+        let reconciliation = enforcement
+            .manifest()
+            .expect("a readable log")
+            .reconcile(&bench.directory)
+            .expect("a readable store");
+        assert!(reconciliation.agrees(), "{reconciliation:?}");
+
+        let view = enforcement.read().expect("a readable log");
+        let last = &view.events.last().expect("the re-enforce").event;
+        assert_eq!(last.action, crate::eventlog::Action::ReEnforce);
+        assert_eq!(last.actor, Actor::Auto);
+        assert_eq!(last.sessions_running, SessionsRunning::Yes);
+    }
+
+    /// A Quarantine the user asked for is theirs: AgentSweep does not take a
+    /// reappearance of it out by itself.
+    #[test]
+    fn only_an_automatic_quarantine_is_re_enforced() {
+        let bench = Bench::new();
+        let mut enforcement = bench.enforcement();
+        let item = bench.item("CLAUDE.md", "# demo\n");
+        enforcement
+            .quarantine(&Moves, &bench.host, &item, &cause(Actor::User))
+            .expect("a Quarantine");
+        let entry = only_entry(&enforcement);
+        let back = bench.item("CLAUDE.md", "# demo\n");
+
+        let error = enforcement
+            .re_enforce_with(
+                &Moves,
+                &bench.host,
+                &back,
+                &entry,
+                SessionsRunning::No,
+                &mut |_| Vec::new(),
+            )
+            .expect_err("a refusal");
+
+        assert!(error.to_string().contains("by itself"), "{error}");
+        assert!(back.path.is_file());
+    }
+
+    /// The settings entry a plugin composite flipped is named in the record
+    /// with the hash it was left at, so the next Scan reads it as a known
+    /// action and never as Drift (ADR 0007).
+    #[test]
+    fn the_switch_a_composite_flipped_is_recorded_as_a_known_action() {
+        let bench = Bench::new();
+        let mut enforcement = bench.enforcement();
+        let item = bench.plugin("notes@demo", "{\"name\":\"notes\"}\n");
+        let switch = crate::item::ItemId::from_recorded(
+            "demo/user/settings-entry/settings.json#/enabledPlugins/notes@demo",
+        );
+        let flipped = "f".repeat(64);
+
+        enforcement
+            .quarantine_with(
+                &Moves,
+                &bench.host,
+                &item,
+                &cause(Actor::User),
+                &mut |receipt| {
+                    assert!(
+                        receipt
+                            .steps
+                            .iter()
+                            .any(|step| step.primitive == crate::eventlog::Primitive::NativeDisable)
+                    );
+                    vec![(switch.clone(), flipped.clone())]
+                },
+            )
+            .expect("a Quarantine");
+
+        let view = enforcement.read().expect("a readable log");
+        let known = crate::derived::KnownActions::rebuild(&view.events);
+        let stands = known
+            .stands_behind(&switch, &flipped)
+            .expect("the flipped switch is a known action");
+        assert_eq!(stands.action, crate::derived::KnownAction::Write);
+
+        // Re-enable turns the switch back on, and the hash it leaves there is
+        // a known action too.
+        let entry = only_entry(&enforcement);
+        let fixed = Item::tree(
+            "demo",
+            Scope::User,
+            Kind::Plugin,
+            "notes@demo",
+            item.path.clone(),
+            Provenance::Manual,
+            Activation::Active,
+            crate::item::Tree::default(),
+        );
+        let on_again = "e".repeat(64);
+        enforcement
+            .re_enable_with(&bench.host, &entry, &fixed, &mut |_| {
+                vec![(switch.clone(), on_again.clone())]
+            })
+            .expect("a Re-enable");
+        let view = enforcement.read().expect("a readable log");
+        let known = crate::derived::KnownActions::rebuild(&view.events);
+        assert!(known.stands_behind(&switch, &on_again).is_some());
     }
 
     /// Acceptance of ticket 16: an entry whose file changed since the

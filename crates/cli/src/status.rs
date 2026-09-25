@@ -193,6 +193,7 @@ mod tests {
             file: "SKILL.md".to_string(),
             drift: "changed since your last Scan".to_string(),
             receipt_id: String::new(),
+            fixed_version: String::new(),
             first_seen: moment("2026-09-24T08:00:00.000Z"),
             notified_at: None,
         }

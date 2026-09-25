@@ -813,6 +813,19 @@ mod store {
             &self.directory
         }
 
+        /// Throws away what one Receipt holds in the store.
+        ///
+        /// Only a re-enforce calls it: taking an Item out again keeps the same
+        /// content a second time, under a Receipt nothing will ever replay,
+        /// because the Item's own Receipt already holds those bytes and is the
+        /// one a Restore puts back (spec section 5.3).
+        pub fn discard(&self, receipt: &ReceiptId) -> io::Result<()> {
+            match std::fs::remove_dir_all(self.receipt_directory(receipt)) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            }
+        }
+
         /// The directory of one Receipt: its payload and the payload's modes.
         fn receipt_directory(&self, receipt: &ReceiptId) -> PathBuf {
             self.directory.quarantine().join(receipt.as_str())

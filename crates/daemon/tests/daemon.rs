@@ -945,3 +945,59 @@ fn the_watcher_follows_what_the_full_scan_declared() {
         "{watched:?}"
     );
 }
+
+/// A daemon whose due check reads a clock this far ahead of the Full Scan it
+/// ran at start, asking every few milliseconds.
+fn a_daemon_ahead_by(sandbox: &Sandbox, hours: i64, low_power: bool) -> Background {
+    let ahead = hours * 3_600_000;
+    sandbox.start_tuned(Tuning {
+        watch: Timings::of(Duration::from_millis(100), Duration::from_millis(500)),
+        due: Schedule {
+            every: Duration::from_millis(20),
+            slice: Duration::from_millis(5),
+            now: Arc::new(move || Timestamp::from_unix_ms(Timestamp::now().as_unix_ms() + ahead)),
+        },
+        power: Arc::new(Stated(low_power)),
+        ..Tuning::default()
+    })
+}
+
+/// A daily Full Scan the due check ran, rather than the one every start runs.
+fn ran_a_due_full_scan(daemon: &Background) -> bool {
+    daemon
+        .daemon()
+        .status()
+        .scan
+        .is_some_and(|scan| scan.kind == ScanKind::Full && scan.trigger == Trigger::Due)
+}
+
+/// The daemon acts on the due check: a Full Scan over a day old is run again,
+/// and Low Power Mode holds it back until it is three days old, never longer
+/// (spec section 6.4).
+#[test]
+fn the_due_check_fires_a_full_scan_a_day_on_and_low_power_mode_holds_it_to_three() {
+    let sandbox = Sandbox::empty("due-fires");
+    let daemon = a_daemon_ahead_by(&sandbox, 25, false);
+    assert!(
+        until(|| ran_a_due_full_scan(&daemon)),
+        "a Full Scan a day old is due"
+    );
+    drop(daemon);
+
+    let sandbox = Sandbox::empty("due-deferred");
+    let daemon = a_daemon_ahead_by(&sandbox, 25, true);
+    wait_for_a_scan(daemon.daemon());
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !ran_a_due_full_scan(&daemon),
+        "Low Power Mode defers a Full Scan a day old"
+    );
+    drop(daemon);
+
+    let sandbox = Sandbox::empty("due-deferred-too-long");
+    let daemon = a_daemon_ahead_by(&sandbox, 73, true);
+    assert!(
+        until(|| ran_a_due_full_scan(&daemon)),
+        "Low Power Mode defers it three days at most"
+    );
+}

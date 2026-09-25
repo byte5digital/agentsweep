@@ -109,6 +109,10 @@ struct Queue {
     full: Option<Trigger>,
     /// The changed paths waiting for a Change Scan, gathered by path.
     batch: Batch,
+    /// The Scan thread is alive and will take whatever is put here. Two
+    /// requests arriving before it has taken the first would otherwise start
+    /// two threads, and two Scans would run at once.
+    draining: bool,
 }
 
 impl Queue {
@@ -132,7 +136,14 @@ impl Queue {
             return Some(Work::Change(std::mem::take(&mut self.batch)));
         }
         self.running = None;
+        self.draining = false;
         None
+    }
+
+    /// Whoever put work here starts the Scan thread when none is draining the
+    /// queue, and only then. Answers with true when the caller must start it.
+    fn claim_the_thread(&mut self) -> bool {
+        !std::mem::replace(&mut self.draining, true)
     }
 }
 
@@ -357,9 +368,9 @@ impl Daemon {
             return false;
         }
         queue.full = Some(trigger);
-        let idle = queue.running.is_none();
+        let start = queue.claim_the_thread();
         drop(queue);
-        if idle {
+        if start {
             self.work();
         }
         true
@@ -378,9 +389,9 @@ impl Daemon {
         for path in batch.paths() {
             queue.batch.also(path.to_path_buf());
         }
-        let idle = queue.running.is_none();
+        let start = queue.claim_the_thread();
         drop(queue);
-        if idle {
+        if start {
             self.work();
         }
     }
@@ -706,7 +717,10 @@ impl Daemon {
             .expect("the health is not poisoned")
             .last_full_scan;
         let saving = self.tuning.power.low_power_mode();
-        if !due::is_due(last, Timestamp::now(), saving) {
+        // The due check's own clock, which is the machine's in the shipped
+        // daemon and a test's moment of choosing in the suite.
+        let now = (self.tuning.due.now)();
+        if !due::is_due(last, now, saving) {
             return;
         }
         say!("a Full Scan is due ({occasion})");
@@ -986,10 +1000,12 @@ pub fn start_with(options: &Options, daemon: Arc<Daemon>) -> Result<Running, Box
         );
     }
     say!("the peer check is {}", daemon.check.describe());
-    // The due check runs from the start; the watcher starts behind the first
-    // Full Scan, because nothing has declared a watch root yet.
-    daemon.check_when_due();
+    // The Full Scan every start runs is asked for first, so a due check that
+    // asks before it has finished joins it rather than taking its place. The
+    // watcher starts behind that Scan, because nothing has declared a watch
+    // root yet.
     daemon.scan(Trigger::DaemonStart);
+    daemon.check_when_due();
     Ok(Running {
         daemon,
         listener: Arc::new(listener),
@@ -1000,4 +1016,49 @@ pub fn start_with(options: &Options, daemon: Arc<Daemon>) -> Result<Running, Box
 pub fn run(options: &Options) -> Result<(), Box<dyn Error>> {
     start(options)?.serve_forever();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two requests that arrive before the Scan thread has taken the first
+    /// start one thread between them, so two Scans never run at once.
+    #[test]
+    fn only_the_first_request_starts_the_scan_thread() {
+        let mut queue = Queue {
+            full: Some(Trigger::DaemonStart),
+            ..Queue::default()
+        };
+        assert!(queue.claim_the_thread());
+        queue.batch.also(PathBuf::from("/x/a"));
+        assert!(!queue.claim_the_thread());
+
+        assert!(matches!(
+            queue.next(),
+            Some(Work::Full(Trigger::DaemonStart))
+        ));
+        assert!(!queue.claim_the_thread(), "the thread is still draining");
+        assert!(queue.next().is_none());
+        assert!(!queue.busy());
+        assert!(
+            queue.claim_the_thread(),
+            "a drained queue needs a new thread"
+        );
+    }
+
+    /// A pending Full Scan absorbs the Change batches waiting with it, and
+    /// batches waiting together merge by path.
+    #[test]
+    fn a_pending_full_scan_absorbs_the_change_batches() {
+        let mut queue = Queue::default();
+        queue.batch.also(PathBuf::from("/x/a"));
+        queue.batch.also(PathBuf::from("/x/a"));
+        queue.batch.also(PathBuf::from("/x/b"));
+        assert_eq!(queue.batch.len(), 2);
+        queue.full = Some(Trigger::Watcher);
+        assert!(matches!(queue.next(), Some(Work::Full(Trigger::Watcher))));
+        assert!(queue.batch.is_empty());
+        assert!(queue.next().is_none());
+    }
 }

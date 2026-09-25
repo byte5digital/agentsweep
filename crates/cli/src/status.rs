@@ -12,9 +12,10 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use agentsweep_core::finding::FindingState;
 use agentsweep_core::state::{RecordedFinding, ScanSummary};
 use agentsweep_ipc::Client;
-use agentsweep_ipc::protocol::{Role, Status};
+use agentsweep_ipc::protocol::{Role, Status, offers};
 
 /// Asks the daemon and renders the answer.
 ///
@@ -104,9 +105,66 @@ pub fn render(status: &Status) -> String {
             if !finding.drift.is_empty() {
                 let _ = writeln!(out, "    {}", finding.drift);
             }
+            let _ = writeln!(out, "    id {}", finding.id);
+            let offered: Vec<&str> = offers(finding).iter().map(|offer| offer.as_str()).collect();
+            if !offered.is_empty() {
+                let _ = writeln!(out, "    agentsweep {} <id>", offered.join(" | "));
+            }
+        }
+    }
+
+    // What was decided stays visible: the user can always see what is in
+    // quarantine and what they trusted, and put it back.
+    let decided: Vec<&RecordedFinding> = status
+        .findings
+        .iter()
+        .filter(|finding| {
+            matches!(
+                finding.state,
+                FindingState::Stopped | FindingState::Trusted | FindingState::Acknowledged
+            )
+        })
+        .collect();
+    if !decided.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "Stopped and decided:");
+        for finding in decided {
+            let _ = writeln!(out);
+            let _ = writeln!(
+                out,
+                "  {}  {} \u{b7} {}",
+                finding.state,
+                finding.kind,
+                name_of(finding.item_id.as_str())
+            );
+            let _ = writeln!(out, "  {}", finding.item_id);
+            let _ = writeln!(
+                out,
+                "    {}  {}  {}",
+                finding.source, finding.severity, finding.category
+            );
+            let _ = writeln!(out, "    id {}", finding.id);
+            if !finding.receipt_id.is_empty() {
+                let _ = writeln!(out, "    receipt {}", finding.receipt_id);
+            }
+            if !finding.fixed_version.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "    A fixed version is available: agentsweep re-enable {}",
+                    finding.receipt_id
+                );
+            }
         }
     }
     out
+}
+
+/// The name a person knows an Item by: the last part of its locator.
+fn name_of(item_id: &str) -> String {
+    Path::new(item_id)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 
 /// The last Scan, on one line.
@@ -258,11 +316,13 @@ mod tests {
     }
 
     /// A Finding that was stopped, trusted or acknowledged is not open, so it
-    /// is not in the list of what asks something of the user.
+    /// is not in the list of what asks something of the user. It is listed as
+    /// decided, with the Receipt that puts it back.
     #[test]
-    fn a_finding_that_no_longer_asks_anything_is_not_listed() {
+    fn a_finding_that_no_longer_asks_anything_is_listed_as_decided() {
         let mut stopped = finding();
         stopped.state = FindingState::Stopped;
+        stopped.receipt_id = "q-0123456789abcdef0123456789abcdef".to_string();
         let status = Status {
             health: Health::running(),
             scan: Some(summary()),
@@ -270,6 +330,32 @@ mod tests {
         };
         let rendered = render(&status);
         assert!(!rendered.contains("open Finding"), "{rendered}");
+        assert!(rendered.contains("Stopped and decided:"), "{rendered}");
+        assert!(rendered.contains("stopped  Skill"), "{rendered}");
+        assert!(
+            rendered.contains("receipt q-0123456789abcdef0123456789abcdef"),
+            "{rendered}"
+        );
+    }
+
+    /// Every open Finding prints its id and the actions the daemon allows on
+    /// it, so the user can act on it from the terminal.
+    #[test]
+    fn an_open_finding_prints_its_id_and_what_can_be_done_about_it() {
+        let status = Status {
+            health: Health::running(),
+            scan: Some(summary()),
+            findings: vec![finding()],
+        };
+        let rendered = render(&status);
+        assert!(
+            rendered.contains("id claude-code/user/skill/~/.claude/skills/setup|rule/0001|a"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("agentsweep quarantine | trust <id>"),
+            "{rendered}"
+        );
     }
 
     /// A daemon that has just started and has not finished its first Full Scan

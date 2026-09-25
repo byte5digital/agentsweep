@@ -1,11 +1,14 @@
 //! The AgentSweep command line interface, binary `agentsweep`.
 //!
 //! In the bundle it is a client of the daemon; built from crates.io it is an
-//! on-demand scanner. The action commands and the Gate arrive with milestone 7
-//! of the build plan. What is here is `scan <dir>`, the Folder Scan, which runs
-//! entirely in this process and never reaches a daemon, and `status`, which
-//! reaches the daemon and does nothing else.
+//! on-demand scanner. What is here is `scan <dir>`, the Folder Scan, which runs
+//! entirely in this process, never reaches a daemon and never acts; `status`,
+//! which reaches the daemon and does nothing else; and the action commands,
+//! each of which is one request to the daemon, the only process that
+//! quarantines, restores or trusts anything (ADR 0008). The Gate and the
+//! crates.io build variant arrive with their own milestones.
 
+mod actions;
 mod developer;
 mod folder_scan;
 mod status;
@@ -22,10 +25,35 @@ Usage:
   agentsweep --version    Print the version.
   agentsweep --help       Print this message.
 
+Acting on a Finding, through the running AgentSweep. <id> is a Finding id, an
+Item id or a Receipt id, as `status` prints them:
+  agentsweep quarantine <id>
+                          Take the item of a threat out, so the agent cannot
+                          load it. It can be restored.
+  agentsweep restore <id> [--replace | --beside]
+                          Put a quarantined item back. What AgentSweep stopped
+                          by itself comes back trusted. When something else is
+                          at the original place, --replace replaces it and
+                          --beside restores beside it.
+  agentsweep trust <id>   Say this exact version is safe. A change to it is
+                          checked afresh.
+  agentsweep acknowledge <id>
+                          Say a change was yours. Every check still runs.
+  agentsweep fix <id>     Take an unrestricted shell or a switched-off approval
+                          out of your settings (rules 0018 and 0019).
+  agentsweep re-enable <id>
+                          Switch a stopped plugin back on for its newer,
+                          clean version.
+  agentsweep reveal-receipt [<path>]
+                          List what is in quarantine, each receipt id beside
+                          the path it was taken from.
+
 `scan` exits 0 when the folder is safe to open and 1 when it found something.
 `status` exits 0 when nothing is open, 1 when something is, and says Protection
-is off when no daemon answers. It takes `--socket <path>` to reach a daemon
-somewhere other than the documented socket.
+is off when no daemon answers. An action exits 0 when it was done, 1 when it
+was refused or did not finish, and 3 when no daemon answered, which is
+Protection off. Every command that reaches the daemon takes
+`--socket <path>` to reach one somewhere other than the documented socket.
 
 Developer only, off unless asked for by name:
   agentsweep --developer-list-items [<home>]
@@ -46,6 +74,7 @@ fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
         Some("status") => status(&arguments[1..]),
+        Some(command) if actions::COMMANDS.contains(&command) => act(command, &arguments[1..]),
         Some("scan") => scan(&arguments[1..]),
         Some("--developer-list-items") => developer_list_items(&arguments[1..]),
         Some("--developer-scan-items") => developer_scan_items(&arguments[1..]),
@@ -78,6 +107,20 @@ fn status(arguments: &[String]) -> ExitCode {
         }
     };
     let (rendered, code) = status::status(socket.as_deref());
+    print!("{rendered}");
+    ExitCode::from(code)
+}
+
+/// Asks the daemon to act on one Finding, Item or Receipt.
+fn act(command: &str, arguments: &[String]) -> ExitCode {
+    let invocation = match actions::parse(command, arguments) {
+        Ok(invocation) => invocation,
+        Err(reason) => {
+            eprintln!("agentsweep: {reason}\n\n{USAGE}");
+            return ExitCode::from(actions::USAGE_ERROR);
+        }
+    };
+    let (rendered, code) = actions::run(&invocation);
     print!("{rendered}");
     ExitCode::from(code)
 }
@@ -182,6 +225,19 @@ mod tests {
             "{}",
             super::USAGE
         );
+    }
+
+    /// Every action command is in the help text, and so is what it exits
+    /// with when no daemon answers.
+    #[test]
+    fn the_usage_names_every_action_command() {
+        for command in super::actions::COMMANDS {
+            assert!(
+                super::USAGE.contains(&format!("agentsweep {command}")),
+                "{command}"
+            );
+        }
+        assert!(super::USAGE.contains("3 when no daemon answered"));
     }
 
     /// A Folder Scan runs in this process. Depending on the daemon crate would

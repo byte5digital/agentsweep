@@ -17,8 +17,8 @@ use std::time::Instant;
 
 use agentsweep_core::evaluation::EvaluationCache;
 use agentsweep_core::keychain::MemoryKeySource;
+use agentsweep_core::packs::LoadedPack;
 use agentsweep_core::paths::DataDirectory;
-use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::BACKGROUND_WORKERS;
 use agentsweep_core::state::Trigger;
 
@@ -47,7 +47,8 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
     };
 
     let began = Instant::now();
-    let pack = RulePack::bundled()?;
+    let loaded = LoadedPack::bundled()?;
+    let pack = &loaded.rules;
     println!(
         "rule pack: {} rules compiled in {} ms",
         pack.len(),
@@ -61,7 +62,8 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
         machine: &machine,
         directory: &directory,
         keys: &keys,
-        pack: &pack,
+        pack,
+        manifest: &loaded.manifest,
         previous: &[],
         cache: &cache,
         workers: BACKGROUND_WORKERS,
@@ -114,7 +116,8 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
         machine: &machine,
         directory: &directory,
         keys: &keys,
-        pack: &pack,
+        pack,
+        manifest: &loaded.manifest,
         previous: &cold.raised,
         pooled: &warm.roots,
         cache: &cache,

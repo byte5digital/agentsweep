@@ -188,6 +188,27 @@ impl Client {
             .ok_or_else(|| ClientError::Unexpected("the Receipts could not be read".to_string()))
     }
 
+    /// Whether the Rule Feed toggle is on.
+    pub fn rule_feed(&mut self) -> Result<bool, ClientError> {
+        self.feed(Request::RuleFeed { enabled: None })
+    }
+
+    /// Turns the Rule Feed on or off, and answers with where it stands now.
+    /// Off means no request at all and the bundled Rule Pack only.
+    pub fn set_rule_feed(&mut self, enabled: bool) -> Result<bool, ClientError> {
+        self.feed(Request::RuleFeed {
+            enabled: Some(enabled),
+        })
+    }
+
+    fn feed(&mut self, request: Request) -> Result<bool, ClientError> {
+        let answer = self.ask(request)?;
+        answer
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| ClientError::Unexpected("the answer could not be read".to_string()))
+    }
+
     fn act(&mut self, request: Request) -> Result<ActionReport, ClientError> {
         let answer = self.ask(request)?;
         ActionReport::from_value(&answer)

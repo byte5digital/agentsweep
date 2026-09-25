@@ -15,8 +15,10 @@
 //! answers a signed peer of the same version with Health, the Scan summary and
 //! the Findings that stand. It carries out the actions a client asks for by
 //! Finding, Item or Receipt id, quarantines by itself what a stable Rule proves
-//! bad during a Scan, and takes out again what keeps coming back. The Rule
-//! Feed arrives with the ticket after this one.
+//! bad during a Scan, and takes out again what keeps coming back. It asks the
+//! Rule Feed at start and once a day, verifies a newer Rule Pack against the
+//! keys pinned in the binary and puts it in force for every Tier, with the
+//! Full Scan a new pack brings.
 //!
 //! The binary is a few lines around [`run`]; everything else is here so that a
 //! test can start a daemon against a temporary home, a temporary data
@@ -45,6 +47,7 @@ pub mod full_scan;
 pub mod machine;
 pub mod options;
 pub mod peer_check;
+pub mod rule_feed;
 pub mod service;
 pub mod sessions;
 pub mod stores;

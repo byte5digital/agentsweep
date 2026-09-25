@@ -30,10 +30,12 @@ use agentsweep_core::evaluation::{Evaluations, NoCache};
 use agentsweep_core::eventlog::{Action, EventLog};
 use agentsweep_core::finding::{Category, Decided, Finding, Standing, standing};
 use agentsweep_core::finding::{FindingId, FindingState, RuleStatus, Severity, Source, Tier};
+use agentsweep_core::finding::{RULE_WITHDRAWN_GONE, RULE_WITHDRAWN_STOPPED};
 use agentsweep_core::heuristics::Band;
 use agentsweep_core::item::{ItemId, Kind, Scope};
 use agentsweep_core::keychain::KeySource;
 use agentsweep_core::pack::Manifest;
+use agentsweep_core::packs::LoadedPack;
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::{BACKGROUND_WORKERS, ScanKind, ScanPass};
@@ -103,6 +105,9 @@ pub struct ScanRun {
     /// The newer, clean version found for each quarantined plugin, by the
     /// Receipt that stopped it, which is what offers Re-enable.
     pub fixed_versions: BTreeMap<String, String>,
+    /// The lines for the Activity that are not Findings: each Finding that
+    /// went away because the Rule Pack in force withdrew its Rule.
+    pub activity: Vec<String>,
 }
 
 /// What a Scan reports as it goes.
@@ -134,12 +139,13 @@ pub fn run(
     trigger: Trigger,
     progress: &dyn Progress,
 ) -> Result<ScanRun, ScanError> {
-    let pack = RulePack::bundled().map_err(|error| ScanError::Pack(error.to_string()))?;
+    let pack = LoadedPack::bundled().map_err(|error| ScanError::Pack(error.to_string()))?;
     FullScan {
         machine,
         directory,
         keys,
-        pack: &pack,
+        pack: &pack.rules,
+        manifest: &pack.manifest,
         previous,
         cache: &NoCache,
         workers: BACKGROUND_WORKERS,
@@ -161,6 +167,9 @@ pub struct FullScan<'a> {
     /// handed to every Scan: compiling it per Scan would cost more than the
     /// Change Scan is allowed to take altogether (spec section 6.10).
     pub pack: &'a RulePack,
+    /// What that pack states about itself: its version, which the Scan
+    /// summary and the evaluation cache carry, and its Band thresholds.
+    pub manifest: &'a Manifest,
     /// The Findings the last Scan raised.
     pub previous: &'a [Finding],
     /// The Tier outcomes this daemon already has.
@@ -204,6 +213,7 @@ impl FullScan<'_> {
             directory: self.directory,
             keys: self.keys,
             pack: self.pack,
+            manifest: self.manifest,
             plan: &survey.plan,
             descriptors: &descriptors,
             previous: self.previous,
@@ -232,6 +242,7 @@ impl FullScan<'_> {
             last_compaction: judged.last_compaction,
             acted: judged.acted,
             fixed_versions: judged.fixed_versions,
+            activity: judged.activity,
         })
     }
 }
@@ -379,6 +390,8 @@ pub struct Judged {
     pub acted: ScanActions,
     /// The newer, clean version of each quarantined plugin, by Receipt.
     pub fixed_versions: BTreeMap<String, String>,
+    /// The Activity lines this pass left beside its Findings.
+    pub activity: Vec<String>,
 }
 
 /// Reading the stores, running one pass and writing what it decided.
@@ -391,6 +404,8 @@ pub struct Judgement<'a> {
     pub keys: &'a dyn KeySource,
     /// The compiled Rule Pack in force.
     pub pack: &'a RulePack,
+    /// What it states about itself.
+    pub manifest: &'a Manifest,
     /// The coverage this enumeration stands for.
     pub plan: &'a CoveragePlan,
     /// The adapters whose declarations a Drift decision reads.
@@ -429,13 +444,14 @@ impl Judgement<'_> {
         let held = baseline.read(self.keys)?;
 
         let declarations = Declarations::of(self.descriptors);
-        let rule_pack = Manifest::bundled().pack_version;
+        let rule_pack = self.manifest.pack_version;
 
         let start = match self.kind {
             ScanKind::Change => ScanPass::change,
             _ => ScanPass::full,
         };
         let outcome = start(self.pack, &held, self.plan, &trusted, &known, &declarations)
+            .with_bands(self.manifest.bands)
             .caching(self.cache, rule_pack, "")
             .with_workers(self.workers)
             .at(self.at)
@@ -531,6 +547,7 @@ impl Judgement<'_> {
                 standing.push(stopped);
             }
         }
+        let activity = withdrawn(&mut standing, self.pack, rule_pack);
         let fixed_versions = fixed_versions(&quarantined, enumeration, &raised);
 
         let bands = count_bands(&outcome);
@@ -570,8 +587,44 @@ impl Judgement<'_> {
                 .next_back(),
             acted,
             fixed_versions,
+            activity,
         })
     }
+}
+
+/// Says what the Rule Pack in force no longer stands behind, and answers with
+/// the Activity lines for it.
+///
+/// Nothing here decides anything: the pack decided, by not carrying the Rule
+/// any more. A Finding it raised under the previous pack and that this Scan
+/// did not raise is already gone, and says why. A quarantined Item stays
+/// where it is, in the store, and says that the Rule that stopped it was
+/// withdrawn; Restore is what it offers first (spec sections 6.4 and 8.4).
+fn withdrawn(standing: &mut [Standing], pack: &RulePack, rule_pack: u64) -> Vec<String> {
+    let mut activity = Vec::new();
+    for placed in standing.iter_mut() {
+        let Source::Rule(id) = placed.finding.source else {
+            continue;
+        };
+        if pack.metas().any(|meta| meta.id == id) {
+            continue;
+        }
+        match placed.state {
+            FindingState::Stopped => {
+                placed.finding.plain = RULE_WITHDRAWN_STOPPED.to_string();
+            }
+            FindingState::Gone => {
+                placed.finding.plain = RULE_WITHDRAWN_GONE.to_string();
+                activity.push(format!(
+                    "Rule {id:04} was withdrawn by Rule Pack {rule_pack}, so its Finding on {} \
+                     is gone.",
+                    placed.finding.item_id
+                ));
+            }
+            _ => {}
+        }
+    }
+    activity
 }
 
 /// The stopped Finding one Receipt stands for, built from the Event Log and
@@ -609,9 +662,15 @@ fn stopped_by(entry: &QuarantineEntry, pack: &RulePack) -> Standing {
         title: meta
             .map(|meta| meta.title.clone())
             .unwrap_or_else(|| "Quarantined by AgentSweep".to_string()),
-        plain: meta.map(|meta| meta.plain.clone()).unwrap_or_else(|| {
-            "AgentSweep took this out of its place, so the Agent cannot load it.".to_string()
-        }),
+        plain: match (meta, source) {
+            (Some(meta), _) => meta.plain.clone(),
+            // A Receipt made on a Rule the pack in force no longer carries:
+            // the Item stays stopped and says the Rule was withdrawn.
+            (None, Source::Rule(id)) if id != 0 => RULE_WITHDRAWN_STOPPED.to_string(),
+            (None, _) => {
+                "AgentSweep took this out of its place, so the Agent cannot load it.".to_string()
+            }
+        },
         sensitive: meta.is_some_and(|meta| meta.sensitive),
         file: String::new(),
         matches: Vec::new(),

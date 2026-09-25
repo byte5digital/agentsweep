@@ -25,6 +25,7 @@ use agentsweep_core::evaluation::Evaluations;
 use agentsweep_core::finding::Finding;
 use agentsweep_core::item::{ItemId, Scope};
 use agentsweep_core::keychain::KeySource;
+use agentsweep_core::pack::Manifest;
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::ScanKind;
@@ -45,6 +46,8 @@ pub struct ChangeScan<'a> {
     pub keys: &'a dyn KeySource,
     /// The compiled Rule Pack in force.
     pub pack: &'a RulePack,
+    /// What it states about itself.
+    pub manifest: &'a Manifest,
     /// Every Finding the last Scan left standing. The ones about Items this
     /// Scan does not look at come back untouched.
     pub previous: &'a [Finding],
@@ -145,6 +148,7 @@ impl ChangeScan<'_> {
             directory: self.directory,
             keys: self.keys,
             pack: self.pack,
+            manifest: self.manifest,
             plan: &survey.plan,
             descriptors: &descriptors,
             previous: &mine,
@@ -171,6 +175,7 @@ impl ChangeScan<'_> {
             last_compaction: judged.last_compaction,
             acted: judged.acted,
             fixed_versions: judged.fixed_versions,
+            activity: judged.activity,
         }))
     }
 }

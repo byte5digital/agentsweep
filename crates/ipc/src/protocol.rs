@@ -26,8 +26,9 @@ use agentsweep_core::eventlog::{Actor, Outcome, Primitive, ReceiptStep, Sessions
 use agentsweep_core::finding::{Category, FindingId, FindingState};
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
 use agentsweep_core::item::{ItemId, Kind};
+use agentsweep_core::packs::PackOrigin;
 use agentsweep_core::quarantine::Conflict;
-use agentsweep_core::state::{RecordedFinding, ScanSummary, Trigger};
+use agentsweep_core::state::{IgnoredPack, RecordedFinding, ScanSummary, Trigger};
 
 /// Which peer is speaking. The daemon answers both the same way in this
 /// milestone; the role is carried because the notification flow of spec
@@ -217,11 +218,18 @@ pub enum Request {
         /// The original place to look for, absent for every Receipt.
         path: Option<String>,
     },
+    /// Read the Rule Feed toggle, or set it. Off means no request at all and
+    /// the bundled Rule Pack only (spec section 9.4). Answers with where the
+    /// toggle stands afterwards.
+    RuleFeed {
+        /// The toggle's new position, absent to read it.
+        enabled: Option<bool>,
+    },
 }
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 10] = [
+    pub const NAMES: [&'static str; 11] = [
         "status",
         "scan-now",
         "subscribe",
@@ -232,6 +240,7 @@ impl Request {
         "fix",
         "re-enable",
         "reveal-receipt",
+        "rule-feed",
     ];
 
     /// The spelling a request carries.
@@ -247,6 +256,7 @@ impl Request {
             Request::Fix { .. } => "fix",
             Request::ReEnable { .. } => "re-enable",
             Request::RevealReceipt { .. } => "reveal-receipt",
+            Request::RuleFeed { .. } => "rule-feed",
         }
     }
 
@@ -285,6 +295,11 @@ impl Request {
             Request::RevealReceipt { path: Some(path) } => {
                 map.insert("path".to_string(), Value::from(path.as_str()));
             }
+            Request::RuleFeed {
+                enabled: Some(enabled),
+            } => {
+                map.insert("enabled".to_string(), Value::from(*enabled));
+            }
             _ => {}
         }
     }
@@ -319,6 +334,12 @@ impl Request {
                 path: match value.get("path") {
                     None | Some(Value::Null) => None,
                     Some(path) => Some(path.as_str()?.to_string()),
+                },
+            },
+            "rule-feed" => Request::RuleFeed {
+                enabled: match value.get("enabled") {
+                    None | Some(Value::Null) => None,
+                    Some(enabled) => Some(enabled.as_bool()?),
                 },
             },
             _ => return None,
@@ -413,6 +434,12 @@ pub enum StateEvent {
         /// spells it, or `gone` when it is no longer raised.
         state: String,
     },
+    /// A line for the Activity that is not a Finding: a Rule Pack accepted,
+    /// a Rule withdrawn with the Findings it took with it.
+    Activity {
+        /// The line, free of content and of sensitive values.
+        line: String,
+    },
 }
 
 impl StateEvent {
@@ -423,6 +450,7 @@ impl StateEvent {
             StateEvent::ScanProgress { .. } => "scan-progress",
             StateEvent::ScanFinished { .. } => "scan-finished",
             StateEvent::FindingChanged { .. } => "finding-changed",
+            StateEvent::Activity { .. } => "activity",
         }
     }
 }
@@ -531,6 +559,47 @@ pub fn health_to_value(health: &Health) -> Value {
         Value::from(health.projects_need_permission as u64),
     );
     map.insert(
+        "feed_unreachable".to_string(),
+        Value::from(
+            health
+                .feed_unreachable
+                .map(|at| at.to_string())
+                .unwrap_or_default(),
+        ),
+    );
+    map.insert(
+        "ignored_pack".to_string(),
+        match &health.ignored_pack {
+            None => Value::Null,
+            Some(ignored) => {
+                let mut pack = Map::new();
+                pack.insert(
+                    "minimum_engine_version".to_string(),
+                    Value::from(ignored.minimum_engine_version.as_str()),
+                );
+                pack.insert(
+                    "pack_version".to_string(),
+                    Value::from(ignored.pack_version),
+                );
+                Value::Object(pack)
+            }
+        },
+    );
+    map.insert("rule_feed".to_string(), Value::from(health.rule_feed));
+    map.insert("rule_pack".to_string(), Value::from(health.rule_pack));
+    map.insert(
+        "rule_pack_origin".to_string(),
+        Value::from(health.rule_pack_origin.as_str()),
+    );
+    map.insert(
+        "rules_released_at".to_string(),
+        Value::from(health.rules_released_at.as_str()),
+    );
+    map.insert(
+        "rules_updated".to_string(),
+        Value::from(health.rules_updated().unwrap_or_default()),
+    );
+    map.insert(
         "protection".to_string(),
         Value::from(match &health.protection {
             Protection::On => "on",
@@ -562,6 +631,17 @@ pub fn health_from_value(value: &Value) -> Option<Health> {
         "" => None,
         written => Some(Timestamp::parse(written)?),
     };
+    let feed_unreachable = match text("feed_unreachable")? {
+        "" => None,
+        written => Some(Timestamp::parse(written)?),
+    };
+    let ignored_pack = match value.get("ignored_pack")? {
+        Value::Null => None,
+        pack => Some(IgnoredPack {
+            pack_version: pack.get("pack_version")?.as_u64()?,
+            minimum_engine_version: pack.get("minimum_engine_version")?.as_str()?.to_string(),
+        }),
+    };
     Some(Health {
         protection,
         events: chain_state_from_value(value.get("events")?)?,
@@ -572,6 +652,12 @@ pub fn health_from_value(value: &Value) -> Option<Health> {
         last_full_scan,
         items: count("items")?,
         open_findings: count("open_findings")?,
+        rule_pack: value.get("rule_pack")?.as_u64()?,
+        rule_pack_origin: PackOrigin::parse(text("rule_pack_origin")?)?,
+        rules_released_at: text("rules_released_at")?.to_string(),
+        rule_feed: value.get("rule_feed")?.as_bool()?,
+        ignored_pack,
+        feed_unreachable,
     })
 }
 
@@ -1118,6 +1204,9 @@ impl Message {
                         map.insert("id".to_string(), Value::from(id.as_str()));
                         map.insert("state".to_string(), Value::from(state.as_str()));
                     }
+                    StateEvent::Activity { line } => {
+                        map.insert("line".to_string(), Value::from(line.as_str()));
+                    }
                 }
             }
         }
@@ -1182,6 +1271,9 @@ impl Message {
                     "finding-changed" => StateEvent::FindingChanged {
                         id: FindingId::from_recorded(text("id")?),
                         state: text("state")?.to_string(),
+                    },
+                    "activity" => StateEvent::Activity {
+                        line: text("line")?.to_string(),
                     },
                     _ => return None,
                 }))
@@ -1299,6 +1391,9 @@ mod tests {
             id: FindingId::from_recorded("claude-code/user/skill/x|rule/0001|abc"),
             state: "open".to_string(),
         }));
+        round_trip(Message::Event(StateEvent::Activity {
+            line: "Rule Pack 2 accepted".to_string(),
+        }));
     }
 
     /// A version mismatch round trips as the refusal rather than as the two
@@ -1332,6 +1427,15 @@ mod tests {
         let mut health = Health::running();
         health.items = 17;
         health.open_findings = 1;
+        health.rule_pack = 3;
+        health.rule_pack_origin = agentsweep_core::packs::PackOrigin::Fetched;
+        health.rules_released_at = "2026-10-01T09:30:00Z".to_string();
+        health.rule_feed = false;
+        health.ignored_pack = Some(IgnoredPack {
+            pack_version: 4,
+            minimum_engine_version: "0.3.0".to_string(),
+        });
+        health.feed_unreachable = Some(moment("2026-08-01T10:00:00.000Z"));
         health.last_full_scan = Some(moment("2026-09-24T08:00:00.900Z"));
         health.events = ChainState::Broken {
             sequence: 4,
@@ -1398,6 +1502,13 @@ mod tests {
                 path: Some("/Users/someone/.claude.json".to_string()),
             },
             Request::RevealReceipt { path: None },
+            Request::RuleFeed { enabled: None },
+            Request::RuleFeed {
+                enabled: Some(false),
+            },
+            Request::RuleFeed {
+                enabled: Some(true),
+            },
         ]
     }
 

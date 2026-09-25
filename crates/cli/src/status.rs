@@ -288,6 +288,26 @@ mod tests {
         assert!(!rendered.contains("open Finding"), "{rendered}");
     }
 
+    /// The status names the Rule Pack in force and the date of its signed
+    /// release, and says so when the feed is off.
+    #[test]
+    fn the_status_says_when_the_rules_were_updated() {
+        let mut health = Health::running();
+        health.rule_pack = 3;
+        health.rule_pack_origin = agentsweep_core::packs::PackOrigin::Fetched;
+        health.rules_released_at = "2026-10-01T09:30:00Z".to_string();
+        let status = Status {
+            health,
+            scan: Some(summary()),
+            findings: Vec::new(),
+        };
+        let rendered = render(&status);
+        assert!(
+            rendered.contains("Rules updated 2026-10-01 (Rule Pack 3, fetched)."),
+            "{rendered}"
+        );
+    }
+
     #[test]
     fn an_open_finding_is_shown_with_everything_the_user_needs() {
         let mut health = Health::running();

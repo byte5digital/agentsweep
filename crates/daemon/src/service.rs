@@ -19,7 +19,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use agentsweep_core::adapter::WatchRoots;
 use agentsweep_core::baseline::{self, Retention};
@@ -30,6 +30,7 @@ use agentsweep_core::finding::{Finding, FindingId};
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
 use agentsweep_core::item::{ItemId, Scope};
 use agentsweep_core::keychain::{KeySource, MemoryKeySource};
+use agentsweep_core::packs::{LoadedPack, PackOrigin, PackStore, Verdict, judge};
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::{BACKGROUND_WORKERS, ScanKind, on_demand_workers};
@@ -45,6 +46,7 @@ use crate::due::{self, Occasion, PowerState, Schedule, SystemPower};
 use crate::full_scan::{FullScan, Progress, ScanRun};
 use crate::machine::Machine;
 use crate::options::{KeySourceChoice, Options};
+use crate::rule_feed::{self, Endpoints, FeedClient, FeedTuning, Fetched, Validators};
 use crate::stores::{open_the_baseline, open_the_event_log};
 use crate::watcher::{self, Batch, Decision, Timings, Watch};
 
@@ -64,10 +66,13 @@ pub struct Tuning {
     /// How many worker threads a Scan nobody is waiting for runs the Tiers
     /// with.
     pub workers: usize,
-    /// The Rule Pack in force, the bundled one unless a test names another.
-    /// The seam a test flips one Rule to stable through, since every bundled
-    /// Rule is on Probation and none may be flipped in place.
+    /// The Rules the binary ships, the bundled ones unless a test names
+    /// others. The seam a test flips one Rule to stable through, since every
+    /// bundled Rule is on Probation and none may be flipped in place. A pack
+    /// from the Rule Feed still replaces it, as it replaces the bundled one.
     pub pack: Option<Arc<RulePack>>,
+    /// Where the Rule Feed is and how the fetch is timed.
+    pub feed: FeedTuning,
 }
 
 impl Default for Tuning {
@@ -78,6 +83,7 @@ impl Default for Tuning {
             power: Arc::new(SystemPower),
             workers: BACKGROUND_WORKERS,
             pack: None,
+            feed: FeedTuning::default(),
         }
     }
 }
@@ -89,6 +95,7 @@ impl std::fmt::Debug for Tuning {
             .field("due", &self.due)
             .field("workers", &self.workers)
             .field("pack", &self.pack)
+            .field("feed", &self.feed)
             .finish_non_exhaustive()
     }
 }
@@ -171,8 +178,20 @@ pub struct Daemon {
     /// What has been asked for, and what is running.
     queue: Mutex<Queue>,
     /// The Rule Pack in force, compiled once. Compiling it costs far more than
-    /// a Change Scan is allowed to take, so no Scan compiles its own.
-    pack: Arc<RulePack>,
+    /// a Change Scan is allowed to take, so no Scan compiles its own. A Scan
+    /// takes the pack in force when it starts and keeps it to the end; an
+    /// accepted pack is in force for the Scan after.
+    pack: RwLock<Arc<LoadedPack>>,
+    /// The pack this binary ships, which is in force whenever no fetched pack
+    /// is, and always while the Rule Feed is off.
+    bundled: Arc<LoadedPack>,
+    /// Where the Rule Feed is asked, absent when it is never asked: a
+    /// developer run that named no feed.
+    feed: Option<Endpoints>,
+    /// Held while a fetch runs, so two never run at once.
+    fetching: Mutex<()>,
+    /// True while a fetch is waiting out its jitter or running.
+    fetch_pending: AtomicBool,
     /// The Tier outcomes this daemon has already produced. In memory only,
     /// empty at start, thrown away when a Rule Pack is accepted.
     cache: Arc<EvaluationCache>,
@@ -244,7 +263,7 @@ impl Daemon {
         let (_, baseline) = open_the_baseline(&directory, &*keys)?;
 
         let file = StateFile::in_data_directory(&directory);
-        let (state, state_file) = match file.read(&*keys) {
+        let (mut state, state_file) = match file.read(&*keys) {
             Ok(state) => (state, StateFileHealth::Loaded),
             Err(error) if error.rebuilds() => {
                 say!("the cached state is being rebuilt: {error}");
@@ -264,13 +283,23 @@ impl Daemon {
             None => Machine::real(options.home_directory()?),
         };
 
-        // The bundled pack is compiled once, here, and every Scan of this
-        // daemon runs it. A daemon that cannot compile its own pack has
-        // nothing to protect with and says so rather than starting.
-        let pack = match &tuning.pack {
-            Some(pack) => Arc::clone(pack),
-            None => Arc::new(RulePack::bundled()?),
-        };
+        // The bundled pack is compiled once, here. A daemon that cannot
+        // compile its own pack has nothing to protect with and says so rather
+        // than starting.
+        let bundled = Arc::new(match &tuning.pack {
+            Some(pack) => LoadedPack::bundled_as(Arc::clone(pack)),
+            None => LoadedPack::bundled()?,
+        });
+        // The installed daemon asks the project's own feed; a developer run
+        // asks only a feed it was pointed at, so a hand run or a test never
+        // reaches GitHub by accident.
+        let feed = tuning
+            .feed
+            .endpoints
+            .clone()
+            .or_else(|| (!options.is_developer_run()).then(Endpoints::github));
+        let pack = pack_at_start(&directory, &bundled, &mut state);
+        let now = (tuning.due.now)();
 
         let health = Health {
             protection: Protection::On,
@@ -282,6 +311,15 @@ impl Daemon {
             last_full_scan: state.last_full_scan,
             items: state.last_scan().map(|scan| scan.items).unwrap_or_default(),
             open_findings: state.open_count(),
+            rule_pack: pack.manifest.pack_version,
+            rule_pack_origin: pack.origin,
+            rules_released_at: pack.manifest.released_at.clone(),
+            rule_feed: state.feed.enabled,
+            ignored_pack: state.feed.ignored.clone(),
+            feed_unreachable: match state.feed.enabled {
+                true => Health::feed_unreachable_at(state.feed.unreachable_since, now),
+                false => None,
+            },
         };
 
         Ok(Arc::new(Daemon {
@@ -295,7 +333,11 @@ impl Daemon {
             writing: Mutex::new(()),
             raised: Mutex::new(Vec::new()),
             queue: Mutex::new(Queue::default()),
-            pack,
+            pack: RwLock::new(pack),
+            bundled,
+            feed,
+            fetching: Mutex::new(()),
+            fetch_pending: AtomicBool::new(false),
             cache: Arc::new(EvaluationCache::new()),
             roots: Mutex::new(Vec::new()),
             watch: Mutex::new(None),
@@ -317,6 +359,11 @@ impl Daemon {
     /// before the Full Scan it triggers.
     pub fn forget_evaluations(&self) {
         self.cache.clear();
+    }
+
+    /// The Rule Pack in force right now.
+    pub fn pack_in_force(&self) -> Arc<LoadedPack> {
+        Arc::clone(&self.pack.read().expect("the pack is not poisoned"))
     }
 
     /// The project roots the last Scan pooled.
@@ -429,6 +476,9 @@ impl Daemon {
             .expect("the last Scan is not poisoned")
             .clone();
         let watching = Watching(Arc::clone(self));
+        // The pack in force when the Scan starts is the one it runs to the
+        // end; a pack accepted meanwhile asks for the Full Scan after it.
+        let pack = self.pack_in_force();
         match work {
             Work::Full(trigger) => {
                 self.publish(StateEvent::ScanStarted {
@@ -445,7 +495,8 @@ impl Daemon {
                     machine: &self.machine,
                     directory: &self.directory,
                     keys: &*self.keys,
-                    pack: &self.pack,
+                    pack: &pack.rules,
+                    manifest: &pack.manifest,
                     previous: &previous,
                     cache: &*self.cache,
                     workers,
@@ -465,7 +516,8 @@ impl Daemon {
                     machine: &self.machine,
                     directory: &self.directory,
                     keys: &*self.keys,
-                    pack: &self.pack,
+                    pack: &pack.rules,
+                    manifest: &pack.manifest,
                     previous: &previous,
                     pooled: &pooled,
                     cache: &*self.cache,
@@ -596,6 +648,10 @@ impl Daemon {
         }
         for (id, state) in changed {
             self.publish(StateEvent::FindingChanged { id, state });
+        }
+        for line in &run.activity {
+            say!("{line}");
+            self.publish(StateEvent::Activity { line: line.clone() });
         }
 
         // Only a Full Scan recomputes the watch roots, and housekeeping runs
@@ -731,6 +787,9 @@ impl Daemon {
         // The due check's own clock, which is the machine's in the shipped
         // daemon and a test's moment of choosing in the suite.
         let now = (self.tuning.due.now)();
+        // The Rule Feed fetch rides along with the due check (spec section
+        // 6.4), on its own daily cadence.
+        self.fetch_when_due(now);
         if !due::is_due(last, now, saving) {
             return;
         }
@@ -854,8 +913,374 @@ impl Daemon {
             }
             // Handled by the caller, which turns the connection into a stream.
             Request::Subscribe => Ok(serde_json::Value::Bool(true)),
+            Request::RuleFeed { enabled } => {
+                let enabled = match enabled {
+                    Some(enabled) => self.set_rule_feed(*enabled),
+                    None => self.rule_feed_enabled(),
+                };
+                Ok(serde_json::json!({ "enabled": enabled }))
+            }
             // Everything else acts, and is carried out where acting lives.
             _ => self.act(request),
+        }
+    }
+}
+
+/// What one fetch of the Rule Feed came to, as a test and a log line read it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FeedOutcome {
+    /// There is no feed to ask: a developer run that named none.
+    NoFeed,
+    /// The toggle is off, so nothing was asked.
+    Off,
+    /// The index has not changed since the last answer that was acted on.
+    Unchanged,
+    /// Nothing newer than the pack in use.
+    NothingNewer {
+        /// The version compared: the index's, or the signed manifest's when
+        /// one was downloaded.
+        offered: u64,
+        /// The version in use.
+        in_use: u64,
+    },
+    /// A newer pack that needs a newer AgentSweep, ignored with the notice.
+    NeedsNewerEngine {
+        /// Its version.
+        offered: u64,
+        /// The AgentSweep version it asks for.
+        minimum: String,
+    },
+    /// A newer pack, verified and now in force.
+    Accepted {
+        /// Its version.
+        pack_version: u64,
+    },
+    /// A pack that was refused, and why.
+    Refused(String),
+    /// The feed answered and part of the release was missing.
+    Incomplete(String),
+    /// Nothing answered.
+    Unreachable(String),
+}
+
+/// The Rule Pack in force at start: the stored one when the feed is on and
+/// the stored pack verifies and beats the bundled one, the bundled one
+/// otherwise. A stored pack that fails verification is discarded, never
+/// trusted; one the bundled pack caught up with is thrown away as well.
+fn pack_at_start(
+    directory: &DataDirectory,
+    bundled: &Arc<LoadedPack>,
+    state: &mut State,
+) -> Arc<LoadedPack> {
+    // A pack that was ignored for needing a newer AgentSweep is asked for
+    // again once this binary is new enough: the validators go, so the next
+    // fetch is not answered "unchanged".
+    if let Some(ignored) = &state.feed.ignored
+        && agentsweep_core::pack::engine_satisfies(
+            &ignored.minimum_engine_version,
+            agentsweep_core::VERSION,
+        )
+    {
+        state.feed.ignored = None;
+        state.feed.etag.clear();
+        state.feed.last_modified.clear();
+    }
+    if !state.feed.enabled {
+        return Arc::clone(bundled);
+    }
+    let store = PackStore::in_data_directory(directory);
+    match store.read() {
+        Ok(None) => Arc::clone(bundled),
+        Ok(Some(fetched)) => match judge(
+            &fetched.manifest,
+            bundled.manifest.pack_version,
+            agentsweep_core::VERSION,
+        ) {
+            Verdict::Accept => {
+                say!(
+                    "Rule Pack {} from the Rule Feed is in force, released {}",
+                    fetched.manifest.pack_version,
+                    fetched.manifest.released_at
+                );
+                Arc::new(fetched)
+            }
+            verdict => {
+                say!("the stored Rule Pack is not used and is discarded: {verdict:?}");
+                if let Err(error) = store.discard() {
+                    say!("the stored Rule Pack could not be discarded: {error}");
+                }
+                Arc::clone(bundled)
+            }
+        },
+        Err(error) => {
+            say!("the stored Rule Pack does not verify and is discarded: {error}");
+            if let Err(error) = store.discard() {
+                say!("the stored Rule Pack could not be discarded: {error}");
+            }
+            Arc::clone(bundled)
+        }
+    }
+}
+
+impl Daemon {
+    /// Whether the Rule Feed toggle is on.
+    pub fn rule_feed_enabled(&self) -> bool {
+        self.state
+            .lock()
+            .expect("the state is not poisoned")
+            .feed
+            .enabled
+    }
+
+    /// Moves the Rule Feed toggle and answers with where it stands.
+    ///
+    /// Off means no request at all and the bundled pack only (spec section
+    /// 9.4): a fetched pack in force gives way to the bundled one, with the
+    /// Full Scan any change of pack brings. The stored pack stays on disk, so
+    /// switching the feed on again puts it back in force without a request.
+    /// On asks the feed at once, after the jitter.
+    pub fn set_rule_feed(self: &Arc<Daemon>, enabled: bool) -> bool {
+        {
+            let mut state = self.state.lock().expect("the state is not poisoned");
+            state.feed.enabled = enabled;
+            if !enabled {
+                state.feed.ignored = None;
+                state.feed.unreachable_since = None;
+            }
+            self.write_state(&state);
+            let mut health = self.health.lock().expect("the health is not poisoned");
+            health.rule_feed = enabled;
+            if !enabled {
+                health.ignored_pack = None;
+                health.feed_unreachable = None;
+            }
+        }
+        say!(
+            "the Rule Feed was switched {}",
+            if enabled { "on" } else { "off" }
+        );
+        let in_force = self.pack_in_force();
+        match enabled {
+            false => {
+                if in_force.origin == PackOrigin::Fetched {
+                    self.adopt(Arc::clone(&self.bundled));
+                }
+            }
+            true => {
+                let store = PackStore::in_data_directory(&self.directory);
+                if let Ok(Some(stored)) = store.read()
+                    && judge(
+                        &stored.manifest,
+                        in_force.manifest.pack_version,
+                        agentsweep_core::VERSION,
+                    ) == Verdict::Accept
+                {
+                    self.adopt(Arc::new(stored));
+                }
+                self.fetch_later();
+            }
+        }
+        enabled
+    }
+
+    /// Asks the Rule Feed once, after the jitter, on a thread of its own.
+    /// Nothing happens when there is no feed, when the toggle is off, or when
+    /// a fetch is already waiting or running.
+    pub fn fetch_later(self: &Arc<Daemon>) {
+        if self.feed.is_none() || !self.rule_feed_enabled() {
+            return;
+        }
+        if self.fetch_pending.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let wait = rule_feed::jitter(self.tuning.feed.jitter);
+        let weak = Arc::downgrade(self);
+        let started = std::thread::Builder::new()
+            .name("agentsweep-rule-feed".to_string())
+            .spawn(move || {
+                std::thread::sleep(wait);
+                if let Some(daemon) = weak.upgrade() {
+                    daemon.fetch_rule_feed();
+                    daemon.fetch_pending.store(false, Ordering::SeqCst);
+                }
+            });
+        if started.is_err() {
+            self.fetch_pending.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// Asks for a fetch when the last one is a day old, which is how the fetch
+    /// rides along with the due check.
+    fn fetch_when_due(self: &Arc<Daemon>, now: Timestamp) {
+        let last = self
+            .state
+            .lock()
+            .expect("the state is not poisoned")
+            .feed
+            .last_attempt;
+        let every = self.tuning.feed.every.as_millis() as i64;
+        let due = last.is_none_or(|last| now.as_unix_ms() - last.as_unix_ms() >= every);
+        if due {
+            self.fetch_later();
+        }
+    }
+
+    /// Asks the Rule Feed now and takes what it offers. The one outbound
+    /// request the daemon makes, and none at all when the toggle is off.
+    pub fn fetch_rule_feed(self: &Arc<Daemon>) -> FeedOutcome {
+        let Some(endpoints) = self.feed.clone() else {
+            return FeedOutcome::NoFeed;
+        };
+        let _one = self
+            .fetching
+            .lock()
+            .expect("the fetch lock is not poisoned");
+        let (enabled, validators) = {
+            let state = self.state.lock().expect("the state is not poisoned");
+            (
+                state.feed.enabled,
+                Validators {
+                    etag: state.feed.etag.clone(),
+                    last_modified: state.feed.last_modified.clone(),
+                },
+            )
+        };
+        if !enabled {
+            return FeedOutcome::Off;
+        }
+        let host = endpoints.host();
+        let client = FeedClient::new(endpoints);
+        let store = PackStore::in_data_directory(&self.directory);
+        let in_use = self.pack_in_force().manifest.pack_version;
+        let (fetched, keep) = rule_feed::fetch(
+            &client,
+            &store,
+            in_use,
+            agentsweep_core::VERSION,
+            &validators,
+        );
+        let now = (self.tuning.due.now)();
+
+        let (outcome, accepted) = match fetched {
+            Fetched::Unchanged => (FeedOutcome::Unchanged, None),
+            Fetched::NothingNewer { offered, in_use } => {
+                (FeedOutcome::NothingNewer { offered, in_use }, None)
+            }
+            Fetched::NeedsNewerEngine(ignored) => (
+                FeedOutcome::NeedsNewerEngine {
+                    offered: ignored.pack_version,
+                    minimum: ignored.minimum_engine_version.clone(),
+                },
+                None,
+            ),
+            Fetched::Accepted(pack) => (
+                FeedOutcome::Accepted {
+                    pack_version: pack.manifest.pack_version,
+                },
+                Some(pack),
+            ),
+            Fetched::Refused(why) => (FeedOutcome::Refused(why), None),
+            Fetched::Incomplete(why) => (FeedOutcome::Incomplete(why), None),
+            Fetched::Unreachable(why) => (FeedOutcome::Unreachable(why), None),
+        };
+
+        {
+            let mut state = self.state.lock().expect("the state is not poisoned");
+            let feed = &mut state.feed;
+            feed.last_attempt = Some(now);
+            match &outcome {
+                FeedOutcome::Unreachable(_) => {
+                    feed.unreachable_since.get_or_insert(now);
+                }
+                _ => {
+                    feed.last_contact = Some(now);
+                    feed.unreachable_since = None;
+                }
+            }
+            if let Some(kept) = keep {
+                feed.etag = kept.etag;
+                feed.last_modified = kept.last_modified;
+            }
+            match &outcome {
+                FeedOutcome::NeedsNewerEngine { offered, minimum } => {
+                    feed.ignored = Some(agentsweep_core::state::IgnoredPack {
+                        pack_version: *offered,
+                        minimum_engine_version: minimum.clone(),
+                    });
+                }
+                // An accepted pack at least as new as the one that was ignored
+                // settles the notice.
+                FeedOutcome::Accepted { pack_version }
+                    if feed
+                        .ignored
+                        .as_ref()
+                        .is_some_and(|ignored| ignored.pack_version <= *pack_version) =>
+                {
+                    feed.ignored = None;
+                }
+                _ => {}
+            }
+            let ignored = feed.ignored.clone();
+            let unreachable = Health::feed_unreachable_at(feed.unreachable_since, now);
+            self.write_state(&state);
+            let mut health = self.health.lock().expect("the health is not poisoned");
+            health.ignored_pack = ignored;
+            health.feed_unreachable = unreachable;
+        }
+
+        say!("the Rule Feed at {host}: {outcome:?}");
+        if let Some(pack) = accepted {
+            self.adopt(Arc::new(*pack));
+        }
+        outcome
+    }
+
+    /// Puts a pack in force: the evaluation cache is emptied, then a Full
+    /// Scan runs with the new pack, in that order (spec section 6.4). What the
+    /// new pack says about each Finding is decided in that Scan, not here: a
+    /// withdrawn Rule's open Findings go, a quarantined Item whose Rule was
+    /// withdrawn stays and says so, a Rule that left Probation acts through
+    /// the automatic Quarantine every Scan applies.
+    fn adopt(self: &Arc<Daemon>, pack: Arc<LoadedPack>) {
+        let line = format!(
+            "Rule Pack {} ({}) is in force, released {}.",
+            pack.manifest.pack_version,
+            pack.origin,
+            pack.manifest.released_on()
+        );
+        {
+            let mut health = self.health.lock().expect("the health is not poisoned");
+            health.rule_pack = pack.manifest.pack_version;
+            health.rule_pack_origin = pack.origin;
+            health.rules_released_at = pack.manifest.released_at.clone();
+        }
+        *self.pack.write().expect("the pack is not poisoned") = pack;
+        self.forget_evaluations();
+        say!("{line}");
+        self.publish(StateEvent::Activity { line });
+        self.scan_with_the_new_pack();
+    }
+
+    /// Asks for the Full Scan a new pack brings. One that is waiting will run
+    /// with the new pack anyway and is joined; one that is running started
+    /// with the old pack, so another is put behind it.
+    fn scan_with_the_new_pack(self: &Arc<Daemon>) {
+        let mut queue = self.queue.lock().expect("the queue is not poisoned");
+        if queue.full.is_none() {
+            queue.full = Some(Trigger::RulePack);
+        }
+        let start = queue.claim_the_thread();
+        drop(queue);
+        if start {
+            self.work();
+        }
+    }
+
+    /// Writes the state file, saying so when it could not be written.
+    fn write_state(&self, state: &State) {
+        let file = StateFile::in_data_directory(&self.directory);
+        if let Err(error) = StateWriter::write(&file, &*self.keys, state) {
+            say!("the cached state could not be written: {error}");
         }
     }
 }
@@ -1019,6 +1444,11 @@ pub fn start_with(options: &Options, daemon: Arc<Daemon>) -> Result<Running, Box
     // root yet.
     daemon.scan(Trigger::DaemonStart);
     daemon.check_when_due();
+    match &daemon.feed {
+        Some(feed) => say!("the Rule Feed is asked at {}", feed.host()),
+        None => say!("the Rule Feed is not asked in a developer run that names none"),
+    }
+    daemon.fetch_later();
     Ok(Running {
         daemon,
         listener: Arc::new(listener),

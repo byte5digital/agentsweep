@@ -401,6 +401,121 @@ pub struct State {
     pub readable_classes: BTreeSet<String>,
     /// When the last Full Scan finished.
     pub last_full_scan: Option<Timestamp>,
+    /// What the daemon remembers about the Rule Feed.
+    pub feed: FeedRecord,
+}
+
+/// A newer Rule Pack that was ignored because it needs a newer AgentSweep.
+/// Its version and minimum engine version are read off its signed manifest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IgnoredPack {
+    /// The version the pack states.
+    pub pack_version: u64,
+    /// The AgentSweep version it asks for.
+    pub minimum_engine_version: String,
+}
+
+/// What the daemon remembers about the Rule Feed between two starts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeedRecord {
+    /// The one toggle (spec section 9.4). On by default; off means no request
+    /// at all and the bundled pack only.
+    pub enabled: bool,
+    /// The `ETag` of the last index answer that was acted on, sent back as
+    /// `If-None-Match` so an unchanged index costs one small answer.
+    pub etag: String,
+    /// The `Last-Modified` of that answer, sent back as `If-Modified-Since`.
+    pub last_modified: String,
+    /// When the last fetch was attempted, which is what the daily cadence
+    /// counts from.
+    pub last_attempt: Option<Timestamp>,
+    /// When the feed last answered at all.
+    pub last_contact: Option<Timestamp>,
+    /// Since when every attempt has failed, absent while the feed answers.
+    pub unreachable_since: Option<Timestamp>,
+    /// The newer pack that was ignored because it needs a newer AgentSweep.
+    pub ignored: Option<IgnoredPack>,
+}
+
+impl Default for FeedRecord {
+    fn default() -> FeedRecord {
+        FeedRecord {
+            enabled: true,
+            etag: String::new(),
+            last_modified: String::new(),
+            last_attempt: None,
+            last_contact: None,
+            unreachable_since: None,
+            ignored: None,
+        }
+    }
+}
+
+impl FeedRecord {
+    /// The record as the file carries it.
+    pub fn to_value(&self) -> Value {
+        let moment =
+            |at: Option<Timestamp>| Value::from(at.map(|at| at.to_string()).unwrap_or_default());
+        let mut map = Map::new();
+        map.insert("enabled".to_string(), Value::from(self.enabled));
+        map.insert("etag".to_string(), Value::from(self.etag.as_str()));
+        map.insert(
+            "ignored".to_string(),
+            match &self.ignored {
+                None => Value::Null,
+                Some(ignored) => {
+                    let mut pack = Map::new();
+                    pack.insert(
+                        "minimum_engine_version".to_string(),
+                        Value::from(ignored.minimum_engine_version.as_str()),
+                    );
+                    pack.insert(
+                        "pack_version".to_string(),
+                        Value::from(ignored.pack_version),
+                    );
+                    Value::Object(pack)
+                }
+            },
+        );
+        map.insert("last_attempt".to_string(), moment(self.last_attempt));
+        map.insert("last_contact".to_string(), moment(self.last_contact));
+        map.insert(
+            "last_modified".to_string(),
+            Value::from(self.last_modified.as_str()),
+        );
+        map.insert(
+            "unreachable_since".to_string(),
+            moment(self.unreachable_since),
+        );
+        Value::Object(map)
+    }
+
+    /// Reads back what [`FeedRecord::to_value`] wrote.
+    pub fn from_value(value: &Value) -> Option<FeedRecord> {
+        let text = |field: &str| value.get(field).and_then(Value::as_str);
+        let moment = |field: &str| -> Option<Option<Timestamp>> {
+            match text(field)? {
+                "" => Some(None),
+                written => Some(Some(Timestamp::parse(written)?)),
+            }
+        };
+        let ignored = match value.get("ignored")? {
+            Value::Null => None,
+            pack => Some(IgnoredPack {
+                pack_version: pack.get("pack_version")?.as_u64()?,
+                minimum_engine_version: pack.get("minimum_engine_version")?.as_str()?.to_string(),
+            }),
+        };
+        Some(FeedRecord {
+            enabled: value.get("enabled")?.as_bool()?,
+            etag: text("etag")?.to_string(),
+            last_modified: text("last_modified")?.to_string(),
+            last_attempt: moment("last_attempt")?,
+            last_contact: moment("last_contact")?,
+            unreachable_since: moment("unreachable_since")?,
+            ignored,
+        })
+    }
 }
 
 impl State {
@@ -455,6 +570,7 @@ impl State {
     /// The state as the file carries it, without the MAC around it.
     pub fn to_value(&self) -> Value {
         let mut map = Map::new();
+        map.insert("feed".to_string(), self.feed.to_value());
         map.insert(
             "findings".to_string(),
             Value::Array(
@@ -512,11 +628,18 @@ impl State {
             "" => None,
             written => Some(Timestamp::parse(written)?),
         };
+        // A state file written before the Rule Feed existed has no record of
+        // it, which reads as the default: the toggle on, nothing remembered.
+        let feed = match value.get("feed") {
+            None => FeedRecord::default(),
+            Some(feed) => FeedRecord::from_value(feed)?,
+        };
         Some(State {
             findings,
             scans,
             readable_classes,
             last_full_scan,
+            feed,
         })
     }
 }
@@ -770,6 +893,34 @@ mod tests {
         state.record_scan(summary(Trigger::DaemonStart, "2026-09-24T08:00:00.000Z"));
         state.readable_classes.insert("documents".to_string());
         state
+    }
+
+    /// The Rule Feed is on by default, and what the daemon remembers about it
+    /// survives the file; a file written before the feed existed reads as the
+    /// default.
+    #[test]
+    fn the_feed_record_is_on_by_default_and_round_trips() {
+        assert!(State::empty().feed.enabled);
+
+        let mut state = a_state();
+        state.feed = FeedRecord {
+            enabled: false,
+            etag: "\"abc\"".to_string(),
+            last_modified: "Thu, 24 Sep 2026 08:00:00 GMT".to_string(),
+            last_attempt: Some(moment("2026-09-24T08:00:00.000Z")),
+            last_contact: Some(moment("2026-09-23T08:00:00.000Z")),
+            unreachable_since: Some(moment("2026-09-24T08:00:00.000Z")),
+            ignored: Some(IgnoredPack {
+                pack_version: 9,
+                minimum_engine_version: "0.3.0".to_string(),
+            }),
+        };
+        assert_eq!(State::from_value(&state.to_value()), Some(state.clone()));
+
+        let mut older = state.to_value();
+        older.as_object_mut().expect("an object").remove("feed");
+        let read = State::from_value(&older).expect("an older state file reads");
+        assert_eq!(read.feed, FeedRecord::default());
     }
 
     #[test]

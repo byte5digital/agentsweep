@@ -430,7 +430,7 @@ impl Daemon {
             Request::Fix { target } => self.fix(target),
             Request::ReEnable { target } => self.re_enable(target),
             Request::RevealReceipt { path } => self.reveal(path.as_deref()),
-            Request::Status | Request::ScanNow | Request::Subscribe => {
+            Request::Status | Request::ScanNow | Request::Subscribe | Request::RuleFeed { .. } => {
                 Err(RequestError::unknown(request.as_str()))
             }
         }

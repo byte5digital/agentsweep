@@ -431,6 +431,15 @@ impl fmt::Display for FindingId {
     }
 }
 
+/// What a stopped Finding says when the Rule that stopped it is not in the
+/// Rule Pack in force any more (spec sections 6.4 and 8.4). The Item stays in
+/// quarantine and Restore is the first action offered.
+pub const RULE_WITHDRAWN_STOPPED: &str = "The rule that stopped this was withdrawn.";
+
+/// What an open Finding says once its Rule was withdrawn and it went with it.
+pub const RULE_WITHDRAWN_GONE: &str =
+    "The rule that raised this was withdrawn, so it is no longer a Finding.";
+
 /// Where one Finding stands (spec section 4.5).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FindingState {

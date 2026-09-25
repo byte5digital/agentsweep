@@ -11,6 +11,7 @@
 mod actions;
 mod developer;
 mod folder_scan;
+mod rule_feed;
 mod status;
 
 use std::path::PathBuf;
@@ -48,6 +49,13 @@ Item id or a Receipt id, as `status` prints them:
                           List what is in quarantine, each receipt id beside
                           the path it was taken from.
 
+The rule feed, one of the only three requests AgentSweep ever sends:
+  agentsweep rule-feed [on | off]
+                          Say whether AgentSweep asks GitHub once a day for
+                          newer rules, or switch it on or off. Off means
+                          nothing is fetched and the bundled rules are in
+                          force.
+
 `scan` exits 0 when the folder is safe to open and 1 when it found something.
 `status` exits 0 when nothing is open, 1 when something is, and says Protection
 is off when no daemon answers. An action exits 0 when it was done, 1 when it
@@ -74,6 +82,7 @@ fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
         Some("status") => status(&arguments[1..]),
+        Some("rule-feed") => rule_feed(&arguments[1..]),
         Some(command) if actions::COMMANDS.contains(&command) => act(command, &arguments[1..]),
         Some("scan") => scan(&arguments[1..]),
         Some("--developer-list-items") => developer_list_items(&arguments[1..]),
@@ -107,6 +116,20 @@ fn status(arguments: &[String]) -> ExitCode {
         }
     };
     let (rendered, code) = status::status(socket.as_deref());
+    print!("{rendered}");
+    ExitCode::from(code)
+}
+
+/// Asks the daemon where the Rule Feed toggle stands, or moves it.
+fn rule_feed(arguments: &[String]) -> ExitCode {
+    let invocation = match rule_feed::parse(arguments) {
+        Ok(invocation) => invocation,
+        Err(reason) => {
+            eprintln!("agentsweep: {reason}\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    let (rendered, code) = rule_feed::run(&invocation);
     print!("{rendered}");
     ExitCode::from(code)
 }
@@ -225,6 +248,13 @@ mod tests {
             "{}",
             super::USAGE
         );
+    }
+
+    /// The Rule Feed toggle is in the help text, with what off means.
+    #[test]
+    fn the_usage_names_the_rule_feed_toggle() {
+        assert!(super::USAGE.contains("agentsweep rule-feed [on | off]"));
+        assert!(super::USAGE.contains("bundled rules are in"));
     }
 
     /// Every action command is in the help text, and so is what it exits

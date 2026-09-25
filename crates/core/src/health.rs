@@ -6,16 +6,27 @@
 //! line interface, so the three of them say the same sentence about the same
 //! machine.
 //!
-//! The states of that list this milestone can answer are Protection off, the
-//! two chain states, the projects that need permission, a Scan in flight and
-//! all clear. The Gate lines and the Rule Pack notices arrive with their own
-//! milestones; their place in the order is kept here so that adding one is a
+//! The states of that list answered so far are Protection off, the two chain
+//! states, the projects that need permission, the two Rule Pack notices, a
+//! Scan in flight and all clear. The Gate lines arrive with their own
+//! milestone; their place in the order is kept here so that adding one is a
 //! field and a line rather than a rewrite.
+//!
+//! Beside the states, Health says which Rule Pack is in force and when it was
+//! released, which is the "Rules updated <date>" line: the date is read off the
+//! pack's signed manifest, never off the clock of the machine that fetched it.
 
 use std::fmt;
 
 use crate::chain::ChainState;
 use crate::envelope::Timestamp;
+use crate::pack::released_day;
+use crate::packs::PackOrigin;
+use crate::state::IgnoredPack;
+
+/// How long the Rule Feed may go unanswered before Health says so: thirty
+/// days (spec section 6.6, notice 6).
+pub const FEED_UNREACHABLE_AFTER_MS: i64 = 30 * 24 * 3_600_000;
 
 /// Whether AgentSweep is working in the background at all.
 ///
@@ -116,6 +127,21 @@ pub struct Health {
     pub items: usize,
     /// How many Findings are open right now.
     pub open_findings: usize,
+    /// The version of the Rule Pack in force, zero when nothing is known.
+    pub rule_pack: u64,
+    /// Where the Rule Pack in force came from.
+    pub rule_pack_origin: PackOrigin,
+    /// When the Rule Pack in force was released, RFC 3339, as its signed
+    /// manifest states it. Empty when nothing is known.
+    pub rules_released_at: String,
+    /// Whether the Rule Feed toggle is on.
+    pub rule_feed: bool,
+    /// A newer Rule Pack that was ignored because it needs a newer
+    /// AgentSweep.
+    pub ignored_pack: Option<IgnoredPack>,
+    /// Set once the Rule Feed has not answered for over thirty days: the
+    /// moment it first failed to.
+    pub feed_unreachable: Option<Timestamp>,
 }
 
 impl Default for Health {
@@ -132,6 +158,12 @@ impl Default for Health {
             last_full_scan: None,
             items: 0,
             open_findings: 0,
+            rule_pack: 0,
+            rule_pack_origin: PackOrigin::Bundled,
+            rules_released_at: String::new(),
+            rule_feed: true,
+            ignored_pack: None,
+            feed_unreachable: None,
         }
     }
 }
@@ -165,13 +197,26 @@ impl Health {
         self.events == ChainState::KeyMissing || self.baseline == ChainState::KeyMissing
     }
 
+    /// The date "Rules updated <date>" shows, `YYYY-MM-DD`, absent when no
+    /// Rule Pack is known.
+    pub fn rules_updated(&self) -> Option<String> {
+        released_day(&self.rules_released_at)
+    }
+
+    /// The moment the Rule Feed first failed to answer, when that is over
+    /// thirty days before `now`, which is when Health says so.
+    pub fn feed_unreachable_at(since: Option<Timestamp>, now: Timestamp) -> Option<Timestamp> {
+        since.filter(|since| now.as_unix_ms() - since.as_unix_ms() > FEED_UNREACHABLE_AFTER_MS)
+    }
+
     /// The one sentence a person is shown, by the precedence of spec section
     /// 6.6.
     ///
     /// The order is Protection off, records tampered, protection state reset,
-    /// projects that need permission, then the Gate lines and the Rule Pack
-    /// notices once they exist, then a Scan in flight, then all clear with the
-    /// last-checked time.
+    /// projects that need permission, then the Gate lines once they exist, then
+    /// the Rule Pack notices (a newer pack ignored because it needs a newer
+    /// AgentSweep, the Rule Feed unreachable for over thirty days), then a
+    /// Scan in flight, then all clear with the last-checked time.
     pub fn headline(&self) -> String {
         if self.protection.is_off() {
             return "Protection is off.".to_string();
@@ -187,6 +232,12 @@ impl Health {
                 1 => "1 project needs permission.".to_string(),
                 many => format!("{many} projects need permission."),
             };
+        }
+        if self.ignored_pack.is_some() {
+            return "Newer rules need a newer AgentSweep.".to_string();
+        }
+        if self.feed_unreachable.is_some() {
+            return "The rule feed has not been reachable for over 30 days.".to_string();
         }
         if self.scanning {
             return "Checking now.".to_string();
@@ -210,10 +261,35 @@ impl Health {
         if !rebuilt.is_empty() {
             notes.push(rebuilt.to_string());
         }
+        if let Some(ignored) = &self.ignored_pack {
+            notes.push(format!(
+                "Rule Pack {} needs AgentSweep {} or later. The rules in use stay in force \
+                 until AgentSweep is updated.",
+                ignored.pack_version, ignored.minimum_engine_version
+            ));
+        }
+        if let Some(since) = self.feed_unreachable {
+            notes.push(format!(
+                "The rule feed has not answered since {}. The rules in use stay in force.",
+                since.day()
+            ));
+        }
         match self.open_findings {
             0 => {}
             1 => notes.push("1 Finding is open.".to_string()),
             many => notes.push(format!("{many} Findings are open.")),
+        }
+        if let Some(day) = self.rules_updated() {
+            notes.push(format!(
+                "Rules updated {day} (Rule Pack {}, {}).",
+                self.rule_pack, self.rule_pack_origin
+            ));
+            if !self.rule_feed {
+                notes.push(
+                    "The rule feed is off, so the rules bundled with AgentSweep are in force."
+                        .to_string(),
+                );
+            }
         }
         notes
     }
@@ -328,5 +404,97 @@ mod tests {
         ] {
             assert_eq!(StateFileHealth::parse(state.as_str()), Some(state));
         }
+    }
+
+    /// The Rule Pack notices sit below the projects that need permission and
+    /// above a Scan in flight, the ignored pack first.
+    #[test]
+    fn the_rule_pack_notices_sit_at_their_rung_of_the_precedence() {
+        let mut health = Health::running();
+        health.scanning = true;
+        health.projects_need_permission = 1;
+        health.ignored_pack = Some(IgnoredPack {
+            pack_version: 9,
+            minimum_engine_version: "0.3.0".to_string(),
+        });
+        let since = Timestamp::parse("2026-08-01T10:00:00.000Z").expect("a moment");
+        health.feed_unreachable = Some(since);
+        assert_eq!(health.headline(), "1 project needs permission.");
+
+        health.projects_need_permission = 0;
+        assert_eq!(health.headline(), "Newer rules need a newer AgentSweep.");
+        assert!(
+            health.notes().iter().any(|note| note.contains("0.3.0")),
+            "{:?}",
+            health.notes()
+        );
+
+        health.ignored_pack = None;
+        assert_eq!(
+            health.headline(),
+            "The rule feed has not been reachable for over 30 days."
+        );
+        assert!(
+            health
+                .notes()
+                .iter()
+                .any(|note| note.contains("2026-08-01")),
+            "{:?}",
+            health.notes()
+        );
+
+        health.feed_unreachable = None;
+        assert_eq!(health.headline(), "Checking now.");
+    }
+
+    #[test]
+    fn the_feed_is_unreachable_only_after_thirty_days() {
+        let since = Timestamp::parse("2026-08-01T10:00:00.000Z").expect("a moment");
+        let day = 24 * 3_600_000;
+        let at = |days: i64| Timestamp::from_unix_ms(since.as_unix_ms() + days * day);
+        assert_eq!(Health::feed_unreachable_at(Some(since), at(29)), None);
+        assert_eq!(Health::feed_unreachable_at(Some(since), at(30)), None);
+        assert_eq!(
+            Health::feed_unreachable_at(Some(since), at(31)),
+            Some(since)
+        );
+        assert_eq!(Health::feed_unreachable_at(None, at(400)), None);
+    }
+
+    /// "Rules updated <date>" is the signed release moment's date, and a
+    /// Health that knows no pack says nothing about rules.
+    #[test]
+    fn the_rules_updated_line_reads_the_release_date() {
+        let mut health = Health::running();
+        assert!(health.rules_updated().is_none());
+        assert!(
+            !health
+                .notes()
+                .iter()
+                .any(|note| note.starts_with("Rules updated"))
+        );
+
+        health.rule_pack = 4;
+        health.rule_pack_origin = PackOrigin::Fetched;
+        health.rules_released_at = "2026-10-01T09:30:00Z".to_string();
+        assert_eq!(health.rules_updated().as_deref(), Some("2026-10-01"));
+        assert!(
+            health
+                .notes()
+                .contains(&"Rules updated 2026-10-01 (Rule Pack 4, fetched).".to_string()),
+            "{:?}",
+            health.notes()
+        );
+        assert!(health.headline().starts_with("All clear"));
+
+        health.rule_feed = false;
+        assert!(
+            health
+                .notes()
+                .iter()
+                .any(|note| note.starts_with("The rule feed is off")),
+            "{:?}",
+            health.notes()
+        );
     }
 }

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use agentsweep_ipc::protocol::{Message, Refusal, Role, StateEvent};
+use agentsweep_ipc::protocol::{Refusal, Role, StateEvent};
 use agentsweep_ipc::{Client, ClientError};
 
 use crate::popover::{Off, View};
@@ -30,9 +30,8 @@ pub const RETRY: Duration = Duration::from_secs(1);
 pub enum Update {
     /// The popover's view changed.
     View(View),
-    /// One state event, as the wire carries it, for a window that follows
-    /// Scans and Findings.
-    Event(serde_json::Value),
+    /// One state event, for the window that follows Scans and Findings.
+    Event(StateEvent),
 }
 
 /// Where the link connects.
@@ -58,7 +57,8 @@ impl Socket {
         Socket::Installed
     }
 
-    fn connect(&self) -> Result<Client, ClientError> {
+    /// A new connection to the daemon, shaken hands with as the app.
+    pub(crate) fn connect(&self) -> Result<Client, ClientError> {
         match self {
             Socket::Installed => Client::connect(Role::App),
             Socket::At(path) => Client::connect_at(path, Role::App),
@@ -157,7 +157,7 @@ impl Link {
                         };
                         sink(Update::View(view));
                     }
-                    sink(Update::Event(Message::Event(event).to_value()));
+                    sink(Update::Event(event));
                 }
                 // The daemon went away: a kill, a crash, or an exit for the
                 // new binary. Protection is off until it answers again.
@@ -185,7 +185,7 @@ mod tests {
     use std::sync::Mutex;
 
     use agentsweep_core::health::Health;
-    use agentsweep_ipc::protocol::{Hello, welcome};
+    use agentsweep_ipc::protocol::{Hello, Message, welcome};
     use agentsweep_ipc::socket::SocketListener;
 
     use crate::popover::Orb;
@@ -285,7 +285,7 @@ mod tests {
             .lock()
             .expect("the updates")
             .iter()
-            .filter(|update| matches!(update, Update::Event(event) if event["event"] == "health-changed"))
+            .filter(|update| matches!(update, Update::Event(StateEvent::HealthChanged { .. })))
             .count();
         assert_eq!(events, 2);
     }

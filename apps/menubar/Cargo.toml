@@ -38,6 +38,13 @@ tauri = { version = "=2.11.5", features = ["tray-icon"] }
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+# The native folder picker behind "Scan a folder" (AppKit's NSOpenPanel). MIT.
+# Called from Rust, so the webview gets no dialog or file system permission.
+rfd = { version = "0.17.2", default-features = false }
 
 [dev-dependencies]
+# The window's tests run a real daemon in the process, on a temporary home,
+# with the chain key in memory. Test builds only: the app never links it.
+agentsweep-core = { workspace = true, features = ["development-keys"] }
+agentsweep-daemon = { path = "../../crates/daemon" }
 tempfile = "3.27.0"

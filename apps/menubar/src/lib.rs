@@ -12,15 +12,26 @@
 //! - [`supervision`]: SMAppService for the daemon and the login item, and the
 //!   decisions over it.
 //! - [`link`]: the connection to the daemon and the version handshake.
+//! - [`asking`]: the requests the window and the popover send, on a
+//!   connection of their own, and their answers in the command line
+//!   interface's words.
 //! - [`popover`]: the view the popover renders.
+//! - [`findings`]: the Findings window's list, kept from the status and the
+//!   subscribe stream, with the actions the daemon allows on each Finding.
+//! - [`folder`]: the answer of a Folder Scan as the window shows it.
+//! - [`window`]: when the app shows in the Dock.
 //! - [`glyph`]: the menu bar icon in its three states.
 //! - [`app`]: the Tauri shell around them, which the suite never starts.
 
 #![warn(missing_docs)]
 
 pub mod app;
+pub mod asking;
+pub mod findings;
+pub mod folder;
 pub mod glyph;
 pub mod launch_agent;
 pub mod link;
 pub mod popover;
 pub mod supervision;
+pub mod window;

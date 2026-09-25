@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentSweep</title>
+    <link rel="stylesheet" href="popover.css" />
+    <script type="module" src="popover.js"></script>
+  </head>
+  <body>
+    <main class="popover" data-orb="off">
+      <section class="status">
+        <span class="orb" aria-hidden="true"></span>
+        <div>
+          <p class="sentence" id="sentence">Protection is off.</p>
+          <p class="detail" id="detail"></p>
+        </div>
+      </section>
+      <p class="last-check" id="last-check" hidden></p>
+      <button type="button" id="login-items" class="primary" hidden>Open Login Items</button>
+      <hr />
+      <button type="button" id="quit" class="quiet">Quit AgentSweep (protection stays on)</button>
+    </main>
+  </body>
+</html>

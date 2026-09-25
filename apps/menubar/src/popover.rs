@@ -1,0 +1,273 @@
+//! What the popover shows: the status orb, one Health sentence by precedence,
+//! the last check time, and "Protection is off" with the Login Items button
+//! when that is where the user has to go.
+//!
+//! The sentence is [`Health::headline`], the one the command line interface
+//! prints, so the app and the terminal say the same thing about the same
+//! machine. Everything else in the wording here is placeholder and commits to
+//! nothing in spec section 8.
+
+use agentsweep_core::health::Health;
+use serde_json::{Value, json};
+
+/// The state the orb and the menu bar glyph show.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Orb {
+    /// Nothing asks anything of the user: a tick.
+    Clear,
+    /// Something does: an exclamation mark.
+    Attention,
+    /// Protection is off: a dash.
+    Off,
+    /// The app and the daemon are of different versions for a moment: a
+    /// dash, and a sentence that says it is passing.
+    Updating,
+}
+
+impl Orb {
+    /// The spelling the frontend reads.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Orb::Clear => "clear",
+            Orb::Attention => "attention",
+            Orb::Off => "off",
+            Orb::Updating => "updating",
+        }
+    }
+}
+
+/// Why Protection is off, as far as the app can tell.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Off {
+    /// The daemon's registration waits for the user's approval in Login Items.
+    NeedsApproval,
+    /// The daemon is not registered at all.
+    NotRegistered,
+    /// No daemon answered on the socket.
+    Unreachable(String),
+    /// A daemon answered and refused the app.
+    Refused(String),
+}
+
+impl Off {
+    /// The reason, as the Developer Posture will show it. Placeholder wording.
+    pub fn reason(&self) -> String {
+        match self {
+            Off::NeedsApproval => {
+                "the background item waits for approval in Login Items".to_string()
+            }
+            Off::NotRegistered => "the background item is not registered".to_string(),
+            Off::Unreachable(why) | Off::Refused(why) => why.clone(),
+        }
+    }
+}
+
+/// Everything the popover renders, in one value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct View {
+    /// The orb, and the menu bar glyph with it.
+    pub orb: Orb,
+    /// The one sentence.
+    pub sentence: String,
+    /// When the last Full Scan finished, RFC 3339, absent before the first.
+    pub last_check: Option<String>,
+    /// True when Protection is off, which the popover always shows.
+    pub protection_off: bool,
+    /// True when the popover offers the button that opens Login Items.
+    pub login_items: bool,
+    /// A line under the sentence for whoever wants the reason. Placeholder.
+    pub detail: String,
+}
+
+impl View {
+    /// The view of a daemon that answered with this Health.
+    pub fn of(health: &Health) -> View {
+        if health.protection.is_off() {
+            return View::off(&Off::Unreachable(health.protection.reason().to_string()));
+        }
+        let asks_something = health.records_tampered()
+            || health.state_was_reset()
+            || health.projects_need_permission > 0
+            || health.ignored_pack.is_some()
+            || health.feed_unreachable.is_some()
+            || health.open_findings > 0;
+        View {
+            orb: match asks_something {
+                true => Orb::Attention,
+                false => Orb::Clear,
+            },
+            sentence: health.headline(),
+            last_check: health.last_full_scan.map(|at| at.to_string()),
+            protection_off: false,
+            login_items: false,
+            detail: match health.open_findings {
+                0 => String::new(),
+                1 => "1 Finding is open.".to_string(),
+                many => format!("{many} Findings are open."),
+            },
+        }
+    }
+
+    /// The view when Protection is off. The sentence is the one Health gives
+    /// Protection off, and the way back is always Login Items: approval
+    /// missing, approval revoked or a daemon that does not answer (spec
+    /// section 8.6).
+    pub fn off(why: &Off) -> View {
+        let health = Health::unreachable(&why.reason());
+        View {
+            orb: Orb::Off,
+            sentence: health.headline(),
+            last_check: None,
+            protection_off: true,
+            login_items: true,
+            detail: why.reason(),
+        }
+    }
+
+    /// The view while the app and the daemon are of different versions: a
+    /// passing state, never Protection off (spec section 6.6).
+    pub fn updating() -> View {
+        View {
+            orb: Orb::Updating,
+            sentence: "AgentSweep is updating.".to_string(),
+            last_check: None,
+            protection_off: false,
+            login_items: false,
+            detail: String::new(),
+        }
+    }
+
+    /// The view before anything is known: Protection off, because silence is
+    /// never an all-clear.
+    pub fn unknown() -> View {
+        View::off(&Off::Unreachable("no daemon answered yet".to_string()))
+    }
+
+    /// The value the frontend receives.
+    pub fn to_value(&self) -> Value {
+        json!({
+            "orb": self.orb.as_str(),
+            "sentence": self.sentence,
+            "lastCheck": self.last_check,
+            "protectionOff": self.protection_off,
+            "loginItems": self.login_items,
+            "detail": self.detail,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use agentsweep_core::chain::{BreakReason, ChainState};
+    use agentsweep_core::envelope::Timestamp;
+
+    fn at(text: &str) -> Timestamp {
+        Timestamp::parse(text).expect("a moment")
+    }
+
+    #[test]
+    fn a_quiet_machine_shows_a_tick_all_clear_and_the_last_check() {
+        let health = Health {
+            last_full_scan: Some(at("2026-09-25T08:00:00.000Z")),
+            ..Health::running()
+        };
+        let view = View::of(&health);
+        assert_eq!(view.orb, Orb::Clear);
+        assert_eq!(view.sentence, health.headline());
+        assert!(view.sentence.starts_with("All clear"), "{}", view.sentence);
+        assert_eq!(view.last_check.as_deref(), Some("2026-09-25T08:00:00.000Z"));
+        assert!(!view.protection_off);
+        assert!(!view.login_items);
+    }
+
+    /// The popover says what the command line interface says: the sentence is
+    /// the Health precedence, rung by rung.
+    #[test]
+    fn the_sentence_follows_the_health_precedence() {
+        let mut health = Health::running();
+        health.projects_need_permission = 2;
+        health.events = ChainState::Broken {
+            sequence: 1,
+            reason: BreakReason::MacFailed,
+        };
+        let view = View::of(&health);
+        assert_eq!(view.orb, Orb::Attention);
+        assert_eq!(view.sentence, "Records tampered.");
+
+        health.events = ChainState::Intact;
+        assert_eq!(View::of(&health).sentence, "2 projects need permission.");
+
+        health.projects_need_permission = 0;
+        health.scanning = true;
+        let checking = View::of(&health);
+        assert_eq!(checking.sentence, "Checking now.");
+        assert_eq!(checking.orb, Orb::Clear);
+    }
+
+    #[test]
+    fn an_open_finding_turns_the_orb_to_attention() {
+        let health = Health {
+            open_findings: 1,
+            ..Health::running()
+        };
+        let view = View::of(&health);
+        assert_eq!(view.orb, Orb::Attention);
+        assert_eq!(view.detail, "1 Finding is open.");
+    }
+
+    /// Approval missing, not registered, a daemon that does not answer: each
+    /// is Protection is off, with the button to Login Items.
+    #[test]
+    fn protection_off_always_offers_login_items() {
+        for why in [
+            Off::NeedsApproval,
+            Off::NotRegistered,
+            Off::Unreachable("no daemon answered".to_string()),
+            Off::Refused("AgentSweep answers only its own signed programs".to_string()),
+        ] {
+            let view = View::off(&why);
+            assert_eq!(view.orb, Orb::Off);
+            assert_eq!(view.sentence, "Protection is off.");
+            assert!(view.protection_off);
+            assert!(view.login_items);
+            assert!(!view.detail.is_empty());
+        }
+        assert!(View::unknown().protection_off);
+        assert!(View::of(&Health::unreachable("gone")).protection_off);
+    }
+
+    #[test]
+    fn a_version_mismatch_is_updating_rather_than_off() {
+        let view = View::updating();
+        assert_eq!(view.orb, Orb::Updating);
+        assert!(!view.protection_off);
+        assert!(!view.login_items);
+    }
+
+    #[test]
+    fn the_frontend_receives_every_field_by_name() {
+        let value = View::off(&Off::NeedsApproval).to_value();
+        assert_eq!(value["orb"], "off");
+        assert_eq!(value["sentence"], "Protection is off.");
+        assert_eq!(value["lastCheck"], Value::Null);
+        assert_eq!(value["protectionOff"], true);
+        assert_eq!(value["loginItems"], true);
+    }
+
+    /// Placeholder wording still keeps the house style: no em-dashes.
+    #[test]
+    fn no_string_carries_an_em_dash() {
+        let views = [
+            View::of(&Health::running()),
+            View::off(&Off::NeedsApproval),
+            View::off(&Off::NotRegistered),
+            View::updating(),
+        ];
+        for view in views {
+            assert!(!view.sentence.contains('\u{2014}'));
+            assert!(!view.detail.contains('\u{2014}'));
+        }
+    }
+}

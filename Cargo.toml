@@ -10,6 +10,7 @@ members = [
     "crates/adapters/workspace",
     "crates/adapter-conformance",
     "crates/xtask",
+    "apps/menubar",
 ]
 
 # Inherited by every crate in the workspace. The stable toolchain is pinned here

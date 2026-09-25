@@ -39,6 +39,16 @@ ignore = [
     # only, so `wasmtime-wasi` is not in the dependency graph and the
     # vulnerable code is never compiled in.
     "RUSTSEC-2026-0269",
+    # The next five come from the menu bar app. Tauri 2.11.5 matches the URLs
+    # of its capabilities with `urlpattern`, which reads identifiers with the
+    # unic Unicode tables, and those are unmaintained, not vulnerable. The app
+    # declares no remote URL at all, so the matcher only ever reads the app's
+    # own configuration. Revisit on every Tauri 2 release.
+    "RUSTSEC-2025-0075", # unic-char-range, unmaintained, through Tauri's urlpattern
+    "RUSTSEC-2025-0080", # unic-common, unmaintained, through Tauri's urlpattern
+    "RUSTSEC-2025-0081", # unic-char-property, unmaintained, through Tauri's urlpattern
+    "RUSTSEC-2025-0098", # unic-ucd-version, unmaintained, through Tauri's urlpattern
+    "RUSTSEC-2025-0100", # unic-ucd-ident, unmaintained, through Tauri's urlpattern
 ]
 
 [licenses]
@@ -75,6 +85,21 @@ exceptions = [
     # allowed everywhere because a public domain dedication is unusual enough
     # to be worth reading each time it turns up.
     { name = "notify", allow = ["CC0-1.0"] },
+    # MPL-2.0 is copyleft per file: it asks that the source of those files
+    # stays available, which crates.io does for an unmodified crate, and puts
+    # nothing on the rest of the program. Each is named rather than allowed
+    # everywhere, so a new MPL crate is read before it ships.
+    #
+    # Tauri's build-time HTML handling, which writes the content security
+    # policy into the frontend. They run inside the Tauri proc macro and reach
+    # no binary.
+    { name = "cssparser", allow = ["MPL-2.0"] },
+    { name = "cssparser-macros", allow = ["MPL-2.0"] },
+    { name = "dtoa-short", allow = ["MPL-2.0"] },
+    { name = "selectors", allow = ["MPL-2.0"] },
+    # Tauri's lookup of the standard directories, through `dirs`. It is in the
+    # app binary, unmodified.
+    { name = "option-ext", allow = ["MPL-2.0"] },
 ]
 
 [bans]

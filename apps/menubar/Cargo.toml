@@ -1,0 +1,43 @@
+[package]
+name = "agentsweep-menubar"
+description = "The AgentSweep menu bar app: a Tauri 2 shell over the daemon, which it registers, supervises and renders the Health of."
+# The app ships inside the notarized bundle and nowhere else.
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "agentsweep_menubar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "agentsweep-menubar"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+# Health and its precedence, the same sentence the command line interface
+# prints. Never the `daemon` feature: the app writes no store.
+agentsweep-core.workspace = true
+# The client half of the vocabulary. The app is a peer of the daemon like the
+# in-bundle command line interface, with the role `app`.
+agentsweep-ipc.workspace = true
+serde_json = "1.0.151"
+# The shell (spec section 6.1): Tauri 2.11.5, the last 2.x, with the tray.
+tauri = { version = "=2.11.5", features = ["tray-icon"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# SMAppService: the daemon as a launch agent from the plist inside the bundle,
+# and the app as a login item (spec section 9.5).
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError"] }
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

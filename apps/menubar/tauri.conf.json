@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AgentSweep",
+  "mainBinaryName": "agentsweep-menubar",
+  "identifier": "de.byte5.agentsweep",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "popover",
+        "title": "AgentSweep",
+        "url": "index.html",
+        "width": 300,
+        "height": 180,
+        "visible": false,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "category": "DeveloperTool",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.png"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "files": {
+        "Library/LaunchAgents/de.byte5.agentsweep.daemon.plist": "LaunchAgents/de.byte5.agentsweep.daemon.plist"
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the popover may do: call the app's own commands and listen to its events. No plugin, no file system, no network.",
+  "windows": ["popover"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

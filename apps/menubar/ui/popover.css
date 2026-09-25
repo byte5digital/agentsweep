@@ -1,0 +1,117 @@
+/* The popover. Placeholder styling; spec section 8 is not committed to here. */
+
+:root {
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --surface: #f5f5f7;
+  --rule: #d2d2d7;
+  --clear: #2e9d4f;
+  --attention: #d98b00;
+  --off: #c7372f;
+  --updating: #8e8e93;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #f5f5f7;
+    --muted: #a1a1a6;
+    --surface: #1e1e20;
+    --rule: #3a3a3c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.popover {
+  padding: 14px;
+}
+
+.status {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.orb {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border-radius: 50%;
+  background: var(--off);
+}
+
+[data-orb="clear"] .orb {
+  background: var(--clear);
+}
+
+[data-orb="attention"] .orb {
+  background: var(--attention);
+}
+
+[data-orb="updating"] .orb {
+  background: var(--updating);
+}
+
+.sentence {
+  margin: 0;
+  font-weight: 600;
+}
+
+.detail,
+.last-check {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.last-check {
+  margin-top: 10px;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 12px 0 8px;
+}
+
+button {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+button.primary {
+  border: 1px solid var(--off);
+  background: transparent;
+  color: var(--text);
+}
+
+button.quiet {
+  margin-top: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+button:hover {
+  background: var(--rule);
+}

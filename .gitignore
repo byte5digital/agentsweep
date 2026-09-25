@@ -28,3 +28,8 @@ corpus/benign/cache/
 
 # agent worktrees
 .claude/worktrees/
+
+# The menu bar app: the schemas Tauri generates on every build, and the
+# sidecars build-sidecars.sh copies in. Neither is ever committed.
+apps/menubar/gen/
+apps/menubar/binaries/

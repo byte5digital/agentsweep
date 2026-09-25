@@ -7,7 +7,7 @@
 //! only into the data directory it was given, binds no socket, registers
 //! nothing and starts neither the watcher nor the due check.
 //!
-//! What it prints is four durations and four counts. It never prints a path, a
+//! What it prints is a handful of durations and counts. It never prints a path, a
 //! content hash or anything read out of the home, so the output of a run
 //! against the author's own machine can be quoted in a measurements note
 //! without leaking what is on it.
@@ -28,7 +28,7 @@ use crate::machine::Machine;
 use crate::options::{KeySourceChoice, Options};
 use crate::watcher::Batch;
 
-/// Runs the four measurements and prints them.
+/// Runs the measurements and prints them.
 pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
     if options.key_source != KeySourceChoice::Memory {
         return Err("measuring takes `--key-source memory`: it may not touch the Keychain".into());
@@ -68,6 +68,7 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
         progress: &Unwatched,
     };
     let cold = scan.run(Trigger::DaemonStart)?;
+    cache.sweep();
     println!(
         "cold Full Scan: {} ms, {} Items, {} Findings, {} project roots",
         cold.summary.duration_ms,
@@ -76,14 +77,30 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
         cold.roots.len()
     );
 
+    // The second Full Scan a machine gets is not yet a warm one: the cold
+    // Scan judged every Item with `item.baseline` at `none`, which is part of
+    // the evaluation key, so every key it left behind belongs to a Baseline
+    // that no longer holds. This Scan fills the cache under the Baseline the
+    // daemon will keep seeing, and the sweep after it is the one the daemon
+    // makes behind every Full Scan.
+    let second = scan.run(Trigger::Due)?;
+    cache.sweep();
+    println!(
+        "second Full Scan: {} ms, {} Items",
+        second.summary.duration_ms, second.summary.items
+    );
+
     // Warm: everything re-enumerated and re-hashed, the Tiers skipped for every
-    // key the cold Scan left in the cache.
+    // key the Scan before it left in the cache. A key it misses is a key it
+    // adds, so the difference in size is the count of Items judged afresh.
+    let held = cache.len();
     let warm = scan.run(Trigger::ScanNow)?;
     println!(
-        "warm Full Scan: {} ms, {} Items, {} cached keys",
+        "warm Full Scan: {} ms, {} Items, {} cached keys, {} judged afresh",
         warm.summary.duration_ms,
         warm.summary.items,
-        cache.len()
+        cache.len(),
+        cache.len().saturating_sub(held)
     );
 
     // One edited MCP entry: the user registry of the first Agent that has one.

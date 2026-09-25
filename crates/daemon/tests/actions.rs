@@ -233,7 +233,7 @@ fn stable_0001() -> RulePack {
 }
 
 fn wait_for_a_scan(daemon: &Arc<Daemon>) {
-    for _ in 0..2_400 {
+    for _ in 0..3_600 {
         if !daemon.health().scanning && daemon.status().scan.is_some() {
             return;
         }
@@ -242,9 +242,11 @@ fn wait_for_a_scan(daemon: &Arc<Daemon>) {
     panic!("the Full Scan did not finish");
 }
 
-/// Waits until something is true, for at most a minute.
+/// Waits until something is true, for at most three minutes. Ten daemons
+/// start at once in this binary and the whole workspace suite runs before it,
+/// so a Full Scan that takes seconds alone can take well over a minute here.
 fn until(condition: impl Fn() -> bool) -> bool {
-    for _ in 0..2_400 {
+    for _ in 0..7_200 {
         if condition() {
             return true;
         }

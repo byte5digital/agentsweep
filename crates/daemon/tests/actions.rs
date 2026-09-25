@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use agentsweep_adapter_conformance::fixtures;
+use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::eventlog::{Action, Actor, EventLog, EventLogView, SessionsRunning};
 use agentsweep_core::finding::{Category, FindingState};
 use agentsweep_core::keychain::{ChainKey, KeyError, KeySource, MemoryKeySource};
@@ -256,24 +257,33 @@ fn until(condition: impl Fn() -> bool) -> bool {
     false
 }
 
-/// Asks for a Full Scan and waits until a newer one than the last has
-/// finished.
+/// Asks for a Full Scan and waits until one that started after the request
+/// has finished, so that it saw everything the test wrote before asking.
 ///
 /// The request joins a Full Scan that is already running or waiting, and the
-/// watcher starts one of its own when an action moves a whole tree, so the
-/// Scan that answers may carry the watcher's trigger rather than "Scan now".
-/// Either one saw the action; the trigger is not what these tests are about.
+/// watcher starts one of its own when an action moves a whole tree. A joined
+/// Scan may have started before the test's last write and may carry the
+/// watcher's trigger; when it is too old, the request is simply made again.
 fn scan_again(sandbox: &Sandbox, daemon: &Background) {
-    let before = sandbox.status().scan.map(|scan| scan.started_at);
-    sandbox.client().scan_now().expect("a Full Scan");
-    assert!(
-        until(|| {
-            let status = daemon.daemon().status();
-            !daemon.daemon().health().scanning
-                && status.scan.as_ref().map(|scan| scan.started_at) != before
-        }),
-        "the Full Scan finished"
-    );
+    let asked_at = Timestamp::now();
+    let mut last = sandbox.status().scan.map(|scan| scan.started_at);
+    for _ in 0..3 {
+        sandbox.client().scan_now().expect("a Full Scan");
+        assert!(
+            until(|| {
+                let status = daemon.daemon().status();
+                !daemon.daemon().health().scanning
+                    && status.scan.as_ref().map(|scan| scan.started_at) != last
+            }),
+            "the Full Scan finished"
+        );
+        let finished = daemon.daemon().status().scan.map(|scan| scan.started_at);
+        if finished.is_some_and(|started_at| started_at >= asked_at) {
+            return;
+        }
+        last = finished;
+    }
+    panic!("no Full Scan started after the request finished");
 }
 
 fn finding_on<'s>(status: &'s Status, ends_with: &str) -> &'s RecordedFinding {

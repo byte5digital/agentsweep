@@ -260,7 +260,9 @@ pub fn neutralised_in_place(kind: Kind) -> bool {
 ///
 /// For the never-auto kinds a manual Quarantine is the NeutraliseInPlace
 /// primitive and its Restore switches the line back on, so the pair is the
-/// neutralise-in-place toggle of spec section 8.5.
+/// neutralise-in-place toggle of spec section 8.5. Where the Quarantine is the
+/// Agent's own switch (a Codex MCP server, hook or skill, the owner's decision
+/// of 2026-09-28), the pair switches the Item off and back on.
 pub fn actions(finding: &RecordedFinding) -> Vec<Action> {
     let toggle = neutralised_in_place(finding.kind);
     let target = finding.id.as_str().to_string();
@@ -273,6 +275,7 @@ pub fn actions(finding: &RecordedFinding) -> Vec<Action> {
                     match (toggle, finding.source.as_str()) {
                         (true, _) => "Switch this line off",
                         (false, "drift") => "No, remove it",
+                        (false, _) if finding.switched => "Switch this off",
                         (false, _) => "Quarantine",
                     },
                     Some("quarantine"),
@@ -280,9 +283,10 @@ pub fn actions(finding: &RecordedFinding) -> Vec<Action> {
                 ),
                 Offer::Restore => (
                     "restore",
-                    match toggle {
-                        true => "Switch the line back on",
-                        false => "Restore",
+                    match (toggle, finding.switched) {
+                        (true, _) => "Switch the line back on",
+                        (false, true) => "Switch it back on",
+                        (false, false) => "Restore",
                     },
                     None,
                     Some("refuse"),
@@ -693,6 +697,38 @@ pub(crate) mod tests {
             );
         }
         assert!(!neutralised_in_place(Kind::Skill));
+    }
+
+    /// A Finding whose Quarantine is the Agent's own switch reads as a switch:
+    /// "Switch this off" while open, "Switch it back on" once stopped.
+    #[test]
+    fn a_switched_item_is_switched_off_and_back_on() {
+        let mut open = recorded(
+            "codex/user/mcp-server/~/.codex/config.toml#dropper",
+            Kind::McpServer,
+            "rule 0001",
+            Category::Threat,
+            FindingState::Open,
+        );
+        open.switched = true;
+        assert_eq!(
+            commands(&open),
+            pairs(&[
+                ("quarantine", "Switch this off"),
+                ("trust", "Trust this version")
+            ])
+        );
+        let mut off = recorded(
+            "codex/user/mcp-server/~/.codex/config.toml#dropper",
+            Kind::McpServer,
+            "rule 0001",
+            Category::Threat,
+            FindingState::Stopped,
+        );
+        off.switched = true;
+        assert_eq!(commands(&off), pairs(&[("restore", "Switch it back on")]));
+        off.switched = false;
+        assert_eq!(commands(&off), pairs(&[("restore", "Restore")]));
     }
 
     /// Stopped offers Restore (and Re-enable once a fixed version is there);

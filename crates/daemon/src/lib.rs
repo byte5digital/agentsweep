@@ -21,6 +21,11 @@
 //! Full Scan a new pack brings. The Rule Feed toggle is kept in the settings
 //! file, which a rebuilt state file leaves alone.
 //!
+//! The daemon has no asynchronous runtime: every part of it is a blocking
+//! thread, the socket is served through `interprocess` and the watcher gathers
+//! its batches with a debouncer of its own. ADR 0011 records why, and what to
+//! swap if the AI Judgement queue ever wants a runtime.
+//!
 //! The binary is a few lines around [`run`]; everything else is here so that a
 //! test can start a daemon against a temporary home, a temporary data
 //! directory and a temporary socket, which is the only kind of machine the

@@ -13,7 +13,9 @@
 //! [`Batch`] comes out after two seconds of quiet or fifteen seconds of holding
 //! on, whichever comes first, and a [`Decision`] says what that Batch is worth.
 //! It is unit-tested with synthetic events at synthetic moments. [`Watch`] is
-//! the thin part around it that owns the `notify` watcher and one thread.
+//! the thin part around it that owns the `notify` watcher and one thread. Why
+//! the batch is debounced here rather than by `notify-debouncer-full` is in
+//! ADR 0011.
 
 use std::collections::BTreeSet;
 use std::fmt;

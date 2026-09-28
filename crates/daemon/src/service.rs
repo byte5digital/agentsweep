@@ -12,7 +12,7 @@
 //!
 //! Nothing here is asynchronous. A Scan is processor-bound and a YARA-X
 //! scanner cannot move between threads, so the daemon is a handful of threads
-//! and a few locks rather than a runtime.
+//! and a few locks rather than a runtime (ADR 0011).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;

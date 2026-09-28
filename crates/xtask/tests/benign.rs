@@ -16,12 +16,9 @@
 use agentsweep_xtask::benign::{self, Run};
 use agentsweep_xtask::repo_root;
 
-/// Held out of the default suite until the rule authors settle Rule 0001 on a
-/// plugin README and Heuristic 0520 on a quoted injection phrase, which are
-/// the two things keeping the corpus off the bar. The CI job runs the same
-/// check through the xtask command; run it here with `cargo test -- --ignored`.
+/// Part of the default suite. The CI job runs the same check through the
+/// xtask command with the offline skip turned off.
 #[test]
-#[ignore = "the benign corpus fails the bar on two open Rule decisions; run with --ignored"]
 fn the_benign_corpus_meets_the_precision_bar_of_the_rule_tier() {
     let required = std::env::var(benign::REQUIRED).is_ok_and(|value| !value.is_empty());
     match benign::run(&repo_root(), false).expect("the corpus runs") {

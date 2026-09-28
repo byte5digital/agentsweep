@@ -28,6 +28,11 @@ use crate::state::IgnoredPack;
 /// days (spec section 6.6, notice 6).
 pub const FEED_UNREACHABLE_AFTER_MS: i64 = 30 * 24 * 3_600_000;
 
+/// The notice an unreadable settings file raises. The file is left as it is,
+/// so the choice in it comes back once it reads again.
+pub const SETTINGS_UNREADABLE: &str = "The settings file could not be read, so every setting \
+     is at its default until it is fixed. AgentSweep leaves the file as it is.";
+
 /// Whether AgentSweep is working in the background at all.
 ///
 /// The app and the command line interface answer this by whether the daemon
@@ -119,6 +124,9 @@ pub struct Health {
     pub projects_need_permission: usize,
     /// What the state file was found to be.
     pub state_file: StateFileHealth,
+    /// True when the settings file is there and cannot be read back: the
+    /// daemon runs with every default and leaves the file as it is.
+    pub settings_unreadable: bool,
     /// True while a Scan is running.
     pub scanning: bool,
     /// When the last Full Scan finished, absent before the first one.
@@ -154,6 +162,7 @@ impl Default for Health {
             baseline: ChainState::Intact,
             projects_need_permission: 0,
             state_file: StateFileHealth::Loaded,
+            settings_unreadable: false,
             scanning: false,
             last_full_scan: None,
             items: 0,
@@ -249,7 +258,8 @@ impl Health {
     }
 
     /// What is said under the headline: the reason Protection is off, the note
-    /// a rebuilt state file leaves, and how many Findings are open.
+    /// a rebuilt state file leaves, the notice an unreadable settings file
+    /// raises, and how many Findings are open.
     pub fn notes(&self) -> Vec<String> {
         let mut notes = Vec::new();
         if let Protection::Off(reason) = &self.protection
@@ -260,6 +270,9 @@ impl Health {
         let rebuilt = self.state_file.note();
         if !rebuilt.is_empty() {
             notes.push(rebuilt.to_string());
+        }
+        if self.settings_unreadable {
+            notes.push(SETTINGS_UNREADABLE.to_string());
         }
         if let Some(ignored) = &self.ignored_pack {
             notes.push(format!(
@@ -381,6 +394,21 @@ mod tests {
                 .notes()
                 .iter()
                 .any(|note| note.contains("did not verify")),
+            "{:?}",
+            health.notes()
+        );
+    }
+
+    /// An unreadable settings file is a notice under the headline: the
+    /// defaults are in force, and the person is told why their choice is not.
+    #[test]
+    fn an_unreadable_settings_file_raises_a_notice() {
+        let mut health = Health::running();
+        assert!(!health.notes().contains(&SETTINGS_UNREADABLE.to_string()));
+        health.settings_unreadable = true;
+        assert!(health.headline().starts_with("All clear"));
+        assert!(
+            health.notes().contains(&SETTINGS_UNREADABLE.to_string()),
             "{:?}",
             health.notes()
         );

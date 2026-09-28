@@ -641,6 +641,10 @@ pub fn health_to_value(health: &Health) -> Value {
     );
     map.insert("scanning".to_string(), Value::from(health.scanning));
     map.insert(
+        "settings_unreadable".to_string(),
+        Value::from(health.settings_unreadable),
+    );
+    map.insert(
         "state_file".to_string(),
         Value::from(health.state_file.as_str()),
     );
@@ -677,6 +681,7 @@ pub fn health_from_value(value: &Value) -> Option<Health> {
         baseline: chain_state_from_value(value.get("baseline")?)?,
         projects_need_permission: count("projects_need_permission")?,
         state_file: StateFileHealth::parse(text("state_file")?)?,
+        settings_unreadable: value.get("settings_unreadable")?.as_bool()?,
         scanning: value.get("scanning")?.as_bool()?,
         last_full_scan,
         items: count("items")?,
@@ -1580,6 +1585,7 @@ mod tests {
         health.rule_pack_origin = agentsweep_core::packs::PackOrigin::Fetched;
         health.rules_released_at = "2026-10-01T09:30:00Z".to_string();
         health.rule_feed = false;
+        health.settings_unreadable = true;
         health.ignored_pack = Some(IgnoredPack {
             pack_version: 4,
             minimum_engine_version: "0.3.0".to_string(),

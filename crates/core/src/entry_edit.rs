@@ -190,6 +190,11 @@ pub struct Splice {
     /// The hash of the file as the edit wrote it, so the splice is used only
     /// while the file is still the one the edit left behind.
     pub wrote: String,
+    /// How many bytes the edit wrote in the stretch's place: none for an
+    /// entry taken out, the new value for a switch that was flipped. Absent
+    /// in a record written before switches were put back by splice, which
+    /// then goes back through the editor instead.
+    pub replaced: Option<usize>,
 }
 
 /// What one reversible edit did, as the quarantine store keeps it.
@@ -239,6 +244,9 @@ impl Kept {
             written.insert("at".to_string(), Value::from(splice.at as u64));
             written.insert("text".to_string(), Value::from(splice.text.as_str()));
             written.insert("wrote".to_string(), Value::from(splice.wrote.as_str()));
+            if let Some(replaced) = splice.replaced {
+                written.insert("replaced".to_string(), Value::from(replaced as u64));
+            }
             map.insert("splice".to_string(), Value::Object(written));
         }
         map.insert(
@@ -263,6 +271,10 @@ impl Kept {
                 at: written.get("at")?.as_u64()? as usize,
                 text: written.get("text")?.as_str()?.to_string(),
                 wrote: written.get("wrote")?.as_str()?.to_string(),
+                replaced: written
+                    .get("replaced")
+                    .and_then(Value::as_u64)
+                    .map(|replaced| replaced as usize),
             }),
             None => None,
         };
@@ -300,8 +312,7 @@ pub fn remove_entry(format: Format, text: &str, path: &EntryPath) -> Result<Edit
 }
 
 /// Sets one key to one value, remembering what was there. What the Agent's own
-/// switch is flipped with, and never a Quarantine's only step (spec section
-/// 5.2).
+/// switch is flipped with (spec section 5.2 as amended on 2026-09-28).
 pub fn set_entry(
     format: Format,
     text: &str,
@@ -331,15 +342,26 @@ pub fn read_entry(format: Format, text: &str, path: &EntryPath) -> Option<Value>
 /// refused unless `replace` says to write over it.
 pub fn put_back(text: &str, kept: &Kept, replace: bool) -> Result<String, EditError> {
     if let Some(splice) = &kept.splice
-        && !kept.was_set
         && crate::item::sha256_hex(text.as_bytes()) == splice.wrote
-        && splice.at <= text.len()
     {
-        let mut put = String::with_capacity(text.len() + splice.text.len());
-        put.push_str(&text[..splice.at]);
-        put.push_str(&splice.text);
-        put.push_str(&text[splice.at..]);
-        return Ok(put);
+        // A switch that was set is put back only when the record says how
+        // much the edit wrote in its place; an entry taken out wrote nothing.
+        let replaced = match kept.was_set {
+            true => splice.replaced,
+            false => Some(splice.replaced.unwrap_or(0)),
+        };
+        if let Some(replaced) = replaced
+            && let Some(end) = splice.at.checked_add(replaced)
+            && end <= text.len()
+            && text.is_char_boundary(splice.at)
+            && text.is_char_boundary(end)
+        {
+            let mut put = String::with_capacity(text.len() + splice.text.len());
+            put.push_str(&text[..splice.at]);
+            put.push_str(&splice.text);
+            put.push_str(&text[end..]);
+            return Ok(put);
+        }
     }
     match kept.format {
         Format::Json => json::put_back(text, kept, replace),
@@ -675,10 +697,12 @@ mod toml {
             .take_while(|(one, other)| one == other)
             .count();
         let end = floor_boundary(before, before.len() - tail).max(head);
+        let written_end = after.len() - (before.len() - end);
         Splice {
             at: head,
             text: before[head..end].to_string(),
             wrote: crate::item::sha256_hex(after.as_bytes()),
+            replaced: Some(written_end.saturating_sub(head)),
         }
     }
 
@@ -749,7 +773,22 @@ mod toml {
             .iter()
             .position(|(key, _)| key == name)
             .unwrap_or(table.len());
-        table.insert(&name, item_of(value));
+        let set = item_of(value);
+        // A switch that is written already keeps its key, its spacing and its
+        // comment where they are: only the value moves.
+        match (
+            table.get_mut(&name).and_then(Item::as_value_mut),
+            set.as_value(),
+        ) {
+            (Some(held), Some(new)) => {
+                let decor = held.decor().clone();
+                *held = new.clone();
+                *held.decor_mut() = decor;
+            }
+            _ => {
+                table.insert(&name, set);
+            }
+        }
         let written = document.to_string();
         Ok(Edit {
             kept: Kept {
@@ -1218,6 +1257,57 @@ trust_level = "trusted"
         assert!(edit.kept.value.is_none());
         let back = put_back(&edit.text, &edit.kept, false).expect("the switch goes away again");
         assert_eq!(back, LAYER);
+    }
+
+    /// The owner's decision of 2026-09-28: a Codex switch that is written
+    /// already is flipped where it stands, with its spacing and its comment,
+    /// and nothing else in the layer moves; flipping it back gives the layer
+    /// back byte for byte.
+    #[test]
+    fn flipping_a_written_toml_switch_changes_only_its_value_and_flips_back_byte_for_byte() {
+        let layer = "# user layer\n[mcp_servers.notes]\ncommand = \"npx\"\nenabled   =   true # kept\nargs = [\"-y\"]\n\n[[skills.config]]\nname = \"demo\"\nenabled=true\n";
+        for (entry, on, off) in [
+            (
+                path(&["mcp_servers", "notes", "enabled"]),
+                "enabled   =   true # kept",
+                "enabled   =   false # kept",
+            ),
+            (
+                path(&["skills", "config", "0", "enabled"]),
+                "enabled=true",
+                "enabled=false",
+            ),
+        ] {
+            let edit = set_entry(Format::Toml, layer, &entry, &Value::from(false))
+                .expect("the switch is set");
+
+            assert_eq!(
+                edit.text,
+                layer.replacen(on, off, 1),
+                "only the value moved"
+            );
+            assert_eq!(edit.kept.value, Some(Value::from(true)));
+            let back = put_back(&edit.text, &edit.kept, false).expect("the switch goes back");
+            assert_eq!(back, layer);
+            let stored = Kept::parse(&edit.kept.to_bytes()).expect("the record reads back");
+            assert_eq!(put_back(&edit.text, &stored, false).as_deref(), Ok(layer));
+        }
+    }
+
+    /// A switch written into a table that had none goes away again without a
+    /// trace, even in a layer whose last table has no trailing newline.
+    #[test]
+    fn a_toml_switch_that_was_not_written_is_taken_away_byte_for_byte() {
+        let layer =
+            "[mcp_servers.notes]\ncommand = \"npx\"\n\n[mcp_servers.kit]\ncommand = \"kit\"";
+        let entry = path(&["mcp_servers", "notes", "enabled"]);
+
+        let edit =
+            set_entry(Format::Toml, layer, &entry, &Value::from(false)).expect("the switch is set");
+
+        assert!(edit.text.contains("[mcp_servers.kit]\ncommand = \"kit\""));
+        let back = put_back(&edit.text, &edit.kept, false).expect("the switch goes away again");
+        assert_eq!(back, layer);
     }
 
     #[test]

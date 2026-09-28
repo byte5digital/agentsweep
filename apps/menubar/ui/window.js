@@ -8,6 +8,17 @@ const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
 
+// Why the actions cannot be pressed right now, or null when they can: while a
+// Scan runs every action waits for it (the app's list says so).
+let actionsWait = null;
+
+// Every action button, the Restore conflict choices included, follows it.
+function disableActions() {
+  for (const button of document.querySelectorAll("button[data-action]")) {
+    button.disabled = actionsWait !== null;
+  }
+}
+
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) {
@@ -52,12 +63,14 @@ function showResult(result) {
     ]) {
       const button = el("button", "", label);
       button.type = "button";
+      button.dataset.action = "restore";
       button.addEventListener("click", () =>
         run({ command: "restore", target: result.target, conflict, label }),
       );
       choices.append(button);
     }
   }
+  disableActions();
 }
 
 function showFailure(why) {
@@ -129,6 +142,7 @@ function renderCard(card) {
     for (const action of card.actions) {
       const button = el("button", "", action.label);
       button.type = "button";
+      button.dataset.action = action.command;
       button.addEventListener("click", () => run(action, card));
       actions.append(button);
     }
@@ -143,11 +157,15 @@ function render(list) {
   // With Protection off the window offers nothing (spec section 6.2).
   $("scan").hidden = list.off !== null;
   $("scan-line").textContent = list.scan.line;
+  actionsWait = list.actionsWait;
+  $("actions-wait").hidden = actionsWait === null;
+  $("actions-wait").textContent = actionsWait === null ? "" : actionsWait;
   $("counts").textContent = `${list.counts.threats} Threat, ${list.counts.exposures} Exposure`;
   $("open").replaceChildren(...list.open.map(renderCard));
   $("empty").hidden = !list.loaded || list.open.length > 0;
   $("decided").replaceChildren(...list.decided.map(renderCard));
   $("decided-section").hidden = list.decided.length === 0;
+  disableActions();
 }
 
 function renderFolder(view) {

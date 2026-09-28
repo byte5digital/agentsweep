@@ -2,7 +2,9 @@
 //! carries, split into the open ones that ask something of the user and the
 //! ones already stopped or decided, each with exactly the actions the daemon
 //! allows on it ([`offers`]); and the Scan in hand, followed from the
-//! subscribe stream.
+//! subscribe stream. While a Scan runs every action waits for it to finish
+//! (decision 22 of the owner), so the window disables the action buttons and
+//! says why; Health on the stream says when they may be pressed again.
 //!
 //! The list is the daemon's, never worked out here. It is loaded from a
 //! status answer and then kept current from the state events: a Finding that
@@ -149,17 +151,39 @@ impl Findings {
     }
 
     /// A Health on the stream: Protection back on, or a count of open
-    /// Findings the list does not match, asks for the status again.
+    /// Findings the list does not match, asks for the status again. Whether a
+    /// Scan runs follows Health too, which is what disables the actions and
+    /// enables them again; the Scan's own progress and end come as events of
+    /// their own and write the line.
     fn health(&mut self, health: &Health) -> Follow {
         if health.protection.is_off() {
             return self.off(health.protection.reason());
         }
         let back = self.off.take().is_some();
         let open = self.findings.iter().filter(|f| f.is_open()).count();
-        match back || !self.loaded || open != health.open_findings() {
-            true => Follow::Refresh,
-            // The Scan's own progress and end come as events of their own.
-            false => Follow::Nothing,
+        let running = self.scan.running != health.scanning;
+        if running {
+            self.scan.running = health.scanning;
+            if health.scanning && self.scan.line.is_empty() {
+                self.scan.line = progress_line(0, 0);
+            }
+        }
+        match (
+            back || !self.loaded || open != health.open_findings(),
+            running,
+        ) {
+            (true, _) => Follow::Refresh,
+            (false, true) => Follow::Render,
+            (false, false) => Follow::Nothing,
+        }
+    }
+
+    /// Why the actions cannot be pressed right now, absent when they can:
+    /// every action waits for a running Scan to finish.
+    pub fn actions_wait(&self) -> Option<&'static str> {
+        match self.scan.running && self.off.is_none() {
+            true => Some(ACTIONS_WAIT),
+            false => None,
         }
     }
 
@@ -208,6 +232,7 @@ impl Findings {
             "off": self.off,
             "loaded": self.loaded,
             "scan": { "running": self.scan.running, "line": self.scan.line },
+            "actionsWait": self.actions_wait(),
             "counts": {
                 "threats": open.iter().filter(|f| f.category == Category::Threat).count(),
                 "exposures": open.iter().filter(|f| f.category == Category::Exposure).count(),
@@ -217,6 +242,10 @@ impl Findings {
         })
     }
 }
+
+/// Why the action buttons are disabled while a Scan runs. Placeholder.
+pub const ACTIONS_WAIT: &str =
+    "Checking now. Actions wait until the check has finished, then they can be used again.";
 
 /// One action a card offers: the command the window invokes, its label, the
 /// id it addresses, and the confirmation it asks first.
@@ -964,6 +993,92 @@ pub(crate) mod tests {
         assert_eq!(list.open().count(), 0);
         assert_eq!(list.to_value()["off"], "the daemon stopped answering");
         assert_eq!(list.apply(&changed), Follow::Refresh, "back on");
+    }
+
+    /// While Health says a Scan runs the window disables the actions and says
+    /// why; the subscribe stream enables them again, whether the end of the
+    /// Scan or the Health after it arrives first.
+    fn summary() -> ScanSummary {
+        ScanSummary {
+            kind: ScanKind::Full,
+            trigger: Trigger::ScanNow,
+            started_at: moment("2026-09-25T08:00:00.000Z"),
+            duration_ms: 900,
+            items: 17,
+            threats: 1,
+            exposures: 0,
+            clear: 16,
+            ambiguous: 0,
+            suspicious: 0,
+            rule_pack: 1,
+            engine: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_actions_wait_while_a_scan_runs() {
+        let mut list = Findings::new();
+        list.load(&status_of(every_source()));
+        assert_eq!(list.to_value()["actionsWait"], Value::Null);
+
+        let open = list.open().count();
+        let counted = |scanning: bool| {
+            let mut status = status_of(every_source());
+            status.health.scanning = scanning;
+            assert_eq!(status.health.open_findings(), open);
+            StateEvent::HealthChanged {
+                health: Box::new(status.health),
+            }
+        };
+
+        // Health says "checking now" before the Scan's own start arrives.
+        assert_eq!(list.apply(&counted(true)), Follow::Render);
+        assert_eq!(list.to_value()["actionsWait"], ACTIONS_WAIT);
+        assert_eq!(list.to_value()["scan"]["running"], true);
+        assert_eq!(list.apply(&counted(true)), Follow::Nothing);
+        assert_eq!(
+            list.apply(&StateEvent::ScanProgress { done: 1, total: 4 }),
+            Follow::Render
+        );
+        assert_eq!(list.to_value()["actionsWait"], ACTIONS_WAIT);
+
+        // The Scan finished, and Health still counts the queue busy: the
+        // actions keep waiting until Health lets go.
+        assert_eq!(
+            list.apply(&StateEvent::ScanFinished {
+                summary: Box::new(summary()),
+            }),
+            Follow::Refresh
+        );
+        assert_eq!(list.apply(&counted(true)), Follow::Render);
+        assert_eq!(list.to_value()["actionsWait"], ACTIONS_WAIT);
+        assert!(
+            list.scan().line.starts_with("Last full Scan"),
+            "the line keeps the finished Scan: {}",
+            list.scan().line
+        );
+        assert_eq!(list.apply(&counted(false)), Follow::Render);
+        assert_eq!(list.to_value()["actionsWait"], Value::Null);
+
+        // A Scan the stream announces itself disables them the same way.
+        assert_eq!(
+            list.apply(&StateEvent::ScanStarted {
+                trigger: Trigger::Watcher,
+                at: moment("2026-09-24T09:00:00.000Z"),
+            }),
+            Follow::Render
+        );
+        assert_eq!(list.to_value()["actionsWait"], ACTIONS_WAIT);
+        list.apply(&StateEvent::ScanFinished {
+            summary: Box::new(summary()),
+        });
+        assert_eq!(list.apply(&counted(false)), Follow::Nothing);
+        assert_eq!(list.to_value()["actionsWait"], Value::Null);
+
+        // With Protection off nothing is offered, so nothing waits either.
+        list.apply(&counted(true));
+        list.off("the daemon stopped answering");
+        assert_eq!(list.to_value()["actionsWait"], Value::Null);
     }
 
     /// The Quarantine confirmation says whether Agent sessions appear to be

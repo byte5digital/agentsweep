@@ -317,6 +317,11 @@ fn the_window_lists_the_status_and_follows_every_action_from_the_stream() {
     following.until(&mut list, &asking, "a finished Scan", |list| {
         !list.scan().running && list.scan().line.starts_with("Last full Scan (scan-now)")
     });
+    // Once Health no longer says "checking now", the actions can be pressed
+    // again, and the stream alone said so.
+    following.until(&mut list, &asking, "the actions enabled again", |list| {
+        list.actions_wait().is_none() && list.to_value()["actionsWait"].is_null()
+    });
     following.in_step(&mut list, &asking);
 }
 

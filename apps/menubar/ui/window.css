@@ -92,6 +92,16 @@ button:hover {
   border-color: var(--muted);
 }
 
+button:disabled {
+  color: var(--muted);
+  border-color: var(--rule);
+}
+
+.wait {
+  color: var(--muted);
+  font-weight: 600;
+}
+
 button.primary {
   border-color: var(--threat);
 }

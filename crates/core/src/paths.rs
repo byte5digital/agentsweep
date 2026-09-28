@@ -2,8 +2,9 @@
 //!
 //! One directory under Application Support holds every store the daemon owns
 //! (spec section 6.9): the Event Log, the Baseline chain, the Verdict cache,
-//! the state file, the quarantine store, the fetched Rule Pack and the user's
-//! own rules. Nothing else writes there.
+//! the state file, the quarantine store, the fetched Rule Pack, the user's
+//! own rules and the settings file with the user's choices. Nothing else
+//! writes there.
 //!
 //! [`DataDirectory::at`] takes any root, which is how every test works on a
 //! temporary copy instead of the real home.
@@ -71,6 +72,12 @@ impl DataDirectory {
         self.0.join("state.json")
     }
 
+    /// The settings file: the user's choices, plain JSON, which a rebuilt
+    /// state file leaves alone.
+    pub fn settings_file(&self) -> PathBuf {
+        self.0.join("settings.json")
+    }
+
     /// The quarantine store, one directory per Receipt id.
     pub fn quarantine(&self) -> PathBuf {
         self.0.join("quarantine")
@@ -109,6 +116,7 @@ mod tests {
             dir.baseline(),
             dir.verdicts(),
             dir.state_file(),
+            dir.settings_file(),
             dir.quarantine(),
             dir.rules(),
             dir.user_rules(),

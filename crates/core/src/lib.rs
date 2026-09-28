@@ -53,6 +53,7 @@ pub mod quarantine;
 pub mod rules;
 pub mod scan;
 pub mod scan_pass;
+pub mod settings;
 pub mod state;
 pub mod user_rules;
 pub mod verdicts;

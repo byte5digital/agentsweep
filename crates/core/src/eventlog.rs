@@ -20,9 +20,10 @@ use serde_json::{Map, Value};
 
 use crate::chain::{Chain, ChainError, ChainState};
 use crate::envelope::{ChainId, RecordKind, Timestamp};
-use crate::finding::Tier;
+use crate::finding::{FindingId, RuleStatus, Tier};
 use crate::item::{ItemId, Kind, sha256_hex};
 use crate::keychain::KeySource;
+use crate::packs::PackOrigin;
 use crate::paths::DataDirectory;
 
 /// Who caused the event.
@@ -609,6 +610,230 @@ pub struct RecordedEvent {
     pub event: Event,
 }
 
+/// Why the Rule Pack in force changed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PackChange {
+    /// A pack from the Rule Feed verified and was put in force.
+    Accepted,
+    /// The stored pack from the Rule Feed was discarded at start, because it
+    /// no longer verified, the bundled pack had caught up with it, or it
+    /// needs a newer AgentSweep. The pack named is the one in force instead.
+    Discarded,
+}
+
+impl PackChange {
+    /// The spelling a record carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PackChange::Accepted => "accepted",
+            PackChange::Discarded => "discarded",
+        }
+    }
+
+    /// Reads back the spelling a record carries.
+    pub fn parse(text: &str) -> Option<PackChange> {
+        match text {
+            "accepted" => Some(PackChange::Accepted),
+            "discarded" => Some(PackChange::Discarded),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for PackChange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The Rules of one pack by id, with where each stands. What two packs are
+/// compared by.
+pub type PackRules = BTreeMap<i64, RuleStatus>;
+
+/// One change of the Rule Pack in force, the payload of a `rule-pack` record.
+///
+/// It is not an action on an Item and not one of the actions of spec section
+/// 5.5, so it is a record kind of its own beside the entries, like a chain
+/// restart. It carries ids and versions only: nothing of any Item's content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RulePackRecord {
+    /// Why the pack in force changed.
+    pub change: PackChange,
+    /// The version of the pack in force from here on.
+    pub pack_version: u64,
+    /// Its signed release moment, as the manifest states it.
+    pub released_at: String,
+    /// Where it came from.
+    pub origin: PackOrigin,
+    /// The version of the stored pack that was discarded, zero when it was
+    /// not readable or nothing was discarded.
+    pub discarded_version: u64,
+    /// The Rules the pack in force before carried and this one does not.
+    pub withdrawn: Vec<i64>,
+    /// The Findings that went gone because their Rule was withdrawn.
+    pub gone: Vec<FindingId>,
+    /// The Rules that were on Probation before and are stable now.
+    pub left_probation: Vec<i64>,
+}
+
+impl RulePackRecord {
+    /// A change to a pack, with nothing yet said about what it withdrew.
+    pub fn new(
+        change: PackChange,
+        pack_version: u64,
+        released_at: &str,
+        origin: PackOrigin,
+    ) -> RulePackRecord {
+        RulePackRecord {
+            change,
+            pack_version,
+            released_at: released_at.to_string(),
+            origin,
+            discarded_version: 0,
+            withdrawn: Vec::new(),
+            gone: Vec::new(),
+            left_probation: Vec::new(),
+        }
+    }
+
+    /// Fills in what the pack in force now changed against the one before:
+    /// the Rules it no longer carries and the Rules that left Probation.
+    pub fn comparing(mut self, before: &PackRules, after: &PackRules) -> RulePackRecord {
+        self.withdrawn = before
+            .keys()
+            .filter(|id| !after.contains_key(id))
+            .copied()
+            .collect();
+        self.left_probation = before
+            .iter()
+            .filter(|(id, status)| {
+                **status == RuleStatus::Probation && after.get(id) == Some(&RuleStatus::Stable)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        self
+    }
+
+    /// The payload a record carries.
+    pub fn to_payload(&self) -> Value {
+        let ids = |ids: &[i64]| Value::Array(ids.iter().map(|id| Value::from(*id)).collect());
+        let mut map = Map::new();
+        map.insert("change".to_string(), Value::from(self.change.as_str()));
+        map.insert(
+            "discarded_version".to_string(),
+            Value::from(self.discarded_version),
+        );
+        map.insert(
+            "gone".to_string(),
+            Value::Array(
+                self.gone
+                    .iter()
+                    .map(|id| Value::from(id.as_str()))
+                    .collect(),
+            ),
+        );
+        map.insert("left_probation".to_string(), ids(&self.left_probation));
+        map.insert("origin".to_string(), Value::from(self.origin.as_str()));
+        map.insert("pack_version".to_string(), Value::from(self.pack_version));
+        map.insert(
+            "released_at".to_string(),
+            Value::from(self.released_at.as_str()),
+        );
+        map.insert("withdrawn".to_string(), ids(&self.withdrawn));
+        Value::Object(map)
+    }
+
+    /// Reads back the payload a record carries.
+    pub fn from_payload(payload: &Value) -> Option<RulePackRecord> {
+        let text = |field: &str| payload.get(field).and_then(Value::as_str);
+        let ids = |field: &str| -> Option<Vec<i64>> {
+            payload
+                .get(field)?
+                .as_array()?
+                .iter()
+                .map(Value::as_i64)
+                .collect()
+        };
+        Some(RulePackRecord {
+            change: PackChange::parse(text("change")?)?,
+            pack_version: payload.get("pack_version")?.as_u64()?,
+            released_at: text("released_at")?.to_string(),
+            origin: PackOrigin::parse(text("origin")?)?,
+            discarded_version: payload.get("discarded_version")?.as_u64()?,
+            withdrawn: ids("withdrawn")?,
+            gone: payload
+                .get("gone")?
+                .as_array()?
+                .iter()
+                .map(|id| id.as_str().map(FindingId::from_recorded))
+                .collect::<Option<Vec<_>>>()?,
+            left_probation: ids("left_probation")?,
+        })
+    }
+
+    /// The Activity lines this change stands for, built from the record
+    /// alone: which pack is in force and why, each Finding a withdrawn Rule
+    /// took with it, each withdrawn Rule that took none, and each Rule that
+    /// left Probation.
+    pub fn activity(&self) -> Vec<String> {
+        let version = self.pack_version;
+        let origin = self.origin;
+        let released = self.released_at.get(..10).unwrap_or(&self.released_at);
+        let mut lines = vec![match (self.change, self.discarded_version) {
+            (PackChange::Accepted, _) => {
+                format!("Rule Pack {version} ({origin}) is in force, released {released}.")
+            }
+            (PackChange::Discarded, 0) => format!(
+                "The stored Rule Pack from the Rule Feed was discarded; Rule Pack {version} \
+                 ({origin}) is in force."
+            ),
+            (PackChange::Discarded, discarded) => format!(
+                "Rule Pack {discarded} from the Rule Feed was discarded; Rule Pack {version} \
+                 ({origin}) is in force."
+            ),
+        }];
+        let mut accounted = std::collections::BTreeSet::new();
+        for finding in &self.gone {
+            let mut parts = finding.as_str().split('|');
+            let item = parts.next().unwrap_or_default();
+            let rule = parts
+                .next()
+                .and_then(|source| source.strip_prefix("rule/"))
+                .and_then(|id| id.parse::<i64>().ok())
+                .unwrap_or_default();
+            accounted.insert(rule);
+            lines.push(format!(
+                "Rule {rule:04} was withdrawn by Rule Pack {version}, so its Finding on {item} \
+                 is gone."
+            ));
+        }
+        for rule in self.withdrawn.iter().filter(|id| !accounted.contains(id)) {
+            lines.push(format!(
+                "Rule {rule:04} was withdrawn by Rule Pack {version}."
+            ));
+        }
+        for rule in &self.left_probation {
+            lines.push(format!(
+                "Rule {rule:04} left Probation with Rule Pack {version}."
+            ));
+        }
+        lines
+    }
+}
+
+/// One change of the Rule Pack as the Event Log holds it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordedRulePack {
+    /// Where in the chain it sits, which the live Activity event carries too.
+    pub sequence: u64,
+    /// When it was written.
+    pub recorded_at: Timestamp,
+    /// False for a record no key in hand can verify.
+    pub verified: bool,
+    /// What changed.
+    pub record: RulePackRecord,
+}
+
 /// The Event Log, `events.jsonl`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EventLog {
@@ -637,12 +862,28 @@ impl EventLog {
     pub fn read(&self, keys: &dyn KeySource) -> Result<EventLogView, ChainError> {
         let verification = self.chain.verify(keys)?;
         let mut events = Vec::with_capacity(verification.records.len());
+        let mut rule_packs = Vec::new();
         let mut restarts = 0usize;
         let mut unreadable = 0usize;
         for record in &verification.records {
-            if record.envelope.record == RecordKind::ChainRestart {
-                restarts += 1;
-                continue;
+            match record.envelope.record {
+                RecordKind::Entry => {}
+                RecordKind::ChainRestart => {
+                    restarts += 1;
+                    continue;
+                }
+                RecordKind::RulePack => {
+                    match RulePackRecord::from_payload(&record.envelope.payload) {
+                        Some(change) => rule_packs.push(RecordedRulePack {
+                            sequence: record.envelope.sequence,
+                            recorded_at: record.envelope.recorded_at,
+                            verified: record.verified,
+                            record: change,
+                        }),
+                        None => unreadable += 1,
+                    }
+                    continue;
+                }
             }
             match Event::from_payload(&record.envelope.payload) {
                 Some(event) => events.push(RecordedEvent {
@@ -660,6 +901,7 @@ impl EventLog {
             head: verification.head,
             unverified: verification.records.iter().filter(|r| !r.verified).count(),
             events,
+            rule_packs,
             restarts,
             unreadable,
         })
@@ -673,13 +915,16 @@ pub struct EventLogView {
     pub state: ChainState,
     /// Every event of the last verifiable prefix, in the order written.
     pub events: Vec<RecordedEvent>,
+    /// Every change of the Rule Pack in force, in the order written. The
+    /// derived views never see these: they are not actions on an Item.
+    pub rule_packs: Vec<RecordedRulePack>,
     /// The hash of the last record in the file.
     pub head: String,
     /// How many records no key in hand can verify.
     pub unverified: usize,
     /// How many times the chain was restarted because the key went missing.
     pub restarts: usize,
-    /// How many records carried a payload that is not an event.
+    /// How many records carried a payload that is not what their kind says.
     pub unreadable: usize,
 }
 
@@ -693,6 +938,22 @@ impl EventLogView {
     pub fn trust_table(&self) -> crate::derived::TrustTable {
         crate::derived::TrustTable::rebuild(&self.events)
     }
+
+    /// The Activity lines the changes of the Rule Pack stand for, each with
+    /// the sequence and the moment of the record it was built from, in the
+    /// order written.
+    pub fn pack_activity(&self) -> Vec<(u64, Timestamp, String)> {
+        self.rule_packs
+            .iter()
+            .flat_map(|recorded| {
+                recorded
+                    .record
+                    .activity()
+                    .into_iter()
+                    .map(|line| (recorded.sequence, recorded.recorded_at, line))
+            })
+            .collect()
+    }
 }
 
 #[cfg(feature = "daemon")]
@@ -700,10 +961,10 @@ pub use writer::EventLogWriter;
 
 #[cfg(feature = "daemon")]
 mod writer {
-    use super::{Event, EventLog};
+    use super::{Event, EventLog, RulePackRecord};
 
     use crate::chain::{ChainError, ChainState, ChainWriter};
-    use crate::envelope::Envelope;
+    use crate::envelope::{Envelope, RecordKind};
     use crate::keychain::KeySource;
 
     /// The write side of the Event Log.
@@ -729,6 +990,16 @@ mod writer {
         /// Appends one event and flushes it to the disk.
         pub fn append(&mut self, event: &Event) -> Result<Envelope, ChainError> {
             self.writer.append(event.to_payload())
+        }
+
+        /// Appends one change of the Rule Pack in force, as a `rule-pack`
+        /// record beside the events, and flushes it to the disk.
+        pub fn record_rule_pack(
+            &mut self,
+            change: &RulePackRecord,
+        ) -> Result<Envelope, ChainError> {
+            self.writer
+                .append_beside(RecordKind::RulePack, change.to_payload())
         }
 
         /// The hash a record appended now would link to.
@@ -881,6 +1152,8 @@ mod tests {
         assert_eq!(view.unverified, 0);
         assert_eq!(view.restarts, 0);
         assert_eq!(view.unreadable, 0);
+        assert!(view.rule_packs.is_empty(), "an older log has none");
+        assert!(view.pack_activity().is_empty());
     }
 
     #[test]
@@ -956,5 +1229,130 @@ mod tests {
         let log = EventLog::in_data_directory(&directory);
         assert_eq!(log.chain().path(), directory.event_log());
         assert_eq!(log.chain().id(), ChainId::Events);
+    }
+
+    fn a_pack_change() -> RulePackRecord {
+        let gone = FindingId::new(&item(), crate::finding::Source::Rule(1), &"b".repeat(64));
+        let mut change = RulePackRecord::new(
+            PackChange::Accepted,
+            2,
+            "2026-10-01T09:30:00Z",
+            PackOrigin::Fetched,
+        );
+        change.withdrawn = vec![1, 7];
+        change.gone = vec![gone];
+        change.left_probation = vec![2];
+        change
+    }
+
+    #[test]
+    fn a_pack_change_round_trips_through_its_payload() {
+        let change = a_pack_change();
+        let read = RulePackRecord::from_payload(&change.to_payload()).expect("a pack change");
+        assert_eq!(read, change);
+        let payload = change.to_payload();
+        assert_eq!(payload["change"], Value::from("accepted"));
+        assert_eq!(payload["origin"], Value::from("fetched"));
+        assert_eq!(payload["withdrawn"], serde_json::json!([1, 7]));
+        assert!(
+            Event::from_payload(&payload).is_none(),
+            "it is not an event"
+        );
+
+        let mut discarded = RulePackRecord::new(
+            PackChange::Discarded,
+            1,
+            "2026-09-25T00:00:00Z",
+            PackOrigin::Bundled,
+        );
+        discarded.discarded_version = 2;
+        assert_eq!(
+            RulePackRecord::from_payload(&discarded.to_payload()),
+            Some(discarded)
+        );
+    }
+
+    #[test]
+    fn comparing_two_packs_names_the_withdrawn_rules_and_those_that_left_probation() {
+        let before: PackRules = [
+            (1, RuleStatus::Probation),
+            (2, RuleStatus::Probation),
+            (3, RuleStatus::Stable),
+            (4, RuleStatus::Probation),
+        ]
+        .into_iter()
+        .collect();
+        let after: PackRules = [
+            (2, RuleStatus::Stable),
+            (3, RuleStatus::Stable),
+            (4, RuleStatus::Probation),
+            (21, RuleStatus::Probation),
+        ]
+        .into_iter()
+        .collect();
+        let change = RulePackRecord::new(PackChange::Accepted, 2, "", PackOrigin::Fetched)
+            .comparing(&before, &after);
+        assert_eq!(change.withdrawn, vec![1]);
+        assert_eq!(change.left_probation, vec![2]);
+    }
+
+    #[test]
+    fn the_activity_of_a_pack_change_is_built_from_the_record_alone() {
+        let lines = a_pack_change().activity();
+        assert_eq!(
+            lines[0],
+            "Rule Pack 2 (fetched) is in force, released 2026-10-01."
+        );
+        assert_eq!(
+            lines[1],
+            format!(
+                "Rule 0001 was withdrawn by Rule Pack 2, so its Finding on {} is gone.",
+                item()
+            )
+        );
+        assert_eq!(lines[2], "Rule 0007 was withdrawn by Rule Pack 2.");
+        assert_eq!(lines[3], "Rule 0002 left Probation with Rule Pack 2.");
+        assert_eq!(lines.len(), 4);
+    }
+
+    /// A `rule-pack` record sits in the chain like any other and verifies;
+    /// the derived views and the events pass it by without counting it as
+    /// unreadable.
+    #[test]
+    fn a_pack_change_is_part_of_the_chain_and_the_derived_views_pass_it_by() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let log = EventLog::at(directory.path().join("events.jsonl"));
+        let keys = MemoryKeySource::empty();
+        let (mut writer, _) = EventLogWriter::open(&log, &keys).expect("an open log");
+        writer
+            .append(&quarantine_event())
+            .expect("an appended event");
+        let written = writer
+            .record_rule_pack(&a_pack_change())
+            .expect("an appended pack change");
+        writer
+            .append(&Event::new(Action::Trust, Actor::User).about(
+                &item(),
+                Kind::McpServer,
+                &"c".repeat(64),
+            ))
+            .expect("an appended event");
+        assert_eq!(written.record, RecordKind::RulePack);
+
+        let view = log.read(&keys).expect("a readable log");
+        assert_eq!(view.state, ChainState::Intact);
+        assert_eq!(view.unreadable, 0);
+        assert_eq!(view.events.len(), 2);
+        assert_eq!(view.events[1].sequence, 2);
+        assert_eq!(view.rule_packs.len(), 1);
+        assert_eq!(view.rule_packs[0].sequence, 1);
+        assert!(view.rule_packs[0].verified);
+        assert_eq!(view.rule_packs[0].record, a_pack_change());
+        assert_eq!(view.quarantine_manifest().len(), 1);
+        assert!(view.trust_table().trusts(Kind::McpServer, &"c".repeat(64)));
+
+        let activity = view.pack_activity();
+        assert_eq!(activity.len(), 4);
+        assert!(activity.iter().all(|(sequence, _, _)| *sequence == 1));
     }
 }

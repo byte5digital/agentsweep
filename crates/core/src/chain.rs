@@ -433,6 +433,22 @@ mod writer {
             self.write(RecordKind::Entry, payload)
         }
 
+        /// Appends one record of a kind beside the entries: a change of the
+        /// Rule Pack in force. A chain restart is never written this way; only
+        /// opening a chain whose key went missing, and compaction, write one.
+        pub(crate) fn append_beside(
+            &mut self,
+            kind: RecordKind,
+            payload: Value,
+        ) -> Result<Envelope, ChainError> {
+            if kind == RecordKind::ChainRestart {
+                return Err(ChainError::Refused(
+                    "a chain restart is written only when a chain starts again".to_string(),
+                ));
+            }
+            self.write(kind, payload)
+        }
+
         fn restart(&mut self, verification: &Verification) -> Result<Envelope, ChainError> {
             self.epoch = verification.epoch + 1;
             let payload = anchor(
@@ -504,6 +520,13 @@ mod writer {
             keys: &dyn KeySource,
             payloads: &[Value],
         ) -> Result<(ChainWriter, Compacted), ChainError> {
+            // The Event Log is never compacted (spec section 5.5): every
+            // record in it stays, the changes of the Rule Pack included.
+            if chain.id() == crate::envelope::ChainId::Events {
+                return Err(ChainError::Refused(
+                    "the Event Log is never compacted".to_string(),
+                ));
+            }
             let verification = chain.verify(keys)?;
             if verification.state != ChainState::Intact {
                 return Err(ChainError::Refused(
@@ -999,5 +1022,65 @@ mod tests {
         assert_eq!(verification.state, ChainState::Intact);
         assert_eq!(verification.records.len(), 2);
         assert_eq!(verification.records[1].envelope.sequence, 1);
+    }
+
+    #[test]
+    fn a_record_beside_the_entries_links_and_verifies_like_one() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let chain = chain_in(&directory);
+        let keys = MemoryKeySource::empty();
+        let (mut writer, _) = ChainWriter::open(chain.clone(), &keys).expect("an open chain");
+        writer
+            .append(json!({ "action": "quarantine" }))
+            .expect("an appended record");
+        writer
+            .append_beside(RecordKind::RulePack, json!({ "pack_version": 2 }))
+            .expect("an appended record");
+        writer
+            .append(json!({ "action": "trust" }))
+            .expect("an appended record");
+
+        let verification = chain.verify(&keys).expect("a readable chain");
+        assert_eq!(verification.state, ChainState::Intact);
+        assert_eq!(verification.records.len(), 3);
+        assert_eq!(
+            verification.records[1].envelope.record,
+            RecordKind::RulePack
+        );
+        assert!(verification.records.iter().all(|record| record.verified));
+        assert!(!verification.was_restarted());
+    }
+
+    #[test]
+    fn a_chain_restart_is_never_appended_beside_the_entries() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let chain = chain_in(&directory);
+        let keys = MemoryKeySource::empty();
+        let (mut writer, _) = ChainWriter::open(chain.clone(), &keys).expect("an open chain");
+        assert!(matches!(
+            writer.append_beside(RecordKind::ChainRestart, json!({})),
+            Err(ChainError::Refused(_))
+        ));
+        assert!(chain.verify(&keys).expect("a chain").records.is_empty());
+    }
+
+    /// Spec section 5.5: the Event Log is never compacted, so every record in
+    /// it, a change of the Rule Pack included, stays where it was written.
+    #[test]
+    fn the_event_log_is_never_compacted_and_keeps_every_record() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let chain = chain_in(&directory);
+        let keys = MemoryKeySource::empty();
+        {
+            let (mut writer, _) = ChainWriter::open(chain.clone(), &keys).expect("an open chain");
+            writer
+                .append_beside(RecordKind::RulePack, json!({ "pack_version": 2 }))
+                .expect("an appended record");
+        }
+        let before = std::fs::read(chain.path()).expect("a readable chain");
+
+        let refused = ChainWriter::compact(chain.clone(), &keys, &[]);
+        assert!(matches!(refused, Err(ChainError::Refused(_))));
+        assert_eq!(std::fs::read(chain.path()).expect("a chain"), before);
     }
 }

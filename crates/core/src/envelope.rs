@@ -64,6 +64,12 @@ pub enum RecordKind {
     /// at the old chain's last record, so the old head is witnessed by the new
     /// chain even though no key can verify the records before it.
     ChainRestart,
+    /// A change of the Rule Pack in force, on the Event Log only: a fetched
+    /// pack accepted, or a stored one discarded at start, with the Rules it
+    /// withdrew, the Findings that went gone with them and the Rules that left
+    /// Probation. It is not an action on an Item, so it sits beside the
+    /// entries rather than among them, and the derived views pass it by.
+    RulePack,
 }
 
 impl RecordKind {
@@ -72,6 +78,7 @@ impl RecordKind {
         match self {
             RecordKind::Entry => "entry",
             RecordKind::ChainRestart => "chain-restart",
+            RecordKind::RulePack => "rule-pack",
         }
     }
 
@@ -80,6 +87,7 @@ impl RecordKind {
         match text {
             "entry" => Some(RecordKind::Entry),
             "chain-restart" => Some(RecordKind::ChainRestart),
+            "rule-pack" => Some(RecordKind::RulePack),
             _ => None,
         }
     }
@@ -621,7 +629,11 @@ mod tests {
         for chain in [ChainId::Events, ChainId::Baseline] {
             assert_eq!(ChainId::parse(chain.as_str()), Some(chain));
         }
-        for record in [RecordKind::Entry, RecordKind::ChainRestart] {
+        for record in [
+            RecordKind::Entry,
+            RecordKind::ChainRestart,
+            RecordKind::RulePack,
+        ] {
             assert_eq!(RecordKind::parse(record.as_str()), Some(record));
         }
     }

@@ -344,7 +344,7 @@ impl Daemon {
         let activity = activity_in_the_event_log(&directory, &*keys);
         let now = (tuning.due.now)();
 
-        let health = Health {
+        let mut health = Health {
             protection: Protection::On,
             events,
             baseline,
@@ -354,7 +354,8 @@ impl Daemon {
             scanning: false,
             last_full_scan: state.last_full_scan,
             items: state.last_scan().map(|scan| scan.items).unwrap_or_default(),
-            open_findings: state.open_count(),
+            open_threats: 0,
+            open_exposures: 0,
             rule_pack: pack.manifest.pack_version,
             rule_pack_origin: pack.origin,
             rules_released_at: pack.manifest.released_at.clone(),
@@ -365,6 +366,7 @@ impl Daemon {
                 false => None,
             },
         };
+        health.count_open(&state);
 
         Ok(Arc::new(Daemon {
             directory,
@@ -684,7 +686,7 @@ impl Daemon {
             if whole {
                 health.items = run.summary.items;
             }
-            health.open_findings = state.open_count();
+            health.count_open(&state);
         }
 
         {

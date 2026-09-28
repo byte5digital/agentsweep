@@ -7,10 +7,11 @@
 //! machine.
 //!
 //! The states of that list answered so far are Protection off, the two chain
-//! states, the projects that need permission, the two Rule Pack notices, a
-//! Scan in flight and all clear. The Gate lines arrive with their own
-//! milestone; their place in the order is kept here so that adding one is a
-//! field and a line rather than a rewrite.
+//! states, the projects that need permission, a Scan in flight, the open
+//! Findings that need the user's decision, the two Rule Pack notices and all
+//! clear. The Gate lines arrive with their own milestone; their place in the
+//! order is kept here so that adding one is a field and a line rather than a
+//! rewrite.
 //!
 //! Beside the states, Health says which Rule Pack is in force and when it was
 //! released, which is the "Rules updated <date>" line: the date is read off the
@@ -20,9 +21,10 @@ use std::fmt;
 
 use crate::chain::ChainState;
 use crate::envelope::Timestamp;
+use crate::finding::Category;
 use crate::pack::released_day;
 use crate::packs::PackOrigin;
-use crate::state::IgnoredPack;
+use crate::state::{IgnoredPack, State};
 
 /// How long the Rule Feed may go unanswered before Health says so: thirty
 /// days (spec section 6.6, notice 6).
@@ -110,6 +112,30 @@ impl StateFileHealth {
     }
 }
 
+/// The rungs of the Health precedence (spec section 6.6), the worst first:
+/// a rung compares below every rung it outranks.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Rung {
+    /// Protection is off.
+    ProtectionOff,
+    /// Either chain is broken while the key is in hand.
+    RecordsTampered,
+    /// A chain is well formed but no key can vouch for it.
+    StateReset,
+    /// Registered projects the operating system will not let AgentSweep read.
+    NeedsPermission,
+    /// A Scan is running.
+    CheckingNow,
+    /// Open Threat or Exposure Findings wait for the user's decision.
+    NeedsDecision,
+    /// A newer Rule Pack was ignored because it needs a newer AgentSweep.
+    IgnoredPack,
+    /// The Rule Feed has not answered for over thirty days.
+    FeedUnreachable,
+    /// Nothing asks anything of the user.
+    AllClear,
+}
+
 /// Every state AgentSweep can be in, at one moment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Health {
@@ -133,8 +159,10 @@ pub struct Health {
     pub last_full_scan: Option<Timestamp>,
     /// How many Items the last Full Scan saw.
     pub items: usize,
-    /// How many Findings are open right now.
-    pub open_findings: usize,
+    /// How many Threat Findings are open right now.
+    pub open_threats: usize,
+    /// How many Exposure Findings are open right now.
+    pub open_exposures: usize,
     /// The version of the Rule Pack in force, zero when nothing is known.
     pub rule_pack: u64,
     /// Where the Rule Pack in force came from.
@@ -166,7 +194,8 @@ impl Default for Health {
             scanning: false,
             last_full_scan: None,
             items: 0,
-            open_findings: 0,
+            open_threats: 0,
+            open_exposures: 0,
             rule_pack: 0,
             rule_pack_origin: PackOrigin::Bundled,
             rules_released_at: String::new(),
@@ -218,43 +247,91 @@ impl Health {
         since.filter(|since| now.as_unix_ms() - since.as_unix_ms() > FEED_UNREACHABLE_AFTER_MS)
     }
 
-    /// The one sentence a person is shown, by the precedence of spec section
-    /// 6.6.
+    /// Takes the counts of open Threat and Exposure Findings from the state.
+    pub fn count_open(&mut self, state: &State) {
+        self.open_threats = state.open_count_of(Category::Threat);
+        self.open_exposures = state.open_count_of(Category::Exposure);
+    }
+
+    /// How many Findings are open right now, Threat and Exposure together.
+    pub fn open_findings(&self) -> usize {
+        self.open_threats + self.open_exposures
+    }
+
+    /// The rung of the precedence of spec section 6.6 this Health stands on.
     ///
     /// The order is Protection off, records tampered, protection state reset,
-    /// projects that need permission, then the Gate lines once they exist, then
-    /// the Rule Pack notices (a newer pack ignored because it needs a newer
-    /// AgentSweep, the Rule Feed unreachable for over thirty days), then a
-    /// Scan in flight, then all clear with the last-checked time.
-    pub fn headline(&self) -> String {
+    /// projects that need permission, then the Gate lines once they exist,
+    /// then a Scan in flight, then the open Findings that need the user's
+    /// decision, then the Rule Pack notices (a newer pack ignored because it
+    /// needs a newer AgentSweep, the Rule Feed unreachable for over thirty
+    /// days), then all clear with the last-checked time.
+    pub fn rung(&self) -> Rung {
         if self.protection.is_off() {
-            return "Protection is off.".to_string();
+            Rung::ProtectionOff
+        } else if self.records_tampered() {
+            Rung::RecordsTampered
+        } else if self.state_was_reset() {
+            Rung::StateReset
+        } else if self.projects_need_permission > 0 {
+            Rung::NeedsPermission
+        } else if self.scanning {
+            Rung::CheckingNow
+        } else if self.open_findings() > 0 {
+            Rung::NeedsDecision
+        } else if self.ignored_pack.is_some() {
+            Rung::IgnoredPack
+        } else if self.feed_unreachable.is_some() {
+            Rung::FeedUnreachable
+        } else {
+            Rung::AllClear
         }
-        if self.records_tampered() {
-            return "Records tampered.".to_string();
-        }
-        if self.state_was_reset() {
-            return "Protection state was reset.".to_string();
-        }
-        if self.projects_need_permission > 0 {
-            return match self.projects_need_permission {
+    }
+
+    /// The one sentence a person is shown, by the precedence of spec section
+    /// 6.6 (see [`Health::rung`]).
+    pub fn headline(&self) -> String {
+        match self.rung() {
+            Rung::ProtectionOff => "Protection is off.".to_string(),
+            Rung::RecordsTampered => "Records tampered.".to_string(),
+            Rung::StateReset => "Protection state was reset.".to_string(),
+            Rung::NeedsPermission => match self.projects_need_permission {
                 1 => "1 project needs permission.".to_string(),
                 many => format!("{many} projects need permission."),
-            };
+            },
+            Rung::CheckingNow => "Checking now.".to_string(),
+            Rung::NeedsDecision => self.needs_decision(),
+            Rung::IgnoredPack => "Newer rules need a newer AgentSweep.".to_string(),
+            Rung::FeedUnreachable => {
+                "The rule feed has not been reachable for over 30 days.".to_string()
+            }
+            Rung::AllClear => match self.last_full_scan {
+                Some(at) => format!("All clear, last checked {at}."),
+                None => "All clear, nothing checked yet.".to_string(),
+            },
         }
-        if self.ignored_pack.is_some() {
-            return "Newer rules need a newer AgentSweep.".to_string();
-        }
-        if self.feed_unreachable.is_some() {
-            return "The rule feed has not been reachable for over 30 days.".to_string();
-        }
-        if self.scanning {
-            return "Checking now.".to_string();
-        }
-        match self.last_full_scan {
-            Some(at) => format!("All clear, last checked {at}."),
-            None => "All clear, nothing checked yet.".to_string(),
-        }
+    }
+
+    /// "N things need your decision", with the open Threat and Exposure
+    /// Findings counted separately.
+    fn needs_decision(&self) -> String {
+        let total = match self.open_findings() {
+            1 => "1 thing needs your decision".to_string(),
+            many => format!("{many} things need your decision"),
+        };
+        let counted = |n: usize, one: &str| match n {
+            0 => None,
+            1 => Some(format!("1 {one}")),
+            many => Some(format!("{many} {one}s")),
+        };
+        let parts: Vec<String> = [
+            counted(self.open_threats, "Threat"),
+            counted(self.open_exposures, "Exposure"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        format!("{total}: {}.", parts.join(" and "))
     }
 
     /// What is said under the headline: the reason Protection is off, the note
@@ -287,10 +364,12 @@ impl Health {
                 since.day()
             ));
         }
-        match self.open_findings {
-            0 => {}
-            1 => notes.push("1 Finding is open.".to_string()),
-            many => notes.push(format!("{many} Findings are open.")),
+        // The count of open Findings is a note only while a rung above it
+        // takes the headline; otherwise the headline says it already.
+        match (self.rung() < Rung::NeedsDecision, self.open_findings()) {
+            (false, _) | (_, 0) => {}
+            (true, 1) => notes.push("1 Finding is open.".to_string()),
+            (true, many) => notes.push(format!("{many} Findings are open.")),
         }
         if let Some(day) = self.rules_updated() {
             notes.push(format!(
@@ -414,13 +493,79 @@ mod tests {
         );
     }
 
+    /// Open Findings take the headline when nothing above them does, with
+    /// Threat and Exposure counted separately in the sentence; with none open
+    /// Health is all clear again.
     #[test]
-    fn open_findings_are_counted_under_the_headline() {
+    fn open_findings_are_the_things_that_need_your_decision() {
         let mut health = Health::running();
-        health.open_findings = 3;
+        health.open_threats = 1;
+        health.open_exposures = 1;
+        assert_eq!(health.rung(), Rung::NeedsDecision);
+        assert_eq!(
+            health.headline(),
+            "2 things need your decision: 1 Threat and 1 Exposure."
+        );
+        assert!(
+            !health.notes().iter().any(|note| note.contains("open")),
+            "the headline says it already: {:?}",
+            health.notes()
+        );
+
+        health.open_threats = 3;
+        health.open_exposures = 0;
+        assert_eq!(health.headline(), "3 things need your decision: 3 Threats.");
+        health.open_threats = 0;
+        health.open_exposures = 1;
+        assert_eq!(
+            health.headline(),
+            "1 thing needs your decision: 1 Exposure."
+        );
+        health.open_threats = 1;
+        health.open_exposures = 2;
+        assert_eq!(
+            health.headline(),
+            "3 things need your decision: 1 Threat and 2 Exposures."
+        );
+
+        health.open_threats = 0;
+        health.open_exposures = 0;
+        assert!(health.headline().starts_with("All clear"));
+    }
+
+    /// Protection off, records tampered and a Scan in flight outrank the
+    /// open Findings, which then stay a note under the headline; the Rule
+    /// Pack notices sit below them.
+    #[test]
+    fn open_findings_sit_between_checking_now_and_the_rule_pack_notices() {
+        let mut health = Health::running();
+        health.open_threats = 2;
+        health.open_exposures = 1;
+        health.ignored_pack = Some(IgnoredPack {
+            pack_version: 9,
+            minimum_engine_version: "0.3.0".to_string(),
+        });
+        health.feed_unreachable =
+            Some(Timestamp::parse("2026-08-01T10:00:00.000Z").expect("a moment"));
+        assert!(health.headline().starts_with("3 things need your decision"));
+
+        health.scanning = true;
+        assert_eq!(health.headline(), "Checking now.");
         assert!(health.notes().contains(&"3 Findings are open.".to_string()));
-        health.open_findings = 1;
-        assert!(health.notes().contains(&"1 Finding is open.".to_string()));
+
+        health.events = broken();
+        assert_eq!(health.headline(), "Records tampered.");
+        assert!(health.notes().contains(&"3 Findings are open.".to_string()));
+
+        health.protection = Protection::Off("not registered".to_string());
+        assert_eq!(health.headline(), "Protection is off.");
+
+        health.open_threats = 1;
+        health.open_exposures = 0;
+        health.protection = Protection::On;
+        health.events = ChainState::Intact;
+        health.scanning = false;
+        assert_eq!(health.headline(), "1 thing needs your decision: 1 Threat.");
     }
 
     #[test]
@@ -434,8 +579,8 @@ mod tests {
         }
     }
 
-    /// The Rule Pack notices sit below the projects that need permission and
-    /// above a Scan in flight, the ignored pack first.
+    /// The Rule Pack notices sit below the projects that need permission, a
+    /// Scan in flight and the open Findings, the ignored pack first.
     #[test]
     fn the_rule_pack_notices_sit_at_their_rung_of_the_precedence() {
         let mut health = Health::running();
@@ -450,6 +595,9 @@ mod tests {
         assert_eq!(health.headline(), "1 project needs permission.");
 
         health.projects_need_permission = 0;
+        assert_eq!(health.headline(), "Checking now.");
+
+        health.scanning = false;
         assert_eq!(health.headline(), "Newer rules need a newer AgentSweep.");
         assert!(
             health.notes().iter().any(|note| note.contains("0.3.0")),
@@ -472,7 +620,7 @@ mod tests {
         );
 
         health.feed_unreachable = None;
-        assert_eq!(health.headline(), "Checking now.");
+        assert!(health.headline().starts_with("All clear"));
     }
 
     #[test]

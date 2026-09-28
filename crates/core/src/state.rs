@@ -541,6 +541,13 @@ impl State {
         self.open().count()
     }
 
+    /// How many Findings of one category are open.
+    pub fn open_count_of(&self, category: Category) -> usize {
+        self.open()
+            .filter(|finding| finding.category == category)
+            .count()
+    }
+
     /// When AgentSweep first saw this Finding, if it has seen it before.
     pub fn first_seen(&self, id: &FindingId) -> Option<Timestamp> {
         self.findings

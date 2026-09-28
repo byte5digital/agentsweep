@@ -21,7 +21,7 @@ use agentsweep_core::chain::ChainState;
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::eventlog::{Action, Actor, EventLog, PackChange};
 use agentsweep_core::finding::{FindingState, RULE_WITHDRAWN_GONE, RULE_WITHDRAWN_STOPPED};
-use agentsweep_core::health::{SETTINGS_UNREADABLE, StateFileHealth};
+use agentsweep_core::health::{Health, SETTINGS_UNREADABLE, StateFileHealth};
 use agentsweep_core::keychain::{ChainKey, KeyError, KeySource, MemoryKeySource};
 use agentsweep_core::pack::{Bands, MANIFEST_FILE, Manifest, PACK_TREES};
 use agentsweep_core::pack_archive::{self, ARCHIVE_FILE};
@@ -715,7 +715,12 @@ fn a_pack_that_needs_a_newer_agentsweep_raises_the_health_notice() {
         let ignored = health.ignored_pack.clone().expect("the notice");
         assert_eq!(ignored.pack_version, 4);
         assert_eq!(ignored.minimum_engine_version, "99.0.0");
-        assert_eq!(health.headline(), "Newer rules need a newer AgentSweep.");
+        // A running Scan or the sandbox's open Findings take the headline;
+        // the notice is the rung below them.
+        assert_eq!(
+            quiet(&health).headline(),
+            "Newer rules need a newer AgentSweep."
+        );
     }
     let daemon = sandbox.start(&feed, false);
     assert!(
@@ -1086,8 +1091,10 @@ fn a_settings_file_with_a_syntax_error_raises_the_notice_and_is_left_alone() {
         "{:?}",
         health.notes()
     );
+    // A note, never a rung: without a Scan in flight or an open Finding the
+    // headline stays all clear.
     assert!(
-        health.headline().starts_with("All clear"),
+        quiet(&health).headline().starts_with("All clear"),
         "{}",
         health.headline()
     );
@@ -1236,7 +1243,19 @@ fn the_fetch_is_daily_and_a_feed_unreachable_for_thirty_days_raises_the_notice()
     let health = daemon.daemon().health();
     assert!(health.feed_unreachable.is_some());
     assert_eq!(
-        health.headline(),
+        quiet(&health).headline(),
         "The rule feed has not been reachable for over 30 days."
     );
+}
+
+/// The same Health with no Scan running and no Finding open, which is where
+/// the Rule Pack notices take the headline: a Scan in flight and open
+/// Findings outrank them (spec section 6.6).
+fn quiet(health: &Health) -> Health {
+    Health {
+        scanning: false,
+        open_threats: 0,
+        open_exposures: 0,
+        ..health.clone()
+    }
 }

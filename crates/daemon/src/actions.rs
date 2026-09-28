@@ -1078,7 +1078,7 @@ impl Daemon {
             self.health
                 .lock()
                 .expect("the health is not poisoned")
-                .open_findings = state.open_count();
+                .count_open(&state);
         }
         for (id, state) in changed {
             self.publish(StateEvent::FindingChanged { id, state });

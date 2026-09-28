@@ -156,7 +156,7 @@ impl Findings {
         }
         let back = self.off.take().is_some();
         let open = self.findings.iter().filter(|f| f.is_open()).count();
-        match back || !self.loaded || open != health.open_findings {
+        match back || !self.loaded || open != health.open_findings() {
             true => Follow::Refresh,
             // The Scan's own progress and end come as events of their own.
             false => Follow::Nothing,
@@ -571,7 +571,14 @@ pub(crate) mod tests {
     fn status_of(findings: Vec<RecordedFinding>) -> Status {
         Status {
             health: Health {
-                open_findings: findings.iter().filter(|f| f.is_open()).count(),
+                open_threats: findings
+                    .iter()
+                    .filter(|f| f.is_open() && f.category == Category::Threat)
+                    .count(),
+                open_exposures: findings
+                    .iter()
+                    .filter(|f| f.is_open() && f.category == Category::Exposure)
+                    .count(),
                 ..Health::running()
             },
             scan: None,
@@ -940,7 +947,7 @@ pub(crate) mod tests {
     fn the_health_on_the_stream_keeps_the_list_honest() {
         let mut list = Findings::new();
         let health = Health {
-            open_findings: 1,
+            open_threats: 1,
             ..Health::running()
         };
         let changed = StateEvent::HealthChanged {

@@ -252,8 +252,21 @@ fn starting_the_daemon_runs_a_full_scan_a_client_can_ask_about() {
     // Health reads the Findings it has, and nothing is off or tampered with.
     assert!(!status.health.protection.is_off());
     assert!(!status.health.records_tampered());
-    assert_eq!(status.health.open_findings, status.open().count());
-    assert!(status.health.headline().starts_with("All clear"));
+    assert_eq!(status.health.open_findings(), status.open().count());
+    let count = status.open().count();
+    assert!(
+        status
+            .health
+            .headline()
+            .starts_with(&format!("{count} thing")),
+        "{}",
+        status.health.headline()
+    );
+    assert!(
+        status.health.headline().contains("your decision"),
+        "{}",
+        status.health.headline()
+    );
 }
 
 /// The command line interface renders the same answer, and its exit code says
@@ -497,7 +510,7 @@ fn a_restart_reads_the_trust_table_and_the_manifest_out_of_the_event_log() {
         status.findings
     );
     assert_eq!(status.scan.as_ref().expect("a Scan").threats, 0);
-    assert_eq!(status.health.open_findings, 0);
+    assert_eq!(status.health.open_findings(), 0);
     assert!(status.health.headline().starts_with("All clear"));
 }
 
@@ -586,8 +599,10 @@ fn a_subscriber_is_told_the_health_first_and_again_when_it_moves() {
         match stream.next_event().expect("an event") {
             Some(StateEvent::HealthChanged { health }) if health.scanning => scanning = true,
             Some(StateEvent::HealthChanged { health }) if scanning => {
+                // The planted skill stays open, so the settled Health asks for
+                // the user's decision rather than saying all clear.
                 assert!(
-                    health.headline().starts_with("All clear"),
+                    health.headline().contains("your decision"),
                     "{}",
                     health.headline()
                 );

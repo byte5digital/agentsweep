@@ -266,7 +266,7 @@ mod tests {
             ..Health::running()
         };
         let finding = Health {
-            open_findings: 1,
+            open_threats: 1,
             ..Health::running()
         };
         let daemon = daemon_sending(&socket, vec![scanning, finding]);

@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn an_open_finding_is_shown_with_everything_the_user_needs() {
         let mut health = Health::running();
-        health.open_findings = 1;
+        health.open_threats = 1;
         health.last_full_scan = Some(moment("2026-09-24T08:00:00.812Z"));
         let status = Status {
             health,
@@ -326,7 +326,10 @@ mod tests {
             activity: Vec::new(),
         };
         let rendered = render(&status);
-        assert!(rendered.contains("1 Finding is open."), "{rendered}");
+        assert!(
+            rendered.starts_with("1 thing needs your decision: 1 Threat."),
+            "{rendered}"
+        );
         assert!(rendered.contains("1 open Finding:"), "{rendered}");
         assert!(rendered.contains("Skill \u{b7} setup"), "{rendered}");
         assert!(rendered.contains("rule 0001"), "{rendered}");
@@ -339,6 +342,46 @@ mod tests {
         assert!(
             rendered.contains("changed since your last Scan"),
             "{rendered}"
+        );
+    }
+
+    /// Two open Findings and nothing else wrong: the status line is the rung
+    /// of the Health precedence that asks for the user's decision, with the
+    /// Threat and the Exposure counted apart; with none open it is all clear.
+    #[test]
+    fn two_open_findings_are_two_things_that_need_your_decision() {
+        let mut exposure = finding();
+        exposure.category = agentsweep_core::finding::Category::Exposure;
+        let mut health = Health::running();
+        health.open_threats = 1;
+        health.open_exposures = 1;
+        health.last_full_scan = Some(moment("2026-09-24T08:00:00.812Z"));
+        let status = Status {
+            health,
+            scan: Some(summary()),
+            findings: vec![finding(), exposure],
+            activity: Vec::new(),
+        };
+        let rendered = render(&status);
+        assert!(
+            rendered.starts_with("2 things need your decision: 1 Threat and 1 Exposure.\n"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("Findings are open."), "{rendered}");
+
+        let quiet = Status {
+            health: Health {
+                last_full_scan: Some(moment("2026-09-24T08:00:00.812Z")),
+                ..Health::running()
+            },
+            scan: Some(summary()),
+            findings: Vec::new(),
+            activity: Vec::new(),
+        };
+        assert!(
+            render(&quiet).starts_with("All clear"),
+            "{}",
+            render(&quiet)
         );
     }
 

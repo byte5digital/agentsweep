@@ -7,7 +7,7 @@
 //! machine. Everything else in the wording here is placeholder and commits to
 //! nothing in spec section 8.
 
-use agentsweep_core::health::Health;
+use agentsweep_core::health::{Health, Rung};
 use serde_json::{Value, json};
 
 /// The state the orb and the menu bar glyph show.
@@ -90,7 +90,7 @@ impl View {
             || health.projects_need_permission > 0
             || health.ignored_pack.is_some()
             || health.feed_unreachable.is_some()
-            || health.open_findings > 0;
+            || health.open_findings() > 0;
         View {
             orb: match asks_something {
                 true => Orb::Attention,
@@ -100,10 +100,12 @@ impl View {
             last_check: health.last_full_scan.map(|at| at.to_string()),
             protection_off: false,
             login_items: false,
-            detail: match health.open_findings {
-                0 => String::new(),
-                1 => "1 Finding is open.".to_string(),
-                many => format!("{many} Findings are open."),
+            // The sentence counts the open Findings once they take it; a rung
+            // above them leaves the count to this line.
+            detail: match (health.rung(), health.open_findings()) {
+                (Rung::NeedsDecision, _) | (_, 0) => String::new(),
+                (_, 1) => "1 Finding is open.".to_string(),
+                (_, many) => format!("{many} Findings are open."),
             },
         }
     }
@@ -163,6 +165,8 @@ mod tests {
     use agentsweep_core::chain::{BreakReason, ChainState};
     use agentsweep_core::envelope::Timestamp;
 
+    use crate::glyph::Mark;
+
     fn at(text: &str) -> Timestamp {
         Timestamp::parse(text).expect("a moment")
     }
@@ -206,13 +210,45 @@ mod tests {
         assert_eq!(checking.orb, Orb::Clear);
     }
 
+    /// Two open Findings and nothing else wrong: the sentence is the rung
+    /// that asks for the user's decision and the menu bar glyph is the
+    /// exclamation mark; with none open it is all clear and a tick.
     #[test]
-    fn an_open_finding_turns_the_orb_to_attention() {
+    fn open_findings_are_things_that_need_your_decision_under_an_exclamation_mark() {
         let health = Health {
-            open_findings: 1,
+            open_threats: 1,
+            open_exposures: 1,
             ..Health::running()
         };
         let view = View::of(&health);
+        assert_eq!(
+            view.sentence,
+            "2 things need your decision: 1 Threat and 1 Exposure."
+        );
+        assert_eq!(view.orb, Orb::Attention);
+        assert_eq!(Mark::of(view.orb), Mark::Exclamation);
+        assert_eq!(view.detail, "", "the sentence counts them already");
+
+        let quiet = View::of(&Health::running());
+        assert!(
+            quiet.sentence.starts_with("All clear"),
+            "{}",
+            quiet.sentence
+        );
+        assert_eq!(Mark::of(quiet.orb), Mark::Tick);
+    }
+
+    /// While a Scan runs the sentence is "Checking now." and the open
+    /// Findings are counted under it, still behind an exclamation mark.
+    #[test]
+    fn checking_now_outranks_the_open_findings() {
+        let health = Health {
+            open_threats: 1,
+            scanning: true,
+            ..Health::running()
+        };
+        let view = View::of(&health);
+        assert_eq!(view.sentence, "Checking now.");
         assert_eq!(view.orb, Orb::Attention);
         assert_eq!(view.detail, "1 Finding is open.");
     }

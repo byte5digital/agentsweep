@@ -636,8 +636,12 @@ pub fn health_to_value(health: &Health) -> Value {
         Value::Array(health.notes().into_iter().map(Value::from).collect()),
     );
     map.insert(
-        "open_findings".to_string(),
-        Value::from(health.open_findings as u64),
+        "open_exposures".to_string(),
+        Value::from(health.open_exposures as u64),
+    );
+    map.insert(
+        "open_threats".to_string(),
+        Value::from(health.open_threats as u64),
     );
     map.insert(
         "projects_need_permission".to_string(),
@@ -741,7 +745,8 @@ pub fn health_from_value(value: &Value) -> Option<Health> {
         scanning: value.get("scanning")?.as_bool()?,
         last_full_scan,
         items: count("items")?,
-        open_findings: count("open_findings")?,
+        open_threats: count("open_threats")?,
+        open_exposures: count("open_exposures")?,
         rule_pack: value.get("rule_pack")?.as_u64()?,
         rule_pack_origin: PackOrigin::parse(text("rule_pack_origin")?)?,
         rules_released_at: text("rules_released_at")?.to_string(),
@@ -1609,7 +1614,8 @@ mod tests {
         round_trip(Message::Event(StateEvent::HealthChanged {
             health: Box::new(Health {
                 scanning: true,
-                open_findings: 2,
+                open_threats: 2,
+                open_exposures: 1,
                 ..Health::running()
             }),
         }));
@@ -1645,7 +1651,8 @@ mod tests {
     fn a_status_round_trips_with_its_health_and_its_findings() {
         let mut health = Health::running();
         health.items = 17;
-        health.open_findings = 1;
+        health.open_threats = 1;
+        health.open_exposures = 2;
         health.rule_pack = 3;
         health.rule_pack_origin = agentsweep_core::packs::PackOrigin::Fetched;
         health.rules_released_at = "2026-10-01T09:30:00Z".to_string();
@@ -1677,6 +1684,8 @@ mod tests {
         assert_eq!(back.activity, status.activity);
         assert_eq!(back.health.headline(), "Records tampered.");
         assert!(back.health.records_tampered());
+        assert_eq!(back.health.open_threats, 1);
+        assert_eq!(back.health.open_exposures, 2);
     }
 
     /// A client that cannot reach the daemon says Protection is off, because

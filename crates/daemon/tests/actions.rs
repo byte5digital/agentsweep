@@ -366,7 +366,7 @@ fn quarantine_restore_and_trust_change_the_finding_record_it_and_show_in_status(
     let stopped = finding_on(&shown, "skills/setup");
     assert_eq!(stopped.state, FindingState::Stopped);
     assert_eq!(stopped.receipt_id, report.receipt_id);
-    assert_eq!(shown.health.open_findings, shown.open().count());
+    assert_eq!(shown.health.open_findings(), shown.open().count());
 
     // The Receipt says where the Item came from, beside its id.
     let receipts = sandbox

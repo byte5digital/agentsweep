@@ -127,7 +127,9 @@ target/debug/agentsweep status --socket $w/d.sock
 - [ ] After Quarantine the card moves to Stopped and decided with its Receipt id without any refresh, and `agentsweep status` says the same; Restore moves it back, Trust this version moves it to trusted.
 - [ ] An action the daemon refuses shows one sentence beginning "Nothing was done:" and changes nothing.
 - [ ] Scan now shows "Checked N of M Items." while it runs and the last Scan line when it ends, in the window and in the popover.
-- [ ] Scan a folder opens the macOS folder picker; a folder with a planted `CLAUDE.md` answers "Do not open yet." with the Finding beneath, a clean one "Safe to open.", both with "Nothing was recorded.", and `agentsweep status` is unchanged afterwards.
+- [ ] While Scan now runs, every action button in the window is greyed out and a line under the Scan buttons says the actions wait until the check has finished; when the popover leaves "Checking now." the buttons work again without reopening the window.
+- [ ] With the Findings of this home open and no Scan running, the popover says "3 things need your decision" with the Threat and Exposure counts, and the menu bar icon shows the exclamation mark.
+- [ ] Scan a folder opens the macOS folder picker; a folder with a planted `CLAUDE.md` answers "Do not open yet." with the Finding beneath, a clean one "Safe to open.", both with "Nothing was recorded." and the Rule Pack version in force, and `agentsweep status` is unchanged afterwards.
 - [ ] Killing the daemon turns the window to "Protection is off" and hides Scan now and Scan a folder; starting it again brings the list back without reopening the window.
 - [ ] With the window open, `lsappinfo info -only ApplicationType -app agentsweep-menubar` says `Foreground` and the app has a Dock icon and a Cmd-Tab entry; after closing the window it says `UIElement` and both are gone. On an installed bundle this is the Tauri issue 15005 check of the release draft.
 
@@ -139,14 +141,14 @@ Seams in the suite: `findings::tests` (the list, the offers per source and state
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.
 
-- [ ] Is the Health sentence right when Findings are open? The popover can say "All clear" in its sentence while its detail line says Findings are open, because the precedence of spec section 6.6 has no rung for open Findings.
+- [ ] Does "N things need your decision", with the Threat and Exposure counts, read well in the popover and in `agentsweep status`? It sits below "Checking now." and above the Rule Pack notices.
 - [ ] Which ids, paths, Tiers and Rule ids does the Simple Posture hide, and which stay one click away? The window shows them all today.
 - [ ] Is "Restore" enough, or must the button say "Restore and trust this version" before it is pressed? The status does not say whether AgentSweep or the user took an Item out, so the app cannot tell the two apart until the answer comes back.
 - [ ] Drift questions offer "Yes, that was me", "No, remove it" and "Trust this version" side by side; spec section 8.5 hides Trust behind technical details in the Simple Posture.
 - [ ] Where does an action's answer belong? It shows at the top of the window, with the sessions sentence and the Receipt lines folded under Details.
 - [ ] Is the Quarantine confirmation's sessions sentence the one to keep, and should it name the sessions it found?
 - [ ] Exposures need "Show me how to fix this" with Open the file; only the 0018 and 0019 fix exists.
-- [ ] Scan a folder needs its drop zone and, in the Developer Posture, the equivalent `agentsweep scan <dir>`. Should the daemon's Folder Scan and the command line's agree on the Rule Pack? The daemon uses the pack in force, the command line the bundled one.
+- [ ] Scan a folder needs its drop zone and, in the Developer Posture, the equivalent `agentsweep scan <dir>`. The daemon's Folder Scan uses the Rule Pack in force and the command line the bundled one; both name the version they used.
 - [ ] The sidebar of spec section 8.1 (Overview, Needs your decision, Worth fixing, Quarantine, Activity, Settings) with counts, and where the list of what was stopped and decided goes.
 - [ ] Delete permanently, Reveal in Finder, Untrust and the "rule was withdrawn" line are not offered yet.
 - [ ] Closing the window hides it; is that what a person expects of Cmd-W and of the red button, and does Cmd-Q from the regular app's menu quit the menu bar app too?

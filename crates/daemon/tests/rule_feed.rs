@@ -17,8 +17,9 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use agentsweep_core::chain::ChainState;
 use agentsweep_core::envelope::Timestamp;
-use agentsweep_core::eventlog::{Action, Actor, EventLog};
+use agentsweep_core::eventlog::{Action, Actor, EventLog, PackChange};
 use agentsweep_core::finding::{FindingState, RULE_WITHDRAWN_GONE, RULE_WITHDRAWN_STOPPED};
 use agentsweep_core::health::{SETTINGS_UNREADABLE, StateFileHealth};
 use agentsweep_core::keychain::{ChainKey, KeyError, KeySource, MemoryKeySource};
@@ -763,7 +764,9 @@ fn a_forged_index_pointing_at_an_old_pack_cannot_downgrade() {
 
 /// A withdrawn Rule's open Finding is gone, with an Activity line; the Item a
 /// Receipt stopped on that Rule stays in quarantine and says the Rule was
-/// withdrawn, with Restore first.
+/// withdrawn, with Restore first. The acceptance is one `rule-pack` record in
+/// the Event Log, naming the withdrawn Rule and the Finding it closed, and
+/// the Activity line is read back from it after a restart.
 #[test]
 fn a_withdrawn_rule_turns_its_open_finding_gone_and_leaves_a_quarantined_item_in_place() {
     let sandbox = Sandbox::with_a_planted_skill("withdrawn");
@@ -798,9 +801,13 @@ fn a_withdrawn_rule_turns_its_open_finding_gone_and_leaves_a_quarantined_item_in
     );
 
     let mut activity = Vec::new();
+    let mut sequences = Vec::new();
     loop {
         match stream.next_event().expect("an event") {
-            Some(StateEvent::Activity { line }) => activity.push(line),
+            Some(StateEvent::Activity { line, sequence }) => {
+                activity.push(line);
+                sequences.push(sequence);
+            }
             Some(StateEvent::ScanFinished { summary }) if summary.trigger == Trigger::RulePack => {
                 break;
             }
@@ -833,6 +840,57 @@ fn a_withdrawn_rule_turns_its_open_finding_gone_and_leaves_a_quarantined_item_in
     assert_eq!(stopped.plain, RULE_WITHDRAWN_STOPPED);
     assert_eq!(offers(stopped).first(), Some(&Offer::Restore));
     assert!(!sandbox.skill().exists(), "it stays in quarantine");
+
+    // One `rule-pack` record, in a chain that verifies, naming the withdrawn
+    // Rule and the Finding that went gone; the live lines carry its sequence.
+    let events = EventLog::in_data_directory(&sandbox.data())
+        .read(&sandbox.keys)
+        .expect("the Event Log");
+    assert_eq!(events.state, ChainState::Intact);
+    assert_eq!(events.unreadable, 0);
+    assert_eq!(events.rule_packs.len(), 1, "{:?}", events.rule_packs);
+    let recorded = &events.rule_packs[0];
+    assert!(recorded.verified);
+    assert_eq!(recorded.record.change, PackChange::Accepted);
+    assert_eq!(recorded.record.pack_version, 2);
+    assert_eq!(recorded.record.origin, PackOrigin::Fetched);
+    assert_eq!(recorded.record.released_at, RELEASED);
+    assert_eq!(recorded.record.withdrawn, vec![1]);
+    assert_eq!(recorded.record.gone, vec![gone.id.clone()]);
+    assert!(
+        sequences
+            .iter()
+            .all(|sequence| *sequence == Some(recorded.sequence)),
+        "{sequences:?}"
+    );
+    // The derived views read on around it: the manual Quarantine is still
+    // what the store holds.
+    assert_eq!(events.quarantine_manifest().len(), 1);
+    let receipts = sandbox
+        .client()
+        .reveal_receipts(None)
+        .expect("the Receipts");
+    assert_eq!(receipts.len(), 1);
+
+    // After a restart the Activity line is read from the Event Log.
+    drop(daemon);
+    let _daemon = sandbox.start(&feed, false);
+    let status = sandbox.status();
+    let withdrawal = status
+        .activity
+        .iter()
+        .find(|line| line.line.starts_with("Rule 0001 was withdrawn"))
+        .expect("the withdrawal is still in the Activity");
+    assert!(withdrawal.line.contains("dropper"), "{withdrawal:?}");
+    assert_eq!(withdrawal.sequence, recorded.sequence);
+    assert!(
+        status
+            .activity
+            .iter()
+            .any(|line| line.line.contains("Rule Pack 2") && line.line.contains("in force")),
+        "{:?}",
+        status.activity
+    );
 }
 
 /// Every bundled Rule is on Probation. A pack in which Rule 0001 left it
@@ -1108,6 +1166,32 @@ fn a_stored_pack_that_fails_verification_at_start_is_discarded() {
     assert_eq!(in_force.origin, PackOrigin::Bundled);
     assert_eq!(in_force.manifest.pack_version, 1);
     assert!(!sandbox.data().rules().exists(), "discarded");
+
+    // Both changes are in the Event Log: the acceptance, with the Rule that
+    // left Probation, and the discard at start.
+    let events = EventLog::in_data_directory(&sandbox.data())
+        .read(&sandbox.keys)
+        .expect("the Event Log");
+    assert_eq!(events.state, ChainState::Intact);
+    let changes: Vec<_> = events
+        .rule_packs
+        .iter()
+        .map(|recorded| &recorded.record)
+        .collect();
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    assert_eq!(changes[0].change, PackChange::Accepted);
+    assert_eq!(changes[0].left_probation, vec![1]);
+    assert_eq!(changes[1].change, PackChange::Discarded);
+    assert_eq!(changes[1].pack_version, 1);
+    assert_eq!(changes[1].origin, PackOrigin::Bundled);
+    assert!(
+        sandbox
+            .status()
+            .activity
+            .iter()
+            .any(|line| line.line.contains("discarded")),
+        "the discard is in the Activity"
+    );
 }
 
 /// The fetch rides along with the due check once a day, and a feed that has

@@ -279,6 +279,7 @@ mod tests {
             health,
             scan: Some(summary()),
             findings: Vec::new(),
+            activity: Vec::new(),
         };
         let rendered = render(&status);
         assert!(
@@ -303,6 +304,7 @@ mod tests {
             health,
             scan: Some(summary()),
             findings: Vec::new(),
+            activity: Vec::new(),
         };
         let rendered = render(&status);
         assert!(
@@ -320,6 +322,7 @@ mod tests {
             health,
             scan: Some(summary()),
             findings: vec![finding()],
+            activity: Vec::new(),
         };
         let rendered = render(&status);
         assert!(rendered.contains("1 Finding is open."), "{rendered}");
@@ -350,6 +353,7 @@ mod tests {
             health: Health::running(),
             scan: Some(summary()),
             findings: vec![stopped],
+            activity: Vec::new(),
         };
         let rendered = render(&status);
         assert!(!rendered.contains("open Finding"), "{rendered}");
@@ -369,6 +373,7 @@ mod tests {
             health: Health::running(),
             scan: Some(summary()),
             findings: vec![finding()],
+            activity: Vec::new(),
         };
         let rendered = render(&status);
         assert!(
@@ -392,6 +397,7 @@ mod tests {
             health,
             scan: None,
             findings: Vec::new(),
+            activity: Vec::new(),
         };
         let rendered = render(&status);
         assert!(rendered.starts_with("Checking now."), "{rendered}");
@@ -410,6 +416,7 @@ mod tests {
             },
             scan: None,
             findings: Vec::new(),
+            activity: Vec::new(),
         };
         assert!(!render(&status).contains("No Scan"), "{}", render(&status));
     }

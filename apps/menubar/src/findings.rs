@@ -571,6 +571,7 @@ pub(crate) mod tests {
             },
             scan: None,
             findings,
+            activity: Vec::new(),
         }
     }
 
@@ -888,7 +889,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             list.apply(&StateEvent::Activity {
-                line: "Rule Pack 2 accepted.".to_string()
+                line: "Rule Pack 2 accepted.".to_string(),
+                sequence: Some(3),
             }),
             Follow::Nothing
         );

@@ -26,7 +26,8 @@ use agentsweep_core::baseline::{self, Retention};
 use agentsweep_core::chain::ChainState;
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::evaluation::EvaluationCache;
-use agentsweep_core::finding::{Finding, FindingId};
+use agentsweep_core::eventlog::{EventLog, PackChange, PackRules, RulePackRecord};
+use agentsweep_core::finding::{Finding, FindingId, FindingState};
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
 use agentsweep_core::item::Scope;
 use agentsweep_core::keychain::{KeySource, MemoryKeySource};
@@ -38,7 +39,8 @@ use agentsweep_core::settings::{Settings, SettingsError, SettingsFile, SettingsW
 use agentsweep_core::state::{RecordedFinding, State, StateFile, StateWriter, Trigger};
 use agentsweep_ipc::peer::PeerCheck;
 use agentsweep_ipc::protocol::{
-    Hello, Message, Refusal, Request, RequestError, StateEvent, Status, check_version, welcome,
+    ActivityLine, Hello, Message, Refusal, Request, RequestError, StateEvent, Status,
+    check_version, welcome,
 };
 use agentsweep_ipc::socket::{Connection, SocketListener};
 
@@ -195,6 +197,14 @@ pub struct Daemon {
     feed: Option<Endpoints>,
     /// Held while a fetch runs, so two never run at once.
     fetching: Mutex<()>,
+    /// A change of the Rule Pack in force that is still to be recorded. It is
+    /// written to the Event Log as a `rule-pack` record under the write lock,
+    /// just before the Full Scan the change brings, when the Findings it takes
+    /// with it are the ones the last Scan left.
+    pack_change: Mutex<Option<PendingPackChange>>,
+    /// The Activity lines the Event Log keeps, read once at start and
+    /// extended by every `rule-pack` record this daemon writes.
+    activity: Mutex<Vec<ActivityLine>>,
     /// True while a fetch is waiting out its jitter or running.
     fetch_pending: AtomicBool,
     /// Held by whatever decides which pack is in force from the toggle: the
@@ -317,7 +327,21 @@ impl Daemon {
             .clone()
             .or_else(|| (!options.is_developer_run()).then(Endpoints::github));
         let (settings, settings_unreadable) = settings_at_start(&directory, &*keys, &mut state);
-        let pack = pack_at_start(&directory, &bundled, &mut state, settings.rule_feed);
+        let (pack, discarded) = pack_at_start(&directory, &bundled, &mut state, settings.rule_feed);
+        // A stored pack discarded at start is recorded like an accepted one,
+        // before the first Full Scan: what it withdrew is measured against
+        // the discarded pack, which is the one the last Scans ran with.
+        let pack_change = discarded.map(|(version, before)| {
+            let mut record = RulePackRecord::new(
+                PackChange::Discarded,
+                pack.manifest.pack_version,
+                &pack.manifest.released_at,
+                pack.origin,
+            );
+            record.discarded_version = version;
+            PendingPackChange { record, before }
+        });
+        let activity = activity_in_the_event_log(&directory, &*keys);
         let now = (tuning.due.now)();
 
         let health = Health {
@@ -358,6 +382,8 @@ impl Daemon {
             bundled,
             feed,
             fetching: Mutex::new(()),
+            pack_change: Mutex::new(pack_change),
+            activity: Mutex::new(activity),
             fetch_pending: AtomicBool::new(false),
             switching: Mutex::new(()),
             cache: Arc::new(EvaluationCache::new()),
@@ -427,6 +453,11 @@ impl Daemon {
             health: self.health(),
             scan: state.last_scan().cloned(),
             findings: state.findings.clone(),
+            activity: self
+                .activity
+                .lock()
+                .expect("the Activity is not poisoned")
+                .clone(),
         }
     }
 
@@ -521,6 +552,7 @@ impl Daemon {
         let pack = self.pack_in_force();
         match work {
             Work::Full(trigger) => {
+                self.record_the_pack_change(&pack);
                 self.publish(StateEvent::ScanStarted {
                     trigger,
                     at: Timestamp::now(),
@@ -689,11 +721,6 @@ impl Daemon {
         for (id, state) in changed {
             self.publish(StateEvent::FindingChanged { id, state });
         }
-        for line in &run.activity {
-            say!("{line}");
-            self.publish(StateEvent::Activity { line: line.clone() });
-        }
-
         // Only a Full Scan recomputes the watch roots, and housekeeping runs
         // behind one and behind nothing else.
         if whole {
@@ -1087,16 +1114,56 @@ fn settings_at_start(
     }
 }
 
+/// A change of the Rule Pack in force that the Event Log is still to hear of.
+#[derive(Debug)]
+struct PendingPackChange {
+    /// The record, with the pack now in force named and nothing yet said
+    /// about what it withdrew.
+    record: RulePackRecord,
+    /// The Rules of the pack in force before, which what it withdrew and what
+    /// left Probation are measured against.
+    before: PackRules,
+}
+
+/// The Rules of one pack by id, with where each stands.
+fn rules_of(pack: &RulePack) -> PackRules {
+    pack.metas().map(|meta| (meta.id, meta.status)).collect()
+}
+
+/// The Activity lines the Event Log keeps: every `rule-pack` record, each
+/// with its sequence. A log that cannot be read has none to show; its state
+/// is the Health's to report.
+fn activity_in_the_event_log(directory: &DataDirectory, keys: &dyn KeySource) -> Vec<ActivityLine> {
+    match EventLog::in_data_directory(directory).read(keys) {
+        Ok(view) => view
+            .pack_activity()
+            .into_iter()
+            .map(|(sequence, recorded_at, line)| ActivityLine {
+                sequence,
+                recorded_at,
+                line,
+            })
+            .collect(),
+        Err(error) => {
+            say!("the Activity could not be read from the Event Log: {error}");
+            Vec::new()
+        }
+    }
+}
+
 /// The Rule Pack in force at start: the stored one when the feed is on and
 /// the stored pack verifies and beats the bundled one, the bundled one
 /// otherwise. A stored pack that fails verification is discarded, never
 /// trusted; one the bundled pack caught up with is thrown away as well.
+///
+/// A discarded pack is answered with its version and its Rules, both empty
+/// when it did not verify, so the change can be recorded.
 fn pack_at_start(
     directory: &DataDirectory,
     bundled: &Arc<LoadedPack>,
     state: &mut State,
     feed_on: bool,
-) -> Arc<LoadedPack> {
+) -> (Arc<LoadedPack>, Option<(u64, PackRules)>) {
     // A pack that was ignored for needing a newer AgentSweep is asked for
     // again once this binary is new enough: the validators go, so the next
     // fetch is not answered "unchanged".
@@ -1111,11 +1178,11 @@ fn pack_at_start(
         state.feed.last_modified.clear();
     }
     if !feed_on {
-        return Arc::clone(bundled);
+        return (Arc::clone(bundled), None);
     }
     let store = PackStore::in_data_directory(directory);
     match store.read() {
-        Ok(None) => Arc::clone(bundled),
+        Ok(None) => (Arc::clone(bundled), None),
         Ok(Some(fetched)) => match judge(
             &fetched.manifest,
             bundled.manifest.pack_version,
@@ -1127,14 +1194,15 @@ fn pack_at_start(
                     fetched.manifest.pack_version,
                     fetched.manifest.released_at
                 );
-                Arc::new(fetched)
+                (Arc::new(fetched), None)
             }
             verdict => {
                 say!("the stored Rule Pack is not used and is discarded: {verdict:?}");
                 if let Err(error) = store.discard() {
                     say!("the stored Rule Pack could not be discarded: {error}");
                 }
-                Arc::clone(bundled)
+                let discarded = (fetched.manifest.pack_version, rules_of(&fetched.rules));
+                (Arc::clone(bundled), Some(discarded))
             }
         },
         Err(error) => {
@@ -1142,7 +1210,7 @@ fn pack_at_start(
             if let Err(error) = store.discard() {
                 say!("the stored Rule Pack could not be discarded: {error}");
             }
-            Arc::clone(bundled)
+            (Arc::clone(bundled), Some((0, PackRules::new())))
         }
     }
 }
@@ -1389,6 +1457,12 @@ impl Daemon {
     /// withdrawn Rule's open Findings go, a quarantined Item whose Rule was
     /// withdrawn stays and says so, a Rule that left Probation acts through
     /// the automatic Quarantine every Scan applies.
+    ///
+    /// A fetched pack is a change the Event Log records, with what it withdrew
+    /// and what left Probation, just before that Full Scan; its Activity lines
+    /// are built from the record. Two packs accepted before the Scan are one
+    /// change, measured against the pack the last Scan ran with. The bundled
+    /// pack put back by the toggle is no such change and has its line only.
     fn adopt(self: &Arc<Daemon>, pack: Arc<LoadedPack>) {
         let line = format!(
             "Rule Pack {} ({}) is in force, released {}.",
@@ -1397,17 +1471,117 @@ impl Daemon {
             pack.manifest.released_on()
         );
         {
+            let mut pending = self
+                .pack_change
+                .lock()
+                .expect("the pack change is not poisoned");
+            match pack.origin {
+                PackOrigin::Fetched => {
+                    let before = match pending.take() {
+                        Some(earlier) => earlier.before,
+                        None => rules_of(&self.pack_in_force().rules),
+                    };
+                    let record = RulePackRecord::new(
+                        PackChange::Accepted,
+                        pack.manifest.pack_version,
+                        &pack.manifest.released_at,
+                        pack.origin,
+                    );
+                    *pending = Some(PendingPackChange { record, before });
+                }
+                PackOrigin::Bundled => {
+                    if pending
+                        .as_ref()
+                        .is_some_and(|earlier| earlier.record.change == PackChange::Accepted)
+                    {
+                        *pending = None;
+                    }
+                }
+            }
+        }
+        {
             let mut health = self.health.lock().expect("the health is not poisoned");
             health.rule_pack = pack.manifest.pack_version;
             health.rule_pack_origin = pack.origin;
             health.rules_released_at = pack.manifest.released_at.clone();
         }
+        let recorded = pack.origin == PackOrigin::Fetched;
         *self.pack.write().expect("the pack is not poisoned") = pack;
         self.forget_evaluations();
-        say!("{line}");
-        self.publish(StateEvent::Activity { line });
+        if !recorded {
+            say!("{line}");
+            self.publish(StateEvent::Activity {
+                line,
+                sequence: None,
+            });
+        }
         self.tell_health();
         self.scan_with_the_new_pack();
+    }
+
+    /// Writes the change of the Rule Pack that is still to be recorded, when
+    /// the pack about to be scanned with is the one it names.
+    ///
+    /// Runs under the write lock, before the Full Scan the change brings: the
+    /// Findings the withdrawn Rules take with them are the ones the last Scan
+    /// left, which is what that Scan turns gone. The Activity lines are built
+    /// from the record and sent with its sequence.
+    fn record_the_pack_change(&self, pack: &LoadedPack) {
+        let pending = self
+            .pack_change
+            .lock()
+            .expect("the pack change is not poisoned")
+            .take();
+        let Some(pending) = pending else {
+            return;
+        };
+        if pending.record.pack_version != pack.manifest.pack_version
+            || pending.record.origin != pack.origin
+        {
+            return;
+        }
+        let mut record = pending
+            .record
+            .comparing(&pending.before, &rules_of(&pack.rules));
+        record.gone = self
+            .state
+            .lock()
+            .expect("the state is not poisoned")
+            .findings
+            .iter()
+            .filter(|finding| finding.rule_id != 0 && record.withdrawn.contains(&finding.rule_id))
+            .filter(|finding| !matches!(finding.state, FindingState::Stopped | FindingState::Gone))
+            .map(|finding| finding.id.clone())
+            .collect();
+        let written = open_the_event_log(&self.directory, &*self.keys)
+            .and_then(|(mut writer, _)| writer.record_rule_pack(&record));
+        let envelope = match written {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                say!("the change of the Rule Pack could not be recorded: {error}");
+                return;
+            }
+        };
+        let lines: Vec<ActivityLine> = record
+            .activity()
+            .into_iter()
+            .map(|line| ActivityLine {
+                sequence: envelope.sequence,
+                recorded_at: envelope.recorded_at,
+                line,
+            })
+            .collect();
+        self.activity
+            .lock()
+            .expect("the Activity is not poisoned")
+            .extend(lines.iter().cloned());
+        for line in lines {
+            say!("{}", line.line);
+            self.publish(StateEvent::Activity {
+                line: line.line,
+                sequence: Some(line.sequence),
+            });
+        }
     }
 
     /// Asks for the Full Scan a new pack brings. One that is waiting will run

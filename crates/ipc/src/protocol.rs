@@ -455,10 +455,15 @@ pub enum StateEvent {
         state: String,
     },
     /// A line for the Activity that is not a Finding: a Rule Pack accepted,
-    /// a Rule withdrawn with the Findings it took with it.
+    /// a Rule withdrawn with the Findings it took with it. It is the live
+    /// signal; what stays is the Event Log record the line was built from.
     Activity {
         /// The line, free of content and of sensitive values.
         line: String,
+        /// The sequence of the Event Log record the line was built from, so a
+        /// client can tell it from the same line in the status. Absent for a
+        /// line no record stands behind.
+        sequence: Option<u64>,
     },
     /// Health moved: a Scan started or ended, a chain was verified, the Rule
     /// Feed or the pack in force changed, or an action settled a Finding. It
@@ -493,6 +498,41 @@ pub struct Status {
     pub scan: Option<ScanSummary>,
     /// The Findings the last Scan left standing.
     pub findings: Vec<RecordedFinding>,
+    /// The Activity lines the Event Log keeps, oldest first: every change of
+    /// the Rule Pack in force, with what it withdrew.
+    pub activity: Vec<ActivityLine>,
+}
+
+/// One Activity line read from the Event Log.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivityLine {
+    /// The sequence of the record it was built from.
+    pub sequence: u64,
+    /// When that record was written.
+    pub recorded_at: Timestamp,
+    /// The line, free of content and of sensitive values.
+    pub line: String,
+}
+
+impl ActivityLine {
+    fn to_value(&self) -> Value {
+        let mut map = Map::new();
+        map.insert("line".to_string(), Value::from(self.line.as_str()));
+        map.insert(
+            "recorded_at".to_string(),
+            Value::from(self.recorded_at.to_string()),
+        );
+        map.insert("sequence".to_string(), Value::from(self.sequence));
+        Value::Object(map)
+    }
+
+    fn from_value(value: &Value) -> Option<ActivityLine> {
+        Some(ActivityLine {
+            sequence: value.get("sequence")?.as_u64()?,
+            recorded_at: Timestamp::parse(value.get("recorded_at")?.as_str()?)?,
+            line: value.get("line")?.as_str()?.to_string(),
+        })
+    }
 }
 
 impl Status {
@@ -502,6 +542,7 @@ impl Status {
             health: Health::unreachable(reason),
             scan: None,
             findings: Vec::new(),
+            activity: Vec::new(),
         }
     }
 
@@ -513,6 +554,10 @@ impl Status {
     /// The status as the wire carries it.
     pub fn to_value(&self) -> Value {
         let mut map = Map::new();
+        map.insert(
+            "activity".to_string(),
+            Value::Array(self.activity.iter().map(ActivityLine::to_value).collect()),
+        );
         map.insert(
             "findings".to_string(),
             Value::Array(
@@ -545,10 +590,21 @@ impl Status {
             Value::Null => None,
             summary => Some(ScanSummary::from_value(summary)?),
         };
+        // A daemon from before the Activity was read from the Event Log sends
+        // none, which reads as an empty Activity rather than as no status.
+        let activity = match value.get("activity") {
+            None => Vec::new(),
+            Some(lines) => lines
+                .as_array()?
+                .iter()
+                .map(ActivityLine::from_value)
+                .collect::<Option<Vec<_>>>()?,
+        };
         Some(Status {
             health: health_from_value(value.get("health")?)?,
             scan,
             findings,
+            activity,
         })
     }
 }
@@ -1345,8 +1401,11 @@ impl Message {
                         map.insert("id".to_string(), Value::from(id.as_str()));
                         map.insert("state".to_string(), Value::from(state.as_str()));
                     }
-                    StateEvent::Activity { line } => {
+                    StateEvent::Activity { line, sequence } => {
                         map.insert("line".to_string(), Value::from(line.as_str()));
+                        if let Some(sequence) = sequence {
+                            map.insert("sequence".to_string(), Value::from(*sequence));
+                        }
                     }
                     StateEvent::HealthChanged { health } => {
                         map.insert("health".to_string(), health_to_value(health));
@@ -1418,6 +1477,7 @@ impl Message {
                     },
                     "activity" => StateEvent::Activity {
                         line: text("line")?.to_string(),
+                        sequence: value.get("sequence").and_then(Value::as_u64),
                     },
                     "health-changed" => StateEvent::HealthChanged {
                         health: Box::new(health_from_value(value.get("health")?)?),
@@ -1540,6 +1600,11 @@ mod tests {
         }));
         round_trip(Message::Event(StateEvent::Activity {
             line: "Rule Pack 2 accepted".to_string(),
+            sequence: None,
+        }));
+        round_trip(Message::Event(StateEvent::Activity {
+            line: "Rule 0001 was withdrawn by Rule Pack 2.".to_string(),
+            sequence: Some(7),
         }));
         round_trip(Message::Event(StateEvent::HealthChanged {
             health: Box::new(Health {
@@ -1600,10 +1665,16 @@ mod tests {
             health,
             scan: Some(summary()),
             findings: Vec::new(),
+            activity: vec![ActivityLine {
+                sequence: 4,
+                recorded_at: moment("2026-09-24T08:00:01.000Z"),
+                line: "Rule 0001 was withdrawn by Rule Pack 2.".to_string(),
+            }],
         };
         let value = status.to_value();
         let back = Status::from_value(&value).expect("a readable status");
         assert_eq!(back.scan, status.scan);
+        assert_eq!(back.activity, status.activity);
         assert_eq!(back.health.headline(), "Records tampered.");
         assert!(back.health.records_tampered());
     }

@@ -536,7 +536,7 @@ fn a_subscriber_is_told_when_a_scan_starts_gets_on_and_finishes() {
                 assert!(!state.is_empty());
                 seen.push("finding-changed".to_string());
             }
-            Some(StateEvent::Activity { line }) => {
+            Some(StateEvent::Activity { line, .. }) => {
                 assert!(!line.is_empty());
                 seen.push("activity".to_string());
             }

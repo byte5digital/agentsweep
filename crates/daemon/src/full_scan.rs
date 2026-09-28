@@ -105,9 +105,6 @@ pub struct ScanRun {
     /// The newer, clean version found for each quarantined plugin, by the
     /// Receipt that stopped it, which is what offers Re-enable.
     pub fixed_versions: BTreeMap<String, String>,
-    /// The lines for the Activity that are not Findings: each Finding that
-    /// went away because the Rule Pack in force withdrew its Rule.
-    pub activity: Vec<String>,
 }
 
 /// What a Scan reports as it goes.
@@ -242,7 +239,6 @@ impl FullScan<'_> {
             last_compaction: judged.last_compaction,
             acted: judged.acted,
             fixed_versions: judged.fixed_versions,
-            activity: judged.activity,
         })
     }
 }
@@ -390,8 +386,6 @@ pub struct Judged {
     pub acted: ScanActions,
     /// The newer, clean version of each quarantined plugin, by Receipt.
     pub fixed_versions: BTreeMap<String, String>,
-    /// The Activity lines this pass left beside its Findings.
-    pub activity: Vec<String>,
 }
 
 /// Reading the stores, running one pass and writing what it decided.
@@ -547,7 +541,7 @@ impl Judgement<'_> {
                 standing.push(stopped);
             }
         }
-        let activity = withdrawn(&mut standing, self.pack, rule_pack);
+        withdrawn(&mut standing, self.pack);
         let fixed_versions = fixed_versions(&quarantined, enumeration, &raised);
 
         let bands = count_bands(&outcome);
@@ -587,21 +581,21 @@ impl Judgement<'_> {
                 .next_back(),
             acted,
             fixed_versions,
-            activity,
         })
     }
 }
 
-/// Says what the Rule Pack in force no longer stands behind, and answers with
-/// the Activity lines for it.
+/// Says what the Rule Pack in force no longer stands behind.
 ///
 /// Nothing here decides anything: the pack decided, by not carrying the Rule
 /// any more. A Finding it raised under the previous pack and that this Scan
 /// did not raise is already gone, and says why. A quarantined Item stays
 /// where it is, in the store, and says that the Rule that stopped it was
 /// withdrawn; Restore is what it offers first (spec sections 6.4 and 8.4).
-fn withdrawn(standing: &mut [Standing], pack: &RulePack, rule_pack: u64) -> Vec<String> {
-    let mut activity = Vec::new();
+/// The Activity line for a withdrawal is not made here: it is built from the
+/// `rule-pack` record the daemon wrote when the pack was put in force, so it
+/// outlives the daemon that saw it.
+fn withdrawn(standing: &mut [Standing], pack: &RulePack) {
     for placed in standing.iter_mut() {
         let Source::Rule(id) = placed.finding.source else {
             continue;
@@ -615,16 +609,10 @@ fn withdrawn(standing: &mut [Standing], pack: &RulePack, rule_pack: u64) -> Vec<
             }
             FindingState::Gone => {
                 placed.finding.plain = RULE_WITHDRAWN_GONE.to_string();
-                activity.push(format!(
-                    "Rule {id:04} was withdrawn by Rule Pack {rule_pack}, so its Finding on {} \
-                     is gone.",
-                    placed.finding.item_id
-                ));
             }
             _ => {}
         }
     }
-    activity
 }
 
 /// The stopped Finding one Receipt stands for, built from the Event Log and

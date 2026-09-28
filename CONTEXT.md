@@ -81,7 +81,7 @@ Putting a quarantined Item back by replaying its Receipt in reverse. Restoring a
 _Avoid_: Unquarantine, recover, whitelist
 
 **Event Log**:
-The single tamper-evident record of every Quarantine, Restore, Trust decision, Acknowledge, purge and change of Judgement Engine. What is currently in quarantine and what is trusted are read from it, never stored separately.
+The single tamper-evident record of every Quarantine, Restore, Trust decision, Acknowledge, purge and change of Judgement Engine; it also records each Rule Pack put in force or discarded, which is what the Activity reads. What is currently in quarantine and what is trusted are read from it, never stored separately.
 _Avoid_: Audit trail, manifest, history (as a proper name)
 
 **Scan**:

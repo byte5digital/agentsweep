@@ -232,6 +232,12 @@ pub struct RecordedFinding {
     /// Re-enable ("Fixed version available", spec section 5.4). Empty
     /// otherwise.
     pub fixed_version: String,
+    /// True when the Quarantine of the Item flips the Agent's own switch and
+    /// leaves it where it stands, or for a stopped Finding when it did (the
+    /// owner's decision of 2026-09-28): the pair of actions then reads as
+    /// switching it off and back on. False otherwise, and in a state file
+    /// written before switches were used.
+    pub switched: bool,
     /// When AgentSweep first saw it.
     pub first_seen: Timestamp,
     /// When the user was told about it, absent when they have not been.
@@ -267,6 +273,7 @@ impl RecordedFinding {
                 .unwrap_or_default(),
             receipt_id: standing.receipt_id.clone(),
             fixed_version: String::new(),
+            switched: false,
             first_seen,
             notified_at: None,
         }
@@ -322,6 +329,9 @@ impl RecordedFinding {
         map.insert("source".to_string(), Value::from(self.source.as_str()));
         map.insert("state".to_string(), Value::from(self.state.as_str()));
         map.insert("status".to_string(), Value::from(self.status.as_str()));
+        if self.switched {
+            map.insert("switched".to_string(), Value::from(true));
+        }
         map.insert("tier".to_string(), Value::from(self.tier.as_str()));
         map.insert("title".to_string(), Value::from(self.title.as_str()));
         Value::Object(map)
@@ -356,6 +366,10 @@ impl RecordedFinding {
             // Absent in a state file written before Re-enable was offered,
             // which reads as no fixed version known.
             fixed_version: text("fixed_version").unwrap_or_default().to_string(),
+            switched: value
+                .get("switched")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             first_seen: Timestamp::parse(text("first_seen")?)?,
             notified_at: moment("notified_at")?,
         })
@@ -977,6 +991,23 @@ mod tests {
     fn a_state_file_round_trips_through_its_own_form() {
         let state = a_state();
         assert_eq!(State::from_value(&state.to_value()), Some(state));
+    }
+
+    /// Whether a Finding's Quarantine is a switch survives the file, and a
+    /// record written before switches were used reads as no switch.
+    #[test]
+    fn a_switched_finding_round_trips_and_an_older_record_reads_as_no_switch() {
+        let mut recorded = RecordedFinding::of(&standing(), moment("2026-09-01T09:00:00.000Z"));
+        assert!(!recorded.switched);
+        let older = recorded.to_value();
+        assert!(older.get("switched").is_none());
+        assert_eq!(RecordedFinding::from_value(&older), Some(recorded.clone()));
+
+        recorded.switched = true;
+        assert_eq!(
+            RecordedFinding::from_value(&recorded.to_value()),
+            Some(recorded)
+        );
     }
 
     /// The Item's kind is read off the Item id, because a Finding carries the

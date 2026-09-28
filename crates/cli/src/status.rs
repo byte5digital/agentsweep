@@ -255,6 +255,7 @@ mod tests {
             drift: "changed since your last Scan".to_string(),
             receipt_id: String::new(),
             fixed_version: String::new(),
+            switched: false,
             first_seen: moment("2026-09-24T08:00:00.000Z"),
             notified_at: None,
         }

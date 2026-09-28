@@ -546,8 +546,10 @@ pub fn standing(
             continue;
         }
         seen.push(id.clone());
+        // An Item a switch left in place is still stopped at the hash the
+        // switch left it at: the Agent will not load it while it is off.
         let stopped = decided.quarantined.entries().find(|entry| {
-            entry.item_id == finding.item_id && entry.content_hash == finding.content_hash
+            entry.item_id == finding.item_id && entry.stands_for(&finding.content_hash)
         });
         let kind = kinds
             .get(&finding.item_id)

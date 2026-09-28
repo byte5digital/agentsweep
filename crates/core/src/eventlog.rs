@@ -156,7 +156,9 @@ pub enum Primitive {
     MoveOut,
     /// An entry was dropped from its config file.
     RemoveEntry,
-    /// The Agent's own switch was turned off, never on its own.
+    /// The Agent's own switch was turned off: the first half of the plugin
+    /// composite, or the whole Quarantine of an Item the Agent has a switch
+    /// for.
     NativeDisable,
     /// The content was commented out where it lies.
     NeutraliseInPlace,

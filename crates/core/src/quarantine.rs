@@ -146,6 +146,22 @@ impl Receipt {
     pub fn result(&self) -> Outcome {
         outcome_of(&self.steps)
     }
+
+    /// True when the Quarantine flipped the Agent's own switch and did nothing
+    /// else, so the Item is still on its Surface, switched off.
+    pub fn switched_in_place(&self) -> bool {
+        switched_in_place(&self.steps)
+    }
+}
+
+/// True when every step is a native disable and at least one was carried out:
+/// a Quarantine that left the Item where it was and switched it off.
+pub fn switched_in_place(steps: &[ReceiptStep]) -> bool {
+    !steps.is_empty()
+        && steps
+            .iter()
+            .all(|step| step.primitive == crate::eventlog::Primitive::NativeDisable)
+        && steps.iter().any(|step| step.outcome == Outcome::Ok)
 }
 
 /// How the steps of one action came out as a whole.

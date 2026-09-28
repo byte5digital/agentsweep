@@ -48,8 +48,9 @@ pub enum Step<'a> {
         /// values.
         detail: String,
     },
-    /// Flip the Agent's own switch. Never a Quarantine's only step (spec
-    /// section 5.2).
+    /// Flip the Agent's own switch: the first step of the plugin composite, or
+    /// the whole Quarantine of an Item whose row puts the switch first (spec
+    /// section 5.2 as amended on 2026-09-28).
     NativeDisable {
         /// The file that holds the switch.
         file: &'a Path,
@@ -523,6 +524,45 @@ mod tests {
         assert!(version.join("plugin.json").is_file());
     }
 
+    /// The owner's decision of 2026-09-28: a Codex MCP server is switched off
+    /// in its own table and stays where it is. The switch is the whole
+    /// Receipt, the layer differs in that one value, and Restore gives the
+    /// layer back byte for byte through what the store kept.
+    #[test]
+    fn a_switch_alone_is_a_whole_quarantine_and_flips_back_byte_for_byte() {
+        let bench = Bench::new();
+        let layer = "# a user layer\n[mcp_servers.planted]\ncommand = \"sh\"\nenabled = true # on\n\n[mcp_servers.kept]\ncommand = \"kit\"\n";
+        let file = bench.write("config.toml", layer);
+        let item = bench.item(Kind::McpServer, &file, "{\"command\":\"sh\"}");
+        let steps = [Step::NativeDisable {
+            file: &file,
+            format: Format::Toml,
+            entry: entry(&["mcp_servers", "planted", "enabled"]),
+            value: Value::from(false),
+            detail: "the MCP server was switched off in its own table".to_string(),
+        }];
+
+        let receipt = carry_out(&bench.host, &bench.store, &item, &steps).expect("a Quarantine");
+
+        assert_eq!(receipt.steps.len(), 1);
+        assert_eq!(receipt.steps[0].primitive, Primitive::NativeDisable);
+        assert!(receipt.switched_in_place());
+        assert_eq!(
+            bench.read("config.toml"),
+            layer.replacen("enabled = true", "enabled = false", 1)
+        );
+
+        let report = crate::quarantine::replay_in_reverse(
+            &bench.host,
+            &bench.store,
+            &receipt,
+            Conflict::Refuse,
+        );
+
+        assert!(report.is_complete(), "{report:?}");
+        assert_eq!(bench.read("config.toml"), layer);
+    }
+
     /// Re-enable reverses the native disable and nothing else: the old version
     /// stays in the store (spec section 5.4).
     #[test]
@@ -749,11 +789,14 @@ mod tests {
         assert!(report.is_complete(), "{report:?}");
         assert_eq!(bench.read(".mcp.json"), written);
     }
-    /// Spec section 5.2: NativeDisable is never the sole primitive, only an
-    /// addition. A switch on its own leaves the code where it is, and both
-    /// Agents re-fetch a plugin after session start.
+    /// Spec section 5.2: no row of the table is a native disable alone. A
+    /// switch on its own leaves the code where it is, and both Agents re-fetch
+    /// a plugin after session start. Where the switch alone is the Quarantine
+    /// (an MCP server, a hook, a skill the Agent has a switch for), the row
+    /// says so by putting the switch first and keeps its own primitive for the
+    /// Items without one.
     #[test]
-    fn a_native_disable_is_never_a_quarantines_only_step() {
+    fn a_native_disable_is_never_a_rows_only_primitive() {
         for row in crate::adapter::ELIGIBILITY {
             let disables = row
                 .primitives

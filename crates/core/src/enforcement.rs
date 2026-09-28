@@ -74,29 +74,46 @@ impl Cause {
     }
 }
 
-/// The hash a Quarantine left at the Item itself, for the one primitive that
-/// leaves it where it is.
+/// The hash a Quarantine left at the Item itself, for the primitives that
+/// leave it where it is.
 ///
 /// MoveOut takes the Item away and RemoveEntry takes the entry out of its
 /// file, so neither leaves a hash behind. NeutraliseInPlace comments the key
 /// or the line out and the Item stays, at content AgentSweep wrote: the next
-/// Scan must read that as a known action rather than as a question.
+/// Scan must read that as a known action rather than as a question. A native
+/// disable that is the whole Quarantine leaves the Item in place too, and
+/// where the switch sits inside the entry (an MCP server's `enabled`) the
+/// entry now hashes differently; the adapter is asked what it reads there
+/// now, because an entry's hash is its canonical form, never the file's.
 #[cfg(feature = "daemon")]
 fn left_in_place(
+    adapter: &dyn crate::adapter::SurfaceAdapter,
     host: &crate::host::Host,
     item: &Item,
     receipt: &crate::quarantine::Receipt,
 ) -> Option<String> {
-    let neutralised = receipt.steps.iter().any(|step| {
-        step.primitive == crate::eventlog::Primitive::NeutraliseInPlace
-            && step.outcome == crate::eventlog::Outcome::Ok
-    });
-    if !neutralised {
-        return None;
+    let done = |primitive| {
+        receipt
+            .steps
+            .iter()
+            .any(|step| step.primitive == primitive && step.outcome == crate::eventlog::Outcome::Ok)
+    };
+    if done(crate::eventlog::Primitive::NeutraliseInPlace) {
+        return host
+            .read(&item.path)
+            .ok()
+            .map(|bytes| crate::item::sha256_hex(&bytes));
     }
-    host.read(&item.path)
-        .ok()
-        .map(|bytes| crate::item::sha256_hex(&bytes))
+    if receipt.switched_in_place() {
+        return adapter
+            .enumerate(host, host.project_roots())
+            .items
+            .into_iter()
+            .find(|found| found.id == item.id)
+            .map(|found| found.content_hash)
+            .filter(|hash| *hash != item.content_hash);
+    }
+    None
 }
 
 /// Whether this Finding on this Item may be quarantined by the actor that
@@ -192,12 +209,23 @@ pub type Collateral<'c> =
 
 /// The primitives one Quarantine of this Item applies, in order, refusing when
 /// the adapter cannot carry out every one of them.
+///
+/// Where the row puts the Agent's own switch first, the adapter declares
+/// NativeDisable for the kind and the Item has a switch as the file stands
+/// now, the switch is the whole Quarantine. Otherwise it is the row.
 pub fn primitives_for(
     adapter: &dyn crate::adapter::SurfaceAdapter,
+    host: &crate::host::Host,
     item: &Item,
 ) -> Result<&'static [Primitive], EnforcementError> {
     let row = eligibility(item.kind);
     let declared = adapter.descriptor().capabilities_for(item.kind);
+    if row.switch_first
+        && declared.contains(&Primitive::NativeDisable)
+        && adapter.has_switch(host, item)
+    {
+        return Ok(crate::adapter::SWITCH_ONLY);
+    }
     for primitive in row.primitives {
         if !declared.contains(primitive) {
             return Err(EnforcementError::Unsupported {
@@ -305,9 +333,9 @@ mod writer {
             collateral: Collateral<'_>,
         ) -> Result<Receipt, EnforcementError> {
             may_quarantine(item, cause)?;
-            let primitives = primitives_for(adapter, item)?;
+            let primitives = primitives_for(adapter, host, item)?;
             let receipt = adapter.enforce(host, &self.store, item, primitives)?;
-            self.record_quarantine(host, item, cause, &receipt, collateral, None)?;
+            self.record_quarantine(adapter, host, item, cause, &receipt, collateral, None)?;
             Ok(receipt)
         }
 
@@ -326,14 +354,24 @@ mod writer {
             collateral: Collateral<'_>,
         ) -> Result<Receipt, EnforcementError> {
             may_fix(item, cause)?;
-            let primitives = primitives_for(adapter, item)?;
+            let primitives = primitives_for(adapter, host, item)?;
             let receipt = adapter.enforce(host, &self.store, item, primitives)?;
-            self.record_quarantine(host, item, cause, &receipt, collateral, Some("fix"))?;
+            self.record_quarantine(
+                adapter,
+                host,
+                item,
+                cause,
+                &receipt,
+                collateral,
+                Some("fix"),
+            )?;
             Ok(receipt)
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn record_quarantine(
             &mut self,
+            adapter: &dyn SurfaceAdapter,
             host: &Host,
             item: &Item,
             cause: &Cause,
@@ -347,7 +385,7 @@ mod writer {
             // What AgentSweep's own write left on the Surface is a known
             // action, so the next Scan does not ask the user about it (ADR
             // 0007). A neutralised Item is still there, at a new hash.
-            if let Some(hash) = left_in_place(host, item, receipt) {
+            if let Some(hash) = left_in_place(adapter, host, item, receipt) {
                 event = event.leaving(&hash);
             }
             event = also_left(event, &item.id, collateral(receipt));
@@ -399,7 +437,7 @@ mod writer {
                     "a Managed Item is read-only for AgentSweep, so it is only ever flagged",
                 ));
             }
-            let primitives = primitives_for(adapter, item)?;
+            let primitives = primitives_for(adapter, host, item)?;
             let again = adapter.enforce(host, &self.store, item, primitives)?;
 
             let mut event = Event::new(Action::ReEnforce, Actor::Auto)
@@ -410,7 +448,7 @@ mod writer {
                     entry.rule_id,
                 )
                 .noting("removed_under", again.id.as_str());
-            if let Some(hash) = left_in_place(host, item, &again) {
+            if let Some(hash) = left_in_place(adapter, host, item, &again) {
                 event = event.leaving(&hash);
             }
             event = also_left(event, &item.id, collateral(&again));
@@ -1447,5 +1485,82 @@ mod tests {
         assert!(after.contains("\"model\": \"opus\""), "{after}");
         assert!(after.contains("\"notes@demo\": true"), "{after}");
         assert!(item.path.join("plugin.json").is_file());
+    }
+
+    static SWITCHING: &[(Kind, &[Primitive])] = &[
+        (
+            Kind::McpServer,
+            &[Primitive::NativeDisable, Primitive::RemoveEntry],
+        ),
+        (Kind::Skill, &[Primitive::MoveOut]),
+    ];
+    static SWITCHING_DESCRIPTOR: Descriptor = Descriptor {
+        agent: "switching",
+        display_name: "Switching",
+        kinds: KINDS,
+        default_config_dir: ".switching",
+        surfaces: SURFACES,
+        capabilities: SWITCHING,
+        agent_written_keys: &[],
+    };
+
+    /// An adapter whose Items have a switch when their name says so.
+    struct Switches;
+
+    impl SurfaceAdapter for Switches {
+        fn descriptor(&self) -> &'static Descriptor {
+            &SWITCHING_DESCRIPTOR
+        }
+        fn detect(&self, _host: &Host) -> Detection {
+            Detection::default()
+        }
+        fn projects(&self, _host: &Host) -> Vec<ProjectRegistration> {
+            Vec::new()
+        }
+        fn enumerate(&self, _host: &Host, _roots: &[PathBuf]) -> Enumeration {
+            Enumeration::default()
+        }
+        fn has_switch(&self, _host: &Host, item: &Item) -> bool {
+            item.path.to_string_lossy().contains("switch")
+        }
+    }
+
+    /// The owner's decision of 2026-09-28: the switch is the whole Quarantine
+    /// where the row puts it first, the adapter declares it and the Item has
+    /// one; everything else takes the row as before.
+    #[test]
+    fn the_switch_comes_first_only_where_the_row_the_adapter_and_the_item_all_have_it() {
+        let bench = Bench::new();
+        let item = |kind: Kind, name: &str| {
+            let mut item = bench.item(name, "{}\n");
+            item.kind = kind;
+            item
+        };
+
+        let with_a_switch = item(Kind::McpServer, "switch.json");
+        assert_eq!(
+            primitives_for(&Switches, &bench.host, &with_a_switch).expect("a row"),
+            [Primitive::NativeDisable]
+        );
+        let without = item(Kind::McpServer, "plain.json");
+        assert_eq!(
+            primitives_for(&Switches, &bench.host, &without).expect("a row"),
+            [Primitive::RemoveEntry]
+        );
+        // A skill whose adapter declares no switch for it moves out, switch
+        // or not.
+        let skill = item(Kind::Skill, "switch.md");
+        assert_eq!(
+            primitives_for(&Switches, &bench.host, &skill).expect("a row"),
+            [Primitive::MoveOut]
+        );
+        // An adapter that has not learned a switch is asked for the row.
+        assert!(matches!(
+            primitives_for(&Moves, &bench.host, &with_a_switch),
+            Err(EnforcementError::Unsupported {
+                primitive: Primitive::RemoveEntry,
+                ..
+            })
+        ));
     }
 }

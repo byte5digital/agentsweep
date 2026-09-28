@@ -27,7 +27,8 @@ pub enum Primitive {
     MoveOut,
     /// The adapter rewrites one entry out of a shared config file.
     RemoveEntry,
-    /// The adapter flips the Agent's own switch, never on its own.
+    /// The adapter flips the Agent's own switch: ahead of a plugin's move out,
+    /// or as the whole Quarantine of an Item whose row puts the switch first.
     NativeDisable,
     /// The adapter comments the line or key out in place.
     NeutraliseInPlace,
@@ -124,14 +125,36 @@ pub struct Eligibility {
     /// True when a stable T0 or T1 Threat Finding may act on this kind by
     /// itself. False means the Finding is raised and a person clicks.
     pub automatic: bool,
+    /// True when the Agent's own switch comes ahead of the primitives: an
+    /// adapter that declares NativeDisable for the kind flips the switch of an
+    /// Item that has one, and that one step is the whole Quarantine. An Item
+    /// without a switch, and an adapter that declares none, takes the
+    /// primitives as before (the owner's decision of 2026-09-28, amending spec
+    /// section 5.2).
+    pub switch_first: bool,
 }
+
+impl Eligibility {
+    /// True when one Quarantine of this kind may carry out the primitive,
+    /// either as part of the row or as the switch that comes ahead of it.
+    pub fn allows(&self, primitive: Primitive) -> bool {
+        self.primitives.contains(&primitive)
+            || (self.switch_first && primitive == Primitive::NativeDisable)
+    }
+}
+
+/// The one step a Quarantine takes when it flips the Agent's own switch
+/// instead of the row's primitives.
+pub static SWITCH_ONLY: &[Primitive] = &[Primitive::NativeDisable];
 
 /// The primitive per kind and what may happen automatically, spec section 5.2.
 /// Repository Metadata and env files are neutralised in place and never
-/// quarantined automatically, whatever a Rule says about them.
+/// quarantined automatically, whatever a Rule says about them. An MCP server,
+/// a hook and a skill are switched off where the Agent has a switch for them
+/// (Codex `enabled = false`), ahead of RemoveEntry and MoveOut.
 pub static ELIGIBILITY: &[Eligibility] = &[
     row(Kind::InstructionFile, &[Primitive::MoveOut], true),
-    row(Kind::Skill, &[Primitive::MoveOut], true),
+    switched(Kind::Skill, &[Primitive::MoveOut]),
     row(
         Kind::Plugin,
         &[Primitive::NativeDisable, Primitive::MoveOut],
@@ -142,8 +165,8 @@ pub static ELIGIBILITY: &[Eligibility] = &[
         &[Primitive::RemoveEntry, Primitive::MoveOut],
         true,
     ),
-    row(Kind::McpServer, &[Primitive::RemoveEntry], true),
-    row(Kind::Hook, &[Primitive::RemoveEntry], true),
+    switched(Kind::McpServer, &[Primitive::RemoveEntry]),
+    switched(Kind::Hook, &[Primitive::RemoveEntry]),
     row(Kind::SettingsEntry, &[Primitive::RemoveEntry], true),
     row(Kind::ExecPolicy, &[Primitive::MoveOut], true),
     row(Kind::Subagent, &[Primitive::MoveOut], true),
@@ -165,6 +188,18 @@ const fn row(kind: Kind, primitives: &'static [Primitive], automatic: bool) -> E
         kind,
         primitives,
         automatic,
+        switch_first: false,
+    }
+}
+
+/// A row whose Items are switched off first where the Agent has a switch, and
+/// that may act by itself either way.
+const fn switched(kind: Kind, primitives: &'static [Primitive]) -> Eligibility {
+    Eligibility {
+        kind,
+        primitives,
+        automatic: true,
+        switch_first: true,
     }
 }
 
@@ -398,10 +433,23 @@ pub trait SurfaceAdapter {
             .collect()
     }
 
+    /// Whether this Item has the Agent's own switch, which a Quarantine flips
+    /// instead of taking the Item out where the eligibility row puts the
+    /// switch first and the adapter declares NativeDisable for the kind.
+    ///
+    /// Asked of the file as it stands when the Quarantine is about to happen,
+    /// never of what a Scan remembered. The default is no switch, so an
+    /// adapter that has not learned one takes the row's primitives.
+    fn has_switch(&self, host: &Host, item: &Item) -> bool {
+        let _ = (host, item);
+        false
+    }
+
     /// Takes one Item out of this Agent's Surface and says what it did.
     ///
     /// The primitives are one row of [`ELIGIBILITY`], in the order they are to
-    /// be carried out, and what comes back is the [`Receipt`] of spec section
+    /// be carried out, or [`SWITCH_ONLY`] where the row puts the Agent's own
+    /// switch first and the Item has one, and what comes back is the [`Receipt`] of spec section
     /// 5.3: one Quarantine, one Receipt, a step per primitive. The spec writes
     /// the signature as `enforce(host, item, primitive)`; the whole row is
     /// passed at once because a composite kind is still one Quarantine, and
@@ -479,6 +527,29 @@ mod tests {
             assert_eq!(row.primitives, [Primitive::NeutraliseInPlace], "{kind}");
             assert!(!row.automatic, "{kind}");
         }
+    }
+
+    /// The owner's decision of 2026-09-28: the Agent's own switch comes ahead
+    /// of RemoveEntry and MoveOut for exactly these three kinds, and every one
+    /// of them still falls back to its primitive where there is no switch.
+    #[test]
+    fn an_mcp_server_a_hook_and_a_skill_are_switched_off_first_and_nothing_else_is() {
+        for kind in Kind::ALL {
+            let row = eligibility(kind);
+            let switched = matches!(kind, Kind::McpServer | Kind::Hook | Kind::Skill);
+            assert_eq!(row.switch_first, switched, "{kind}");
+            assert_eq!(
+                row.allows(Primitive::NativeDisable),
+                switched || kind == Kind::Plugin
+            );
+        }
+        assert_eq!(
+            eligibility(Kind::McpServer).primitives,
+            [Primitive::RemoveEntry]
+        );
+        assert_eq!(eligibility(Kind::Hook).primitives, [Primitive::RemoveEntry]);
+        assert_eq!(eligibility(Kind::Skill).primitives, [Primitive::MoveOut]);
+        assert!(eligibility(Kind::McpServer).automatic);
     }
 
     #[test]

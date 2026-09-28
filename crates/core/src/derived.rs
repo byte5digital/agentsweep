@@ -53,6 +53,11 @@ pub struct QuarantineEntry {
     pub re_enforced_at: Vec<Timestamp>,
     /// False once Re-enable reversed the native disable step of a plugin.
     pub natively_disabled: bool,
+    /// The content hash the Item was left at on its Surface, for a Quarantine
+    /// that left it in place: an MCP server whose own `enabled` was flipped
+    /// hashes differently afterwards. Empty where the Item was taken away or
+    /// kept its hash. The latest re-enforce that left one replaces it.
+    pub left_hash: String,
     /// True when a Restore was tried and did not finish.
     pub restore_unfinished: bool,
     /// False when the record it was built from belongs to a key generation no
@@ -111,6 +116,24 @@ impl QuarantineEntry {
             .map(|step| step.path.as_str())
     }
 
+    /// True when the Quarantine switched the Item off with the Agent's own
+    /// switch and left it where it was (the owner's decision of 2026-09-28).
+    /// Such an Item is still enumerated, and it is quarantined for as long as
+    /// the switch stays off.
+    pub fn switched_in_place(&self) -> bool {
+        crate::quarantine::switched_in_place(&self.steps)
+    }
+
+    /// True when this content of the Item is what this Quarantine took out or
+    /// left behind: the hash it was quarantined on, or the hash a switch that
+    /// stayed in place left the entry at.
+    pub fn stands_for(&self, content_hash: &str) -> bool {
+        self.content_hash == content_hash
+            || (!self.left_hash.is_empty()
+                && self.switched_in_place()
+                && self.left_hash == content_hash)
+    }
+
     /// True when a payload sits in the store for this Receipt: a file or a
     /// tree was moved out.
     pub fn has_payload(&self) -> bool {
@@ -160,6 +183,11 @@ impl QuarantineManifest {
                                 .steps
                                 .iter()
                                 .any(|step| step.primitive == Primitive::NativeDisable),
+                            left_hash: event
+                                .detail
+                                .get(crate::eventlog::LEFT_HASH)
+                                .cloned()
+                                .unwrap_or_default(),
                             restore_unfinished: false,
                             verified: recorded.verified,
                         },
@@ -185,6 +213,9 @@ impl QuarantineManifest {
                     if let Some(entry) = manifest.entries.get_mut(&event.receipt_id) {
                         entry.re_enforced += 1;
                         entry.re_enforced_at.push(recorded.recorded_at);
+                        if let Some(left) = event.detail.get(crate::eventlog::LEFT_HASH) {
+                            entry.left_hash = left.clone();
+                        }
                     }
                 }
                 _ => {}
@@ -568,6 +599,50 @@ mod tests {
         assert!(!entry.natively_disabled);
         assert_eq!(entry.steps.len(), 2);
         assert!(entry.has_payload());
+    }
+
+    /// A switch that is the whole Quarantine leaves the Item in place at the
+    /// hash it wrote, and the entry stands for that hash as well as the one it
+    /// was quarantined on, until a re-enforce leaves another one.
+    #[test]
+    fn a_switch_left_in_place_stands_for_the_hash_it_left() {
+        let taken = "a".repeat(64);
+        let left = "b".repeat(64);
+        let again = "c".repeat(64);
+        let mut switched = Event::new(Action::Quarantine, Actor::Auto)
+            .about(&item("server"), Kind::McpServer, &taken)
+            .leaving(&left);
+        switched.receipt_id = "r-5".to_string();
+        switched.steps = vec![ReceiptStep::new(
+            Primitive::NativeDisable,
+            "/Users/nobody/.codex/config.toml",
+        )];
+        let mut re_enforced = with_receipt(Action::ReEnforce, Actor::Auto, "r-5");
+        re_enforced = re_enforced.leaving(&again);
+
+        let manifest = QuarantineManifest::rebuild(&recorded(vec![switched.clone()]));
+        let entry = manifest.for_receipt("r-5").expect("the entry");
+        assert!(entry.switched_in_place());
+        assert!(!entry.has_payload());
+        assert!(entry.stands_for(&taken));
+        assert!(entry.stands_for(&left));
+        assert!(!entry.stands_for(&again));
+
+        let manifest = QuarantineManifest::rebuild(&recorded(vec![switched, re_enforced]));
+        let entry = manifest.for_receipt("r-5").expect("the entry");
+        assert!(entry.stands_for(&again));
+        assert!(!entry.stands_for(&left));
+
+        // A neutralised line leaves a hash too, and is not a switch.
+        let mut neutralised = quarantine("r-6", "leak", &taken).leaving(&left);
+        neutralised.steps = vec![ReceiptStep::new(
+            Primitive::NeutraliseInPlace,
+            "/src/demo/.env",
+        )];
+        let manifest = QuarantineManifest::rebuild(&recorded(vec![neutralised]));
+        let entry = manifest.for_receipt("r-6").expect("the entry");
+        assert!(!entry.switched_in_place());
+        assert!(!entry.stands_for(&left));
     }
 
     #[test]

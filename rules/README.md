@@ -129,7 +129,7 @@ mcp       name, transport (stdio|http|sse), command, command_resolved, command_i
           header_keys[], header_keys_n, has_literal_authorization
 hook      event, matcher, type, command, command_resolved, command_file_type (rule 0014), url
 settings  key_path (dotted, array index as .N), value (string form), value_host,
-          trust_has_sessions (heuristic 0589)
+          trust_has_sessions, trust_stated (heuristic 0589)
 skill     name, allowed_tools[], allowed_tools_n, has_dynamic_context (heuristic 0584)
 plugin    name, name_reserved_distance, bin_names[], bin_names_n, has_monitors        (rules 0016, 0017)
 marketplace  name, owner, name_reserved_distance,
@@ -145,7 +145,7 @@ ExecPolicy, Workflow, InstructionFile and Generic have no view: rules on them ar
 
 `file_type` `executable` means a native executable (Mach-O, PE, ELF, a `.node` addon); `binary` is any other non-text file that is not an archive, office document, bytecode or image. An office document written as a ZIP container, which is what the newer formats are, reads as `archive`, and every rule that asks about one asks about both. Inside a tree the field is the scanned file's own, not the tree's, which is how rule 0015 asks whether *this* file of a skill is a native executable. `name_reserved_distance` is the edit distance from the name to the nearest reserved marketplace name (`claude-code-marketplace`, `claude-plugins-official`, `anthropic-plugins`, `agent-skills`).
 
-`trust_has_sessions` is true when the Agent holds session history for the project the entry is about: the project a `projects.<path>` key names, and otherwise the project a Project-scope entry belongs to. Claude Code answers it from the prompts its registry keeps for a directory and from the transcript folder `~/.claude/projects/<slug>` beside them, Codex from a session log recorded with that working directory. Neither Agent's trust table is an Item of its own, because its keys are absolute paths that no content hash can carry from one machine to the next, so heuristic 0589 reads the field on the configuration the trust made live rather than on the trust record.
+`trust_has_sessions` is true when the Agent holds session history for the project the entry is about: the project a `projects.<path>` key names, and otherwise the project a Project-scope entry belongs to. Claude Code answers it from the prompts its registry keeps for a directory and from the transcript folder `~/.claude/projects/<slug>` beside them, Codex from a session log recorded with that working directory. Neither Agent's trust table is an Item of its own, because its keys are absolute paths that no content hash can carry from one machine to the next, so heuristic 0589 reads the field on the configuration the trust made live rather than on the trust record. `trust_stated` is true when an adapter stated `trust_has_sessions` at all, which it does for a Project-scope entry and nowhere else; heuristic 0589 fires only where it is true, because a field nobody stated keeps its default false and would otherwise read as a project nobody worked in.
 
 `mcp.command_outside_root` is true when the resolved command lands outside the root the entry was read from: the plugin version directory for a plugin's own `.mcp.json`, the project root or a declared working directory for a project's. It is false when the entry has no root of its own, such as a user-scope server, and when nothing resolved.
 

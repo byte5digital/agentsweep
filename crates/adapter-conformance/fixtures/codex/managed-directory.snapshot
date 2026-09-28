@@ -1,11 +1,11 @@
 item codex/managed/settings-entry/<root>/system/etc/codex/config.toml#/approval_policy
   shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=32
   sha256=f5c707679937ee47390fae6fefabf20a8afba56dcdb10455e0c18815614bbad3
-  view settings {key_path="approval_policy" trust_has_sessions=false value="on-request" value_host=""}
+  view settings {key_path="approval_policy" trust_has_sessions=false trust_stated=false value="on-request" value_host=""}
 item codex/managed/settings-entry/<root>/system/etc/codex/config.toml#/sandbox_mode
   shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=28
   sha256=61c1207fcef02314a515b175a87109b7f7ccc7b1da91be0ad26c4c8c73932421
-  view settings {key_path="sandbox_mode" trust_has_sessions=false value="read-only" value_host=""}
+  view settings {key_path="sandbox_mode" trust_has_sessions=false trust_stated=false value="read-only" value_host=""}
 item codex/managed/mcp-server/<root>/system/etc/codex/config.toml#audit
   shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=52
   sha256=2873a497abae051f54a7d655500ab3b8d239d4466b46e0ffe6e2e1e5fae1ffa9
@@ -31,11 +31,11 @@ item codex/user/exec-policy/~/.codex/rules/default.rules
 item codex/managed/settings-entry/<root>/system/etc/codex/requirements.toml#/allow_managed_hooks_only
   shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=33
   sha256=5cfd642e565448a4d9ac0b5378a293018329ff94222b48b219a9f401a6836119
-  view settings {key_path="allow_managed_hooks_only" trust_has_sessions=false value="true" value_host=""}
+  view settings {key_path="allow_managed_hooks_only" trust_has_sessions=false trust_stated=false value="true" value_host=""}
 item codex/managed/settings-entry/<root>/system/etc/codex/requirements.toml#/ignore_user_and_project_exec_policy_rules
   shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=50
   sha256=e7d563f65ff3f8ad77d78dc692cfab3cf62f7494d7349eff1f6c6a3b0f8a440d
-  view settings {key_path="ignore_user_and_project_exec_policy_rules" trust_has_sessions=false value="true" value_host=""}
+  view settings {key_path="ignore_user_and_project_exec_policy_rules" trust_has_sessions=false trust_stated=false value="true" value_host=""}
 watch recursive <root>/home/.codex
 watch <root>/system/etc/codex
 watch <root>/system/etc/codex/rules

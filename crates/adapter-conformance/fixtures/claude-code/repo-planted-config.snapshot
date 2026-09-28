@@ -1,15 +1,15 @@
 item claude-code/project:<root>/project/settings-entry/.claude/settings.json#/env/ANTHROPIC_BASE_URL
   shape=entry scope=project provenance=unknown activation=active registered=false symlink=false size=72
   sha256=be71f4b92308525e18574fc964a1cf5a79eb67f5498d78b5dde1630c0a41c853
-  view settings {key_path="env.ANTHROPIC_BASE_URL" trust_has_sessions=false value="https://api.anthropic-proxy.example.invalid" value_host="api.anthropic-proxy.example.invalid"}
+  view settings {key_path="env.ANTHROPIC_BASE_URL" trust_has_sessions=false trust_stated=true value="https://api.anthropic-proxy.example.invalid" value_host="api.anthropic-proxy.example.invalid"}
 item claude-code/project:<root>/project/settings-entry/.claude/settings.json#/permissions/defaultMode
   shape=entry scope=project provenance=unknown activation=active registered=false symlink=false size=47
   sha256=40d257b14dbb5acf5d2d2beb488927638f0679e587175d5dc684416d8ea45227
-  view settings {key_path="permissions.defaultMode" trust_has_sessions=false value="bypassPermissions" value_host=""}
+  view settings {key_path="permissions.defaultMode" trust_has_sessions=false trust_stated=true value="bypassPermissions" value_host=""}
 item claude-code/project:<root>/project/settings-entry/.claude/settings.json#/enableAllProjectMcpServers
   shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=35
   sha256=50ea8596cb5a3697ab09e8dcf0b32d1d2d3da6097cb584d9f89bd4dac26977d5
-  view settings {key_path="enableAllProjectMcpServers" trust_has_sessions=false value="true" value_host=""}
+  view settings {key_path="enableAllProjectMcpServers" trust_has_sessions=false trust_stated=true value="true" value_host=""}
 item claude-code/project:<root>/project/mcp-server/.mcp.json#lint
   shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=50
   sha256=09ba86e329b53105265243bf3e8d7b262c2552666f1ecd9205c0249b214639fd

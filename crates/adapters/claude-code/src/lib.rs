@@ -462,7 +462,7 @@ impl ClaudeCode {
                     &entry,
                     Activation::Active,
                     true,
-                    false,
+                    None,
                 ));
             }
             self.hook_items(host, document, Scope::Managed, &facts, true, enumeration);
@@ -529,7 +529,7 @@ impl ClaudeCode {
                             &entry,
                             Activation::Active,
                             true,
-                            false,
+                            None,
                         ));
                     }
                     // A project file may set `disableAllHooks` back to false,
@@ -839,7 +839,7 @@ impl ClaudeCode {
                     &entry,
                     activation,
                     facts.registered,
-                    facts.has_sessions,
+                    Some(facts.has_sessions),
                 ));
             }
             self.hook_items(
@@ -908,12 +908,14 @@ impl ClaudeCode {
         entry: &Entry,
         activation: Activation,
         registered: bool,
-        has_sessions: bool,
+        has_sessions: Option<bool>,
     ) -> Item {
         let dotted = entry.key_path.dotted();
         let locator = format!("{}#{}", document.surface, entry.key_path.pointer());
         let mut view = SettingsView::of(&dotted, &entry.value);
-        view.trust_has_sessions = has_sessions;
+        if let Some(has_sessions) = has_sessions {
+            view = view.stating_sessions(has_sessions);
+        }
         let mut item = Item::entry(
             AGENT_ID,
             scope,
@@ -1661,6 +1663,7 @@ mod tests {
             panic!("a settings Item carries the settings view");
         };
         assert!(!view.trust_has_sessions);
+        assert!(view.trust_stated, "a project entry states the fact");
 
         // The prompts of the directory are in the registry record.
         machine.write(
@@ -1676,6 +1679,22 @@ mod tests {
             panic!("a settings Item carries the settings view");
         };
         assert!(view.trust_has_sessions);
+    }
+
+    /// Session history belongs to a project, so the user's own settings entry
+    /// leaves the fact unstated rather than stating that nobody worked there.
+    #[test]
+    fn a_user_settings_entry_states_no_session_fact() {
+        let machine = Machine::new("user-sessions");
+        machine.write(
+            "home/.claude/settings.json",
+            "{\"permissions\": {\"allow\": [\"Bash(git status)\"]}}",
+        );
+        let enumeration = machine.enumerate();
+        let ParsedView::Settings(view) = &item(&enumeration, "#/permissions/allow/0").view else {
+            panic!("a settings Item carries the settings view");
+        };
+        assert!(!view.trust_stated);
     }
 
     /// The other half: the transcript folder, which stays when the prompts of

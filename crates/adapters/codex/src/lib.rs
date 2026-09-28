@@ -295,9 +295,11 @@ struct Layer {
     /// True when the layer is the administrator's. Its hooks are pre-trusted
     /// and its Items are never AgentSweep's to touch.
     managed: bool,
-    /// True when Codex holds session history for the project this layer
-    /// belongs to, which is what `settings.trust_has_sessions` reports.
-    has_sessions: bool,
+    /// Whether Codex holds session history for the project this layer
+    /// belongs to, which is what `settings.trust_has_sessions` reports. Only a
+    /// project layer states it; a layer that is not a project's has no
+    /// session history to ask about.
+    has_sessions: Option<bool>,
 }
 
 /// What the layers above a project say about hooks, execution policy and
@@ -402,7 +404,7 @@ impl Codex {
                 folder: directory,
                 trusted: Some(true),
                 managed: true,
-                has_sessions: false,
+                has_sessions: None,
             });
         }
         if let Some(directory) = self.config_dir(host) {
@@ -412,7 +414,7 @@ impl Codex {
                 folder: directory.clone(),
                 trusted: Some(true),
                 managed: false,
-                has_sessions: false,
+                has_sessions: None,
             });
             for path in self.profile_files(host, &directory) {
                 let config = self.load(host, &Scope::User, &path, Kind::SettingsEntry, enumeration);
@@ -424,7 +426,7 @@ impl Codex {
                     folder: PathBuf::new(),
                     trusted: Some(true),
                     managed: false,
-                    has_sessions: false,
+                    has_sessions: None,
                 });
             }
         }
@@ -445,7 +447,7 @@ impl Codex {
                         folder: PathBuf::new(),
                         trusted: Some(true),
                         managed: true,
-                        has_sessions: false,
+                        has_sessions: None,
                     });
                 }
             }
@@ -609,7 +611,9 @@ impl Codex {
                 layer.activation()
             };
         let mut view = SettingsView::of(&dotted, &entry.value);
-        view.trust_has_sessions = layer.has_sessions;
+        if let Some(has_sessions) = layer.has_sessions {
+            view = view.stating_sessions(has_sessions);
+        }
         let mut item = Item::entry(
             AGENT_ID,
             layer.scope.clone(),
@@ -937,7 +941,7 @@ impl Codex {
             folder,
             trusted,
             managed: false,
-            has_sessions: registry.has_sessions(root),
+            has_sessions: Some(registry.has_sessions(root)),
         };
         // A trusted project may turn hooks off for its own sessions, and the
         // project denylist does not cover `features`.

@@ -793,14 +793,18 @@ pub struct SettingsView {
     /// True when the Agent holds session history for the project a trust entry
     /// names.
     pub trust_has_sessions: bool,
+    /// True when a Surface Adapter stated `trust_has_sessions`. The default
+    /// false of that field is then a fact rather than a fact nobody read.
+    pub trust_stated: bool,
 }
 
 impl SettingsView {
     /// The view of one settings key: its dotted path, its value in string form
     /// and, when the value is a URL, the host it points at.
     ///
-    /// `trust_has_sessions` stays at its default; only a Surface Adapter that
-    /// has read the Agent's own session store can answer it.
+    /// `trust_has_sessions` stays unstated; only a Surface Adapter that has
+    /// read the Agent's own session store can answer it, through
+    /// [`SettingsView::stating_sessions`].
     pub fn of(key_path: &str, value: &Value) -> SettingsView {
         let written = value_string(value);
         SettingsView {
@@ -808,7 +812,16 @@ impl SettingsView {
             value_host: url_host(&written),
             value: written,
             trust_has_sessions: false,
+            trust_stated: false,
         }
+    }
+
+    /// The same view with `trust_has_sessions` stated: whether the Agent
+    /// holds session history for the project the entry belongs to.
+    pub fn stating_sessions(mut self, has_sessions: bool) -> SettingsView {
+        self.trust_has_sessions = has_sessions;
+        self.trust_stated = true;
+        self
     }
 
     fn to_value(&self) -> Value {
@@ -817,6 +830,7 @@ impl SettingsView {
             "value": self.value,
             "value_host": self.value_host,
             "trust_has_sessions": self.trust_has_sessions,
+            "trust_stated": self.trust_stated,
         })
     }
 }

@@ -359,3 +359,70 @@ fn listing(root: &Path) -> Vec<String> {
     entries.sort();
     entries
 }
+
+/// The Heuristic ids that fired on one Item.
+fn noticed(pack: &RulePack, item: &Item) -> Vec<i64> {
+    let mut scanners = Scanners::new(pack);
+    scanners
+        .assess(item)
+        .expect("the detection ladder runs")
+        .fired
+        .iter()
+        .map(|heuristic| heuristic.id)
+        .collect()
+}
+
+/// Heuristic 0589 on a Codex project: the adapter states whether a session
+/// log was ever recorded in the project, and the Heuristic fires on the live
+/// project entry that states none. A session log in the project quiets it,
+/// and the user's own entry, which states nothing, stays quiet throughout.
+#[test]
+fn a_trusted_codex_project_nobody_has_worked_in_is_heuristic_0589() {
+    let pack = RulePack::bundled().expect("the bundled pack compiles");
+    // The system temporary directory is a place 0589 names on its own, so
+    // this machine lives in cargo's scratch directory for integration tests,
+    // where only the session fact decides.
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "agentsweep-codex-rules-sessions-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("project")).expect("a fake project root");
+    let machine = Machine { root };
+    let project = machine.root.join("project");
+    machine.write(
+        "home/.codex/config.toml",
+        &format!(
+            "approval_policy = \"on-request\"\n\n[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            project.display()
+        ),
+    );
+    machine.write(
+        "project/.codex/config.toml",
+        "approval_policy = \"on-request\"\n",
+    );
+
+    let fresh = machine.enumerate();
+    let entry = project_item(&fresh, "#/approval_policy");
+    let ParsedView::Settings(view) = &entry.view else {
+        panic!("a settings Item carries the settings view");
+    };
+    assert!(view.trust_stated, "a project entry states the fact");
+    assert!(!view.trust_has_sessions);
+    assert!(noticed(&pack, entry).contains(&589), "{entry:?}");
+
+    let user = item(&fresh, "~/.codex/config.toml#/approval_policy");
+    let ParsedView::Settings(view) = &user.view else {
+        panic!("a settings Item carries the settings view");
+    };
+    assert!(!view.trust_stated, "the user's own entry states nothing");
+    assert!(!noticed(&pack, user).contains(&589));
+
+    machine.write(
+        "home/.codex/sessions/2026/09/22/rollout-one.jsonl",
+        &format!("{{\"payload\":{{\"cwd\":\"{}\"}}}}\n", project.display()),
+    );
+    let worked_in = machine.enumerate();
+    let entry = project_item(&worked_in, "#/approval_policy");
+    assert!(!noticed(&pack, entry).contains(&589), "{entry:?}");
+}

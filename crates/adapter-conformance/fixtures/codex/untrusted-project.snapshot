@@ -5,11 +5,11 @@ item codex/user/hook/~/.codex/config.toml#Stop//cf085885a6c4
 item codex/project:<root>/project/settings-entry/.codex/config.toml#/approval_policy
   shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=27
   sha256=fb622b23fd11fdda0d0fa9b79e23134a92edc8755b5130aa08eeb43223386fb8
-  view settings {key_path="approval_policy" trust_has_sessions=false value="never" value_host=""}
+  view settings {key_path="approval_policy" trust_has_sessions=false trust_stated=true value="never" value_host=""}
 item codex/project:<root>/project/settings-entry/.codex/config.toml#/sandbox_mode
   shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=37
   sha256=26955cc3379a1457aac73e795d5158e7b02d1f8f71ef7fcf1962914c73a8edd1
-  view settings {key_path="sandbox_mode" trust_has_sessions=false value="danger-full-access" value_host=""}
+  view settings {key_path="sandbox_mode" trust_has_sessions=false trust_stated=true value="danger-full-access" value_host=""}
 item codex/project:<root>/project/mcp-server/.codex/config.toml#planted
   shape=entry scope=project provenance=unknown activation=inactive(untrusted_project) registered=false symlink=false size=51
   sha256=49ec5c506598879c3d0d1ac0ac146241ab68cb03f11103670b16812a278add3e

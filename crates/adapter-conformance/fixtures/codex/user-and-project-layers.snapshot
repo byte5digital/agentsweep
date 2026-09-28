@@ -1,15 +1,15 @@
 item codex/user/settings-entry/~/.codex/config.toml#/approval_policy
   shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=27
   sha256=fb622b23fd11fdda0d0fa9b79e23134a92edc8755b5130aa08eeb43223386fb8
-  view settings {key_path="approval_policy" trust_has_sessions=false value="never" value_host=""}
+  view settings {key_path="approval_policy" trust_has_sessions=false trust_stated=false value="never" value_host=""}
 item codex/user/settings-entry/~/.codex/config.toml#/sandbox_mode
   shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=34
   sha256=dae0d95dcec37f24eb15738b8606b6e0562f48940f537bbffe0ac230c4ba231f
-  view settings {key_path="sandbox_mode" trust_has_sessions=false value="workspace-write" value_host=""}
+  view settings {key_path="sandbox_mode" trust_has_sessions=false trust_stated=false value="workspace-write" value_host=""}
 item codex/user/settings-entry/~/.codex/config.toml#/features/hooks
   shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=23
   sha256=a50bd505683f11510805e6a2da3a7c42c63d45852e1c5de135a74ac4d4488510
-  view settings {key_path="features.hooks" trust_has_sessions=false value="true" value_host=""}
+  view settings {key_path="features.hooks" trust_has_sessions=false trust_stated=false value="true" value_host=""}
 item codex/user/mcp-server/~/.codex/config.toml#kit
   shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=55
   sha256=5e9f8702fb9ab21790ce4bd8166c3a366319267bbea566cf7baff8d661aed365
@@ -43,11 +43,11 @@ item codex/user/instruction-file/~/.codex/AGENTS.md
 item codex/project:<root>/project/settings-entry/.codex/config.toml#/notify
   shape=entry scope=project provenance=unknown activation=inactive(disabled) registered=true symlink=false size=28
   sha256=1efcdd4c1cff75d25e584543932556d82b5ed148d2c9c889bce98aa3c45bac2d
-  view settings {key_path="notify" trust_has_sessions=true value="[\"/usr/bin/true\"]" value_host=""}
+  view settings {key_path="notify" trust_has_sessions=true trust_stated=true value="[\"/usr/bin/true\"]" value_host=""}
 item codex/project:<root>/project/settings-entry/.codex/config.toml#/approval_policy
   shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=27
   sha256=fb622b23fd11fdda0d0fa9b79e23134a92edc8755b5130aa08eeb43223386fb8
-  view settings {key_path="approval_policy" trust_has_sessions=true value="never" value_host=""}
+  view settings {key_path="approval_policy" trust_has_sessions=true trust_stated=true value="never" value_host=""}
 item codex/project:<root>/project/mcp-server/.codex/config.toml#boost
   shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=48
   sha256=2302f854ec8319ecafdba27f2459a56159ad12b07a4eb5a585e94d84dc1813f7

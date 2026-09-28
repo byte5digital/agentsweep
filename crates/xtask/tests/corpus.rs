@@ -215,3 +215,41 @@ fn a_rule_that_fires_unnamed_still_fails_the_fixture() {
     assert!(!outcome.passed());
     assert!(outcome.report().contains("[2]"), "{}", outcome.report());
 }
+
+/// Heuristic 0589 reads a fact only a Surface Adapter that has read the
+/// Agent's own session store can state. A Fixture that does not state it is
+/// not a project nobody has worked in, so across the whole corpus the
+/// Heuristic fires only where a Fixture states the fact, and it fires on the
+/// Codex project entry that does.
+#[test]
+fn heuristic_0589_stays_quiet_on_every_fixture_that_does_not_state_the_session_fact() {
+    let pack = RulePack::bundled().expect("the bundled pack compiles");
+    let fixtures = corpus_fixtures();
+    let outcomes = corpus::run(&pack, &fixtures).expect("every fixture scans");
+
+    for (fixture, outcome) in fixtures.iter().zip(&outcomes) {
+        let stated = fixture
+            .globals
+            .iter()
+            .find(|(name, _)| *name == "settings")
+            .and_then(|(_, view)| view.get("trust_stated"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !stated {
+            assert!(
+                !outcome.fired.contains(&589),
+                "{} does not state the session fact and 0589 fired",
+                outcome.fixture
+            );
+        }
+    }
+
+    let codex = outcomes
+        .iter()
+        .find(|outcome| {
+            outcome.fixture
+                == "0589-trust-without-session-history/bad/codex-project-entry-nobody-has-worked-in"
+        })
+        .expect("the fixture is in the corpus");
+    assert!(codex.fired.contains(&589), "{}", codex.report());
+}

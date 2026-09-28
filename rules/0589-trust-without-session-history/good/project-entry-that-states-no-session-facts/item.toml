@@ -1,0 +1,22 @@
+# Near miss: a live project entry about which no adapter has stated whether the
+# Agent worked in the project. An absent fact is not a finding of no history,
+# so the Heuristic stays quiet, even in a temporary directory.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "project"
+project_root = "/private/tmp/review-2211"
+path = "/private/tmp/review-2211/.claude/settings.json"
+provenance = "repository"
+provenance_ref = "4b1d0ce"
+activation = "active"
+registered = true
+file_type = "text"
+
+[settings]
+key_path = "permissions.allow.0"
+value = "Bash(make *)"
+
+[expect]
+fire = []

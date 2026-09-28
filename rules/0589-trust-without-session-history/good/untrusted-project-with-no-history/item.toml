@@ -16,6 +16,7 @@ file_type = "text"
 key_path = "permissions.allow.0"
 value = "Bash(make *)"
 trust_has_sessions = false
+trust_stated = true
 
 [expect]
 fire = []

@@ -1,7 +1,7 @@
 item claude-code/user/settings-entry/~/.claude/settings.json#/enabledPlugins/notes@demo-marketplace
   shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=46
   sha256=8309f763673327ca6af4ae01176b68042470274201468d38b581d5ba6520e373
-  view settings {key_path="enabledPlugins.notes@demo-marketplace" trust_has_sessions=false value="true" value_host=""}
+  view settings {key_path="enabledPlugins.notes@demo-marketplace" trust_has_sessions=false trust_stated=false value="true" value_host=""}
 item claude-code/user/marketplace/demo-marketplace
   shape=tree scope=user provenance=marketplace activation=active registered=true symlink=false size=457
   sha256=919653ff8aa4df7f9d19fad9d0a0eeece08431b9be2d98d97ece4b05e1f74795

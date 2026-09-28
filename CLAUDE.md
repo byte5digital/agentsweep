@@ -7,7 +7,7 @@ AgentSweep scans the local configuration surfaces of Claude Code and Codex and q
 1. `CONTEXT.md`: the glossary. Use its capitalised terms (Item, Finding, Scan, Gate, ...) with exactly their meaning, in code names, comments and commits.
 2. `.scratch/agentsweep/spec.md`: the v1 specification. Read sections 1 to 4 for scope and the data model, then the sections your ticket names. The build plan is section 11.
 3. `rules/README.md`: the rule authoring contract and the struct-global schema ("What a rule sees").
-4. `docs/adr/`: ten architecture decision records. Respect them; propose a new ADR rather than working around one.
+4. `docs/adr/`: eleven architecture decision records. Respect them; propose a new ADR rather than working around one.
 5. `docs/research/`: the fact base. Facts are cited by file; decisions are never in there.
 
 `.scratch/` is gitignored working state. In a git worktree it is absent; symlink it from the main checkout.
@@ -33,7 +33,7 @@ Workflow per ticket: one branch `ticket/NN-slug`, `/implement` with the ticket p
 - Only T0 and T1 may quarantine automatically, only stable Rules, only eligible kinds. Everything else flags.
 - Nothing leaves the machine except the three disclosed requests (Rule Feed, update check, opt-in Claude API). No telemetry, no crash reporting.
 - Sensitive values (MCP env, headers, tokens, `.env` contents) are hashed in stores, redacted in output, never logged.
-- The daemon is the only writer of the Event Log, Baseline, verdict cache and state file, and the only process that touches the Keychain.
+- The daemon is the only writer of the Event Log, Baseline, verdict cache, state file and settings file, and the only process that touches the Keychain.
 - Fixtures and corpus samples are defanged: `.invalid` hosts, payloads that decode to `echo`.
 
 ## Conventions

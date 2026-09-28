@@ -1,4 +1,4 @@
-# Fixture for as_0903. A committed instruction file that tells the agent to carry a campaign's staging file along.
+# Near miss: an instruction file that names a listed file is not that file. Rule 0903 matches its list against file names and paths, never against content.
 [item]
 agent = "claude-code"
 kind = "InstructionFile"
@@ -13,4 +13,4 @@ registered = true
 file_type = "text"
 
 [expect]
-fire = [903]
+fire = []

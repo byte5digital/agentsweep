@@ -1,0 +1,20 @@
+# Near miss: a .gitignore that keeps TypeScript build info out of the repository names a listed file without being it.
+[item]
+agent = "claude-code"
+kind = "Skill"
+shape = "tree"
+scope = "user"
+path = "skills/typescript-checks"
+provenance = "manual"
+activation = "active"
+registered = true
+file_type = "text"
+
+[skill]
+name = "typescript-checks"
+allowed_tools = [""]
+allowed_tools_n = 0
+has_dynamic_context = false
+
+[expect]
+fire = []

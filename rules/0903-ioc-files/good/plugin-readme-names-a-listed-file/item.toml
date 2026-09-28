@@ -1,0 +1,22 @@
+# Near miss: a plugin README that warns about a campaign's dropped files names them without carrying them.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/supply-chain-check/1.0.0"
+provenance = "marketplace"
+provenance_ref = "supply-chain-check@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "supply-chain-check"
+name_reserved_distance = 16
+bin_names = [""]
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

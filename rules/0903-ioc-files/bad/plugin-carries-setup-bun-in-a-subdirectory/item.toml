@@ -1,0 +1,23 @@
+# Fixture for as_0903. A plugin tree that carries a campaign's loader two directories down, under a name the list holds.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/community-tools/formatter/2.1.0"
+provenance = "marketplace"
+provenance_ref = "formatter@community-tools"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "formatter"
+name_reserved_distance = 17
+bin_names = [""]
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = [903]
+files = ["scripts/runtime/setup_bun.js"]

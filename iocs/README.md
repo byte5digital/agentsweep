@@ -7,6 +7,6 @@ Plain-text indicator lists rendered into generated rules with fixed ids by the p
 | `hosts.txt` | `rules/0900-ioc-hosts` | the host as a case-insensitive whole word in any scanned bytes |
 | `ips.txt` | `rules/0901-ioc-ips` | the address as a whole word in any scanned bytes |
 | `packages.txt` | `rules/0902-ioc-packages` | `mcp.package` equal to the entry, or the entry as a whole word in command text |
-| `files.txt` | `rules/0903-ioc-files` | the file name as a path component in any scanned bytes or tree manifest |
+| `files.txt` | `rules/0903-ioc-files` | the file name as the last path component of the file of a tree or of the Item's own path, never the content: a `.gitignore` or README that names a listed file is not the file |
 
 Both the list and the generated `rule.yar` are committed. `cargo run -p agentsweep-xtask -- render-iocs` writes the rules from the lists, `--check` only reports a stale one, and `cargo test` fails when a committed rule is no longer what its list renders to. Generated rules are tier 1 threats, severity critical, and follow the same probation rule as any other. Sources for every entry are in `docs/research/attack-catalogue.md`, section 3, item 22. Entries below are defanged in the catalogue with `[.]`; here they are written plainly because they are matched, not linked.

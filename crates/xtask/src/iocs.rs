@@ -32,23 +32,27 @@ pub struct Generated {
     pub description: &'static str,
     /// The letter the patterns are named after.
     pub tag: char,
-    /// The pattern modifiers every entry carries.
+    /// The pattern modifiers every entry carries, when it is matched in the
+    /// bytes.
     pub modifiers: &'static str,
-    /// What the Rule checks besides the scanned bytes.
-    pub also: Also,
+    /// What an entry is matched against.
+    pub matched: Matched,
 }
 
-/// What a generated Rule checks besides the bytes under scan.
+/// What a generated Rule matches an entry against.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Also {
-    /// Nothing: the entry is matched in the bytes and nowhere else.
-    Nothing,
-    /// The package an MCP server entry installs, which is a view field and not
-    /// part of the bytes of every Item the entry reaches.
-    McpPackage,
-    /// The file of a tree the scan is on, which is how a dropped file is
-    /// caught when its own bytes say nothing.
-    TreeFile,
+pub enum Matched {
+    /// The bytes under scan and nothing else.
+    Bytes,
+    /// The bytes under scan, or the package an MCP server entry installs,
+    /// which is a view field and not part of the bytes of every Item the
+    /// entry reaches.
+    BytesOrMcpPackage,
+    /// The file of a tree the scan is on, or the path of the Item, and never
+    /// the bytes (owner decision 3 of 2026-09-28). A dropped file is caught
+    /// by its name when its own bytes say nothing, and a `.gitignore` or a
+    /// README that only names it is not the file.
+    NameOrPath,
 }
 
 /// Every kind a generated Rule scans: the "text" column of the v1 Rule list.
@@ -67,7 +71,7 @@ pub const GENERATED: [Generated; 4] = [
         description: "Exact host names taken from published incident reports (iocs/hosts.txt). Regenerated on every pack build.",
         tag: 'h',
         modifiers: "nocase fullword",
-        also: Also::Nothing,
+        matched: Matched::Bytes,
     },
     Generated {
         id: 901,
@@ -79,7 +83,7 @@ pub const GENERATED: [Generated; 4] = [
         description: "Exact addresses taken from published incident reports (iocs/ips.txt). An address that only contains an entry, such as one digit longer, is not a whole word and stays silent. Regenerated on every pack build.",
         tag: 'i',
         modifiers: "fullword",
-        also: Also::Nothing,
+        matched: Matched::Bytes,
     },
     Generated {
         id: 902,
@@ -91,7 +95,7 @@ pub const GENERATED: [Generated; 4] = [
         description: "Package names taken from published incident reports (iocs/packages.txt), matched as a whole word in the bytes under scan and against the package an MCP server entry installs. A longer name that merely starts with an entry is not a whole word and stays silent. Regenerated on every pack build.",
         tag: 'p',
         modifiers: "fullword",
-        also: Also::McpPackage,
+        matched: Matched::BytesOrMcpPackage,
     },
     Generated {
         id: 903,
@@ -100,10 +104,11 @@ pub const GENERATED: [Generated; 4] = [
         title: "File name dropped by a known campaign",
         kinds: TEXT_KINDS,
         plain: "This item carries a file that a known attack campaign drops.",
-        description: "File names taken from published incident reports (iocs/files.txt), matched as a path component in the bytes under scan and against the file of a tree the scan is on, which is what catches a dropped file whose own bytes say nothing. A longer name that merely ends with an entry, such as tsconfig.tsbuildinfo, is not a path component and stays silent. Regenerated on every pack build.",
+        description: "File names taken from published incident reports (iocs/files.txt), matched as the last path component of the file of a tree the scan is on or of the Item's own path, which is what catches a dropped file whose own bytes say nothing. The content is never read: a .gitignore or a README that names a listed file is not that file and stays silent, and so does a longer name that merely ends with an entry, such as tsconfig.tsbuildinfo. Regenerated on every pack build.",
         tag: 'f',
-        modifiers: "fullword",
-        also: Also::TreeFile,
+        // No pattern is rendered: the entries are matched against names only.
+        modifiers: "",
+        matched: Matched::NameOrPath,
     },
 ];
 
@@ -185,6 +190,22 @@ impl Generated {
             rule.push_str(&format!("    {key:<11} = {value}\n"));
         }
 
+        if self.matched == Matched::NameOrPath {
+            // A path component: the whole name at the end of the file of a
+            // tree or of the Item's path, so tsconfig.tsbuildinfo is not
+            // .tsbuildinfo.
+            rule.push_str("\n  condition:");
+            for (index, entry) in entries.iter().enumerate() {
+                let component = format!("/(^|\\/){}$/", escaped(entry));
+                rule.push_str(if index == 0 { "\n    " } else { "\n    or " });
+                rule.push_str(&format!(
+                    "item.file matches {component}\n    or item.path matches {component}"
+                ));
+            }
+            rule.push_str("\n}\n");
+            return rule;
+        }
+
         rule.push_str("\n  strings:\n");
         for (index, entry) in entries.iter().enumerate() {
             rule.push_str(&format!(
@@ -196,20 +217,9 @@ impl Generated {
         }
 
         rule.push_str("\n  condition:\n    any of them");
-        match self.also {
-            Also::Nothing => {}
-            Also::McpPackage => {
-                for entry in entries {
-                    rule.push_str(&format!("\n    or mcp.package == {}", quoted(entry)));
-                }
-            }
-            Also::TreeFile => {
-                for entry in entries {
-                    rule.push_str(&format!(
-                        "\n    or item.file matches /(^|\\/){}$/",
-                        escaped(entry)
-                    ));
-                }
+        if self.matched == Matched::BytesOrMcpPackage {
+            for entry in entries {
+                rule.push_str(&format!("\n    or mcp.package == {}", quoted(entry)));
             }
         }
         rule.push_str("\n}\n");
@@ -280,5 +290,36 @@ mod tests {
         assert!(rule.contains("    id          = 900\n"));
         assert!(rule.contains("    $h0 = \"host.example.invalid\" nocase fullword\n"));
         assert!(rule.ends_with("  condition:\n    any of them\n}\n"));
+    }
+
+    /// A file name is matched against the file of a tree and the path of the
+    /// Item, never against the bytes: a `.gitignore` or a README that names a
+    /// listed file is not that file (owner decision 3).
+    #[test]
+    fn a_file_name_list_renders_into_path_conditions_and_no_pattern() {
+        let files = GENERATED
+            .iter()
+            .find(|generated| generated.id == 903)
+            .expect("rule 0903");
+        let rule = files.render(&[".tsbuildinfo".to_string(), "setup_bun.js".to_string()]);
+        assert!(!rule.contains("strings:"), "{rule}");
+        assert!(!rule.contains("any of them"), "{rule}");
+        assert!(
+            rule.ends_with(
+                "  condition:\n    item.file matches /(^|\\/)\\.tsbuildinfo$/\n    or item.path matches /(^|\\/)\\.tsbuildinfo$/\n    or item.file matches /(^|\\/)setup_bun\\.js$/\n    or item.path matches /(^|\\/)setup_bun\\.js$/\n}\n"
+            ),
+            "{rule}"
+        );
+    }
+
+    /// Only the file name list changed how it matches; hosts, addresses and
+    /// packages keep matching the bytes under scan.
+    #[test]
+    fn the_other_lists_keep_matching_content() {
+        for generated in GENERATED.iter().filter(|generated| generated.id != 903) {
+            let rule = generated.render(&["entry".to_string()]);
+            assert!(rule.contains("  strings:\n"), "{rule}");
+            assert!(rule.contains("  condition:\n    any of them"), "{rule}");
+        }
     }
 }

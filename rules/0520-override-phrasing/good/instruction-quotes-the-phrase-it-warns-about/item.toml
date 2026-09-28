@@ -1,0 +1,16 @@
+# Near miss: anti-injection guidance that quotes the phrases it warns about. A phrase inside quotation marks or a code span is named, not given.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = []

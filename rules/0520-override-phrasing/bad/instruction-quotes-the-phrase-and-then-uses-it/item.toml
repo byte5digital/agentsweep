@@ -1,0 +1,16 @@
+# Fixture for as_0520. The phrase is quoted once as if it were only named, and then given unquoted on the same line.
+[item]
+agent = "claude-code"
+kind = "InstructionFile"
+shape = "file"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "CLAUDE.md"
+provenance = "repository"
+provenance_ref = "0badc0ffee"
+activation = "active"
+registered = true
+file_type = "text"
+
+[expect]
+fire = [520]

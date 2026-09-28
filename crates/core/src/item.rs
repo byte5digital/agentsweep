@@ -992,6 +992,52 @@ fn is_under(relative: &str, directory: &str) -> bool {
     components.contains(&directory)
 }
 
+/// The names, compared without their extension, case and the difference
+/// between a hyphen and an underscore, of the documents a tree carries for
+/// its human readers. Neither Agent loads one of them as instructions.
+const DOCUMENT_NAMES: [&str; 12] = [
+    "readme",
+    "changelog",
+    "changes",
+    "history",
+    "license",
+    "licence",
+    "copying",
+    "notice",
+    "contributing",
+    "code_of_conduct",
+    "security",
+    "authors",
+];
+
+/// The directories of a plugin whose every Markdown file Claude Code loads as
+/// a command or an agent definition, whatever the file is called.
+const INSTRUCTION_DIRECTORIES: [&str; 2] = ["commands", "agents"];
+
+/// True when one file of a tree is a document for the tree's human readers
+/// rather than something an Agent loads as instructions: a README, a licence,
+/// a changelog and their kin, wherever they sit in the tree, unless they sit
+/// in a directory whose every file is a command or an agent definition.
+///
+/// A skill's SKILL.md and the files it points to, a plugin's commands, agents,
+/// hooks and scripts, and an instruction file are never documents. An empty
+/// path, which is every unit outside a tree, is never one either. Rule 0001
+/// reads this as `item.file_is_document`, so a README that documents
+/// `curl | bash` for its human reader is not a planted command.
+pub fn is_document(relative: &str) -> bool {
+    let mut components: Vec<&str> = relative.split('/').collect();
+    let name = components.pop().unwrap_or_default();
+    if components
+        .iter()
+        .any(|directory| INSTRUCTION_DIRECTORIES.contains(directory))
+    {
+        return false;
+    }
+    let stem = name.split('.').next().unwrap_or_default();
+    let stem = stem.to_ascii_lowercase().replace('-', "_");
+    DOCUMENT_NAMES.contains(&stem.as_str())
+}
+
 /// The facts a Surface Adapter derives from an Item's bytes. Rules never
 /// compute them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1394,6 +1440,42 @@ mod tests {
         let manifest = String::from_utf8(tree.manifest()).expect("utf-8");
         assert!(manifest.contains("scripts/build.sh 21 644 "), "{manifest}");
         assert!(!manifest.contains(".git"), "{manifest}");
+    }
+
+    /// A README, a licence or a changelog is a document for the tree's human
+    /// readers, wherever it sits; an Agent never loads one as instructions.
+    /// A command or an agent definition is loaded whatever it is called, and
+    /// a unit outside any tree is never a document.
+    #[test]
+    fn a_readme_in_a_tree_is_a_document_and_an_instruction_file_is_not() {
+        for document in [
+            "README.md",
+            "external_plugins/discord/README.md",
+            "readme",
+            "LICENSE",
+            "LICENCE.txt",
+            "CHANGELOG.md",
+            "docs/CONTRIBUTING.md",
+            "CODE-OF-CONDUCT.md",
+            "SECURITY.md",
+        ] {
+            assert!(is_document(document), "{document} is a document");
+        }
+        for instruction in [
+            "",
+            "SKILL.md",
+            "CLAUDE.md",
+            "setup-installation.md",
+            "references/api.md",
+            "commands/readme.md",
+            "plugins/demo/agents/README.md",
+            "hooks/hooks.json",
+            "scripts/install.sh",
+            ".readme",
+            "READMEFIRST.md",
+        ] {
+            assert!(!is_document(instruction), "{instruction} is not a document");
+        }
     }
 
     /// Rule 0015 asks whether one file of a Skill is a native executable, so

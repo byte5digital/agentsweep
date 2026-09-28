@@ -7,6 +7,11 @@
 //! anywhere else; [`crate::derived`] rebuilds both. The Event Log is never
 //! compacted.
 //!
+//! A change of the Rule Pack in force is a record too, of its own kind
+//! (`rule-pack`, [`RulePackRecord`]) rather than an action: the Activity reads
+//! the withdrawn Rules and the Findings they took with them from it, and the
+//! derived views pass it by.
+//!
 //! Sensitive values never appear in a record. MCP environment variables,
 //! headers, tokens and the contents of an env file reach a record only through
 //! [`Redacted`], which has no constructor that takes a value without hashing
@@ -1354,5 +1359,31 @@ mod tests {
         let activity = view.pack_activity();
         assert_eq!(activity.len(), 4);
         assert!(activity.iter().all(|(sequence, _, _)| *sequence == 1));
+    }
+
+    /// Compacting the Baseline anchors itself in the Event Log and leaves
+    /// every record already there, the changes of the Rule Pack included.
+    #[test]
+    fn a_baseline_compaction_keeps_every_pack_change_in_the_event_log() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let data = DataDirectory::at(directory.path());
+        let log = EventLog::in_data_directory(&data);
+        let keys = MemoryKeySource::empty();
+        {
+            let (mut writer, _) = EventLogWriter::open(&log, &keys).expect("an open log");
+            writer
+                .record_rule_pack(&a_pack_change())
+                .expect("an appended pack change");
+        }
+        let retention = crate::baseline::Retention::of(std::collections::BTreeSet::new());
+        crate::baseline::compact(&data, &keys, &retention, Timestamp::now())
+            .expect("the Baseline compacts");
+
+        let view = log.read(&keys).expect("a readable log");
+        assert_eq!(view.state, ChainState::Intact);
+        assert_eq!(view.rule_packs.len(), 1);
+        assert_eq!(view.rule_packs[0].record, a_pack_change());
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].event.action, Action::BaselineCompacted);
     }
 }

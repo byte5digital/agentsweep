@@ -28,7 +28,7 @@ use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::evaluation::EvaluationCache;
 use agentsweep_core::finding::{Finding, FindingId};
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
-use agentsweep_core::item::{ItemId, Scope};
+use agentsweep_core::item::Scope;
 use agentsweep_core::keychain::{KeySource, MemoryKeySource};
 use agentsweep_core::packs::{LoadedPack, PackOrigin, PackStore, Verdict, judge};
 use agentsweep_core::paths::DataDirectory;
@@ -777,14 +777,10 @@ impl Daemon {
             .iter()
             .map(|root| Scope::Project(root.clone()).id_segment())
             .collect();
-        let referenced: BTreeSet<ItemId> = self
-            .state
-            .lock()
-            .expect("the state is not poisoned")
-            .open()
-            .map(|finding| finding.item_id.clone())
-            .collect();
-        let retention = Retention::of(live).referring_to(referenced);
+        // Only an open Threat Finding keeps a record compaction would drop
+        // otherwise, because only a Threat Finding holds the accepted hash.
+        let retention = Retention::of(live)
+            .held_by(self.state.lock().expect("the state is not poisoned").open());
 
         let baseline = agentsweep_core::baseline::Baseline::in_data_directory(&self.directory);
         let Ok(view) = baseline.read(&*self.keys) else {

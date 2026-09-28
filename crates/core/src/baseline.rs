@@ -25,9 +25,11 @@ use serde_json::{Map, Value};
 use crate::chain::{Chain, ChainError, ChainState};
 use crate::coverage::{Coverage, CoverageKey, CoverageRecord};
 use crate::envelope::{ChainId, RecordKind, Timestamp};
+use crate::finding::Category;
 use crate::item::{Item, ItemId, Kind, Shape, sha256_hex};
 use crate::keychain::KeySource;
 use crate::paths::DataDirectory;
+use crate::state::RecordedFinding;
 
 /// What moved the accepted hash to where it stands.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -802,8 +804,9 @@ pub struct Retention {
     /// coverage of a project root that left every registry are dropped; a root
     /// that comes back bootstraps as `none`.
     pub live_roots: BTreeSet<String>,
-    /// The Items an open Finding refers to. No compaction ever drops one of
-    /// them, whatever else it drops.
+    /// The Items an open Threat Finding refers to. No compaction ever drops
+    /// one of them, whatever else it drops. An Exposure does not hold the
+    /// Baseline and keeps no record either (spec section 4.6.4 as amended).
     pub referenced: BTreeSet<ItemId>,
 }
 
@@ -830,10 +833,22 @@ impl Retention {
         }
     }
 
-    /// The same, with the Items an open Finding stands on named.
+    /// The same, with the Items an open Threat Finding stands on named.
     pub fn referring_to(mut self, referenced: BTreeSet<ItemId>) -> Retention {
         self.referenced = referenced;
         self
+    }
+
+    /// The same, with the Items named that the open Threat Findings among
+    /// these stand on. Only a Threat Finding holds the accepted hash, so only
+    /// a Threat Finding keeps a record compaction would drop otherwise.
+    pub fn held_by<'f>(self, findings: impl IntoIterator<Item = &'f RecordedFinding>) -> Retention {
+        let referenced = findings
+            .into_iter()
+            .filter(|finding| finding.is_open() && finding.category == Category::Threat)
+            .map(|finding| finding.item_id.clone())
+            .collect();
+        self.referring_to(referenced)
     }
 
     /// True when this record survives a compaction run at this moment.
@@ -1055,6 +1070,9 @@ mod tests {
     use super::*;
     use crate::coverage::CoverageKey;
     use crate::eventlog::{Action, EventLog};
+    use crate::finding::{
+        Category, Finding, FindingId, FindingState, RuleStatus, Severity, Source, Standing, Tier,
+    };
     use crate::item::{Activation, Provenance, Scope, canonical_entry};
     use crate::keychain::{ChainKey, MemoryKeySource};
 
@@ -1412,10 +1430,76 @@ mod tests {
         assert!(!view.carried_over());
     }
 
+    /// Only an open Threat Finding keeps a record compaction would drop
+    /// otherwise: the record behind a standing Exposure goes with everything
+    /// else that has been gone for more than ninety days, and so does the
+    /// record behind a Threat Finding that no longer stands.
+    #[test]
+    fn compaction_keeps_a_record_only_while_a_threat_finding_refers_to_it() {
+        let accepted = moment("2026-01-01T09:00:00.000Z");
+        let gone = moment("2026-06-01T09:00:00.000Z");
+        let threatened = user_file("threatened.md");
+        let exposed = user_file("exposed.md");
+        let stopped = user_file("stopped.md");
+
+        let mut view = BaselineView::none();
+        for item in [&threatened, &exposed, &stopped] {
+            let record = BaselineRecord::accepting(item, accepted, AcceptedBy::CleanScan);
+            view.records.insert(item.id.clone(), record.absent(gone));
+        }
+        let findings = [
+            recorded(&threatened, Category::Threat, FindingState::Open),
+            recorded(&exposed, Category::Exposure, FindingState::Open),
+            recorded(&stopped, Category::Threat, FindingState::Stopped),
+        ];
+
+        let live: BTreeSet<String> = ["user".to_string()].into_iter().collect();
+        let retention = Retention::of(live).held_by(findings.iter());
+        let plan = CompactionPlan::of(&view, &retention, moment("2026-09-24T09:00:00.000Z"));
+
+        let kept: Vec<&ItemId> = plan.keep.iter().map(|record| &record.item_id).collect();
+        assert_eq!(kept, [&threatened.id], "{:?}", plan.dropped);
+        assert!(
+            plan.dropped.contains(&exposed.id),
+            "an Exposure keeps nothing"
+        );
+        assert!(
+            plan.dropped.contains(&stopped.id),
+            "a stopped Threat keeps nothing"
+        );
+    }
+
+    /// One Finding as the state file records it, on one Item.
+    fn recorded(item: &Item, category: Category, state: FindingState) -> RecordedFinding {
+        let finding = Finding {
+            item_id: item.id.clone(),
+            source: Source::Rule(1),
+            content_hash: item.content_hash.clone(),
+            category,
+            severity: Severity::High,
+            tier: Tier::Rules,
+            status: RuleStatus::Probation,
+            title: "A Finding".to_string(),
+            plain: "A Finding.".to_string(),
+            sensitive: false,
+            file: String::new(),
+            matches: Vec::new(),
+            heuristics: Vec::new(),
+            drift: None,
+        };
+        let standing = Standing {
+            id: FindingId::of(&finding),
+            finding,
+            state,
+            receipt_id: String::new(),
+        };
+        RecordedFinding::of(&standing, moment("2026-09-01T09:00:00.000Z"))
+    }
+
     /// Spec section 4.6.6: compaction writes a fresh chain of what is still
     /// worth keeping and anchors the old head and the new one in the Event
     /// Log. It drops what a record is kept for no longer, and never a record
-    /// an open Finding refers to.
+    /// an open Threat Finding refers to.
     #[test]
     fn compaction_drops_what_is_kept_for_no_longer_and_anchors_both_heads() {
         let home = TempDir::new().expect("a temporary data directory");

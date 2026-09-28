@@ -213,6 +213,11 @@ fn scan_of_a_folder_reports_its_findings_and_writes_nothing() {
     assert!(printed.contains("Do not open yet."), "{printed}");
     assert!(printed.contains("Nothing was recorded."), "{printed}");
     assert!(printed.contains("Drift unavailable"), "{printed}");
+    assert!(
+        printed.contains("Checked with Rule Pack ")
+            && printed.contains(", the one bundled with this build."),
+        "{printed}"
+    );
     assert!(!printed.contains("ghp_0000"), "{printed}");
     assert_eq!(listing(folder.path()), before, "the Folder Scan wrote");
 }

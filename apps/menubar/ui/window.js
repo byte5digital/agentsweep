@@ -179,7 +179,7 @@ function renderFolder(view) {
   $("folder-root").textContent = view.root;
   if (view.state !== "done") {
     $("folder-verdict").textContent = view.line;
-    for (const id of ["folder-summary", "folder-ambiguous", "folder-recorded"]) {
+    for (const id of ["folder-summary", "folder-ambiguous", "folder-recorded", "folder-pack"]) {
       $(id).textContent = "";
     }
     $("folder-cards").replaceChildren();
@@ -189,6 +189,7 @@ function renderFolder(view) {
   $("folder-summary").textContent = view.summary;
   $("folder-ambiguous").textContent = view.ambiguous;
   $("folder-recorded").textContent = view.recorded;
+  $("folder-pack").textContent = view.rulePack;
   $("folder-cards").replaceChildren(...view.findings.map(renderCard));
 }
 

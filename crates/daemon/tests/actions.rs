@@ -1212,6 +1212,9 @@ fn a_folder_scan_on_request_answers_and_records_nothing() {
     assert_eq!(found.verdict(), "Do not open yet.");
     assert_eq!(found.findings.len(), 1, "{found:?}");
     assert_eq!(found.findings[0].finding.source, "rule 0001");
+    // The result names the Rule Pack in force, the one Health names.
+    assert_eq!(found.rule_pack, sandbox.status().health.rule_pack);
+    assert!(found.rule_pack > 0);
     assert!(
         found.findings[0]
             .finding

@@ -1032,7 +1032,7 @@ impl Daemon {
             // and records nothing.
             Request::Folder { path } => {
                 let pack = self.pack_in_force();
-                crate::folder_scan::folder_scan(&pack.rules, path).map(|result| result.to_value())
+                crate::folder_scan::folder_scan(&pack, path).map(|result| result.to_value())
             }
             // Everything else acts, and is carried out where acting lives.
             _ => self.act(request),

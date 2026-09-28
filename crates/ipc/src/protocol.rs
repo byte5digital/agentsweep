@@ -1148,6 +1148,10 @@ pub struct FolderScanResult {
     pub ambiguous: usize,
     /// Every Finding, a Problem included, in the order the Items were found.
     pub findings: Vec<FolderFinding>,
+    /// The version of the Rule Pack in force that judged the folder. The
+    /// in-process `agentsweep scan <dir>` uses the bundled pack instead, so
+    /// the two may answer differently, and each names the pack it used.
+    pub rule_pack: u64,
 }
 
 impl FolderScanResult {
@@ -1193,6 +1197,7 @@ impl FolderScanResult {
         );
         map.insert("items".to_string(), Value::from(self.items as u64));
         map.insert("root".to_string(), Value::from(self.root.as_str()));
+        map.insert("rule_pack".to_string(), Value::from(self.rule_pack));
         Value::Object(map)
     }
 
@@ -1219,6 +1224,7 @@ impl FolderScanResult {
             items: value.get("items")?.as_u64()? as usize,
             ambiguous: value.get("ambiguous")?.as_u64()? as usize,
             findings,
+            rule_pack: value.get("rule_pack")?.as_u64()?,
         })
     }
 }
@@ -1793,6 +1799,7 @@ mod tests {
             items: 3,
             ambiguous: 1,
             findings: Vec::new(),
+            rule_pack: 4,
         };
         assert!(clear.is_safe());
         assert_eq!(clear.verdict(), SAFE_TO_OPEN);
@@ -1806,6 +1813,7 @@ mod tests {
                 finding: recorded(FindingState::Open, Category::Threat, "rule 0001", 1),
                 heuristics: vec!["0501  weight 2  It downloads something.".to_string()],
             }],
+            rule_pack: 4,
         };
         assert!(!found.is_safe());
         assert_eq!(found.verdict(), DO_NOT_OPEN_YET);

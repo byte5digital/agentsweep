@@ -4,6 +4,11 @@
 //! Quarantine, no daemon: the whole pass runs in this process and writes not
 //! one byte. Its answer is "safe to open" or "do not open yet" (spec section
 //! 8.9).
+//!
+//! It judges with the Rule Pack bundled in this binary, never a fetched one,
+//! and says which version that is: the daemon's Folder Scan uses the pack in
+//! force, so the two may answer differently and the version tells why. Both
+//! build variants embed the same bundled pack, so they print the same line.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -19,6 +24,7 @@ use agentsweep_core::host::Host;
 #[cfg(test)]
 use agentsweep_core::item::BaselineState;
 use agentsweep_core::item::TreeCaps;
+use agentsweep_core::pack::Manifest;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::{ScanReport, scan_enumeration};
 
@@ -116,6 +122,11 @@ pub fn render(root: &Path, report: &ScanReport) -> String {
     }
     let _ = writeln!(out, "Nothing was recorded.");
     let _ = writeln!(out, "{DRIFT_UNAVAILABLE}");
+    let _ = writeln!(
+        out,
+        "Checked with Rule Pack {}, the one bundled with this build.",
+        Manifest::bundled().pack_version
+    );
     out
 }
 
@@ -367,6 +378,15 @@ mod tests {
 
         assert!(rendered.contains("Drift unavailable"), "{rendered}");
         assert!(rendered.contains("Nothing was recorded."), "{rendered}");
+        // The pass names the Rule Pack it used, which is always the bundled
+        // one: the daemon's Folder Scan may use a newer pack in force.
+        let bundled = agentsweep_core::pack::Manifest::bundled().pack_version;
+        assert!(
+            rendered.contains(&format!(
+                "Checked with Rule Pack {bundled}, the one bundled with this build."
+            )),
+            "{rendered}"
+        );
 
         // Every Item this pass yields carries `none`, which is never Drift.
         let (_, enumeration, _) =

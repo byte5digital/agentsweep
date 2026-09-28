@@ -350,6 +350,15 @@ fn a_folder_scan_from_the_window_answers_and_records_nothing() {
     assert_eq!(view["recorded"], "Nothing was recorded.");
     assert_eq!(view["findings"][0]["source"], "rule 0001");
     assert_eq!(view["findings"][0]["name"], "CLAUDE.md");
+    // The result names the Rule Pack in force, the one Health names.
+    assert_eq!(result.rule_pack, before.health.rule_pack);
+    assert_eq!(
+        view["rulePack"],
+        format!(
+            "Checked with Rule Pack {}, the one in force.",
+            before.health.rule_pack
+        )
+    );
 
     let after = asking.status().expect("a status");
     assert_eq!(after.findings, before.findings);

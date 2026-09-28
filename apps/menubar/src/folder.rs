@@ -4,7 +4,9 @@
 //!
 //! The wording is the command line interface's for `agentsweep scan <dir>`,
 //! less the line about Drift: that line says the in-process pass reaches no
-//! daemon, and this one was the daemon's. Placeholder otherwise.
+//! daemon, and this one was the daemon's. It names the Rule Pack in force that
+//! judged the folder, because the command line interface uses the bundled
+//! pack and the two may answer differently. Placeholder otherwise.
 
 use agentsweep_ipc::protocol::{FolderScanResult, NOTHING_RECORDED};
 use serde_json::{Value, json};
@@ -31,6 +33,7 @@ pub fn result_view(result: &FolderScanResult) -> Value {
             ),
         },
         "recorded": NOTHING_RECORDED,
+        "rulePack": format!("Checked with Rule Pack {}, the one in force.", result.rule_pack),
         "findings": result
             .findings
             .iter()
@@ -80,12 +83,17 @@ mod tests {
                 finding: finding.clone(),
                 heuristics: vec!["0501  weight 2  It downloads something.".to_string()],
             }],
+            rule_pack: 3,
         };
         let view = result_view(&result);
         assert_eq!(view["verdict"], "Do not open yet.");
         assert_eq!(view["safe"], false);
         assert_eq!(view["summary"], "2 Items, 1 Finding.");
         assert_eq!(view["recorded"], "Nothing was recorded.");
+        assert_eq!(
+            view["rulePack"],
+            "Checked with Rule Pack 3, the one in force."
+        );
         assert_eq!(
             view["ambiguous"],
             "1 Item in the Ambiguous Band, nothing to do."
@@ -109,6 +117,7 @@ mod tests {
             items: 1,
             ambiguous: 0,
             findings: Vec::new(),
+            rule_pack: 3,
         };
         let view = result_view(&result);
         assert_eq!(view["verdict"], "Safe to open.");

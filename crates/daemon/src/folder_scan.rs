@@ -5,7 +5,9 @@
 //! `agentsweep scan <dir>`: the folder as the one project root of a Host with
 //! no home, the workspace adapter's Provenance stamped onto what the Claude
 //! Code and Codex adapters find there, and the Tiers over it. It runs under
-//! the daemon's file access with the Rule Pack in force, on the connection
+//! the daemon's file access with the Rule Pack in force, whose version the
+//! result names because the in-process pass uses the bundled pack and the two
+//! may answer differently, on the connection
 //! that asked, beside whatever Scan is running (a Folder Scan may run
 //! concurrently). It reads and judges and records nothing: no Baseline, no
 //! Trust, no Quarantine, no state file, no Event Log, not even a state event.
@@ -23,13 +25,13 @@ use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::finding::{FindingId, FindingState, FiredHeuristic, Standing};
 use agentsweep_core::host::Host;
-use agentsweep_core::rules::RulePack;
+use agentsweep_core::packs::LoadedPack;
 use agentsweep_core::scan::scan_enumeration;
 use agentsweep_core::state::RecordedFinding;
 use agentsweep_ipc::protocol::{FolderFinding, FolderScanResult, RequestError};
 
 /// Runs a Folder Scan of `path` with `pack`, recording nothing.
-pub fn folder_scan(pack: &RulePack, path: &str) -> Result<FolderScanResult, RequestError> {
+pub fn folder_scan(pack: &LoadedPack, path: &str) -> Result<FolderScanResult, RequestError> {
     let root = folder_root(path)?;
 
     let began = Instant::now();
@@ -45,7 +47,7 @@ pub fn folder_scan(pack: &RulePack, path: &str) -> Result<FolderScanResult, Requ
     enumeration.extend(Codex::new().enumerate(&host, roots));
     provenances.stamp(&mut enumeration);
 
-    let report = scan_enumeration(pack, &enumeration)
+    let report = scan_enumeration(&pack.rules, &enumeration)
         .map_err(|error| RequestError::new("failed", format!("the Folder Scan failed: {error}")))?;
 
     let now = Timestamp::now();
@@ -81,6 +83,7 @@ pub fn folder_scan(pack: &RulePack, path: &str) -> Result<FolderScanResult, Requ
             .filter(|assessment| assessment.awaits_judgement())
             .count(),
         findings,
+        rule_pack: pack.manifest.pack_version,
     })
 }
 
@@ -114,11 +117,13 @@ fn line_of(heuristic: &FiredHeuristic) -> String {
 mod tests {
     use super::*;
 
+    use agentsweep_core::pack::Manifest;
+
     /// The bundled pack, compiled once for the module: compiling it is the
     /// slow part of a debug build's test.
-    fn pack() -> &'static RulePack {
-        static PACK: std::sync::OnceLock<RulePack> = std::sync::OnceLock::new();
-        PACK.get_or_init(|| RulePack::bundled().expect("the bundled pack"))
+    fn pack() -> &'static LoadedPack {
+        static PACK: std::sync::OnceLock<LoadedPack> = std::sync::OnceLock::new();
+        PACK.get_or_init(|| LoadedPack::bundled().expect("the bundled pack"))
     }
 
     fn temporary(name: &str) -> std::path::PathBuf {
@@ -155,6 +160,7 @@ mod tests {
         let result = folder_scan(pack(), root.to_str().expect("a path")).expect("a result");
         assert!(result.is_safe(), "{result:?}");
         assert_eq!(result.items, 1);
+        assert_eq!(result.rule_pack, Manifest::bundled().pack_version);
         std::fs::remove_dir_all(&root).expect("the temporary folder goes away");
     }
 

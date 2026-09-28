@@ -805,6 +805,24 @@ mod tests {
             .expect("a writable home");
         }
 
+        /// One settings key committed to the project, as the adapter's
+        /// declaration table would yield it from the project's own settings
+        /// file.
+        fn project_setting(&self, key_path: &str, value: Value) {
+            let path = self.project().join(".claude").join("settings.json");
+            std::fs::create_dir_all(self.project().join(".claude")).expect("a writable home");
+            let mut written = match std::fs::read(&path) {
+                Ok(bytes) => serde_json::from_slice::<Value>(&bytes).expect("readable settings"),
+                Err(_) => json!({}),
+            };
+            written[key_path] = value;
+            std::fs::write(
+                &path,
+                serde_json::to_vec(&written).expect("a writable value"),
+            )
+            .expect("a writable home");
+        }
+
         fn plugins_dir(&self) -> PathBuf {
             self.home.path().join(".claude").join("plugins")
         }
@@ -940,6 +958,27 @@ mod tests {
                         &format!("~/.claude/settings.json#{key}"),
                         settings.clone(),
                         Provenance::Manual,
+                        Activation::Active,
+                        canonical_entry(&json!({ key.clone(): value.clone() })),
+                    )
+                    .with_view(ParsedView::Settings(SettingsView::of(&key, &value)));
+                    enumeration.items.push(item);
+                }
+            }
+
+            let project_settings = self.project().join(".claude").join("settings.json");
+            if let Ok(bytes) = host.read(&project_settings) {
+                let parsed: Value = serde_json::from_slice(&bytes).expect("readable settings");
+                for (key, value) in parsed.as_object().cloned().unwrap_or_default() {
+                    let item = Item::entry(
+                        "claude-code",
+                        Scope::Project(self.project()),
+                        Kind::SettingsEntry,
+                        &format!(".claude/settings.json#{key}"),
+                        project_settings.clone(),
+                        Provenance::Repository {
+                            commit: "9".repeat(40),
+                        },
                         Activation::Active,
                         canonical_entry(&json!({ key.clone(): value.clone() })),
                     )
@@ -1814,6 +1853,53 @@ mod tests {
         // configuration, 0581 everything else, and never both on one Item.
         assert!(!fired(&second, "mcpServers/tracker").contains(&581));
         assert!(!fired(&second, "CLAUDE.md").contains(&580));
+    }
+
+    /// A settings entry outside User Scope is 0581's, as every other kind
+    /// outside the four of 0580 is: a project settings entry whose content
+    /// changed since the Baseline is carried, and the user's own settings
+    /// entry stays 0580's alone. Two Scans over a real Baseline chain.
+    #[test]
+    fn a_changed_project_settings_entry_fires_the_item_changed_heuristic() {
+        let host = FakeHost::new();
+        host.project_setting("model", json!("sonnet"));
+        host.setting("statusLine", json!({"command": "/opt/tools/status"}));
+        let mut plan = CoveragePlan::new();
+        plan.covers("claude-code", &Scope::User, Kind::SettingsEntry);
+        plan.covers(
+            "claude-code",
+            &Scope::Project(host.project()),
+            Kind::SettingsEntry,
+        );
+        let daemon = Daemon::new();
+
+        let project_entry = ".claude/settings.json#model";
+        let (first, _) = daemon.scan_with(&host, "2026-09-24T09:00:00.000Z", &plan);
+        assert!(
+            !fired(&first, project_entry).contains(&581),
+            "an Item first seen without coverage is never Drift"
+        );
+
+        host.project_setting("model", json!("opus"));
+        host.setting("statusLine", json!({"command": "/opt/tools/other-status"}));
+        let (second, _) = daemon.scan_with(&host, "2026-09-24T10:00:00.000Z", &plan);
+
+        assert_eq!(
+            (
+                state_of(&second, project_entry),
+                state_of(&second, "~/.claude/settings.json#statusLine")
+            ),
+            (BaselineState::Changed, BaselineState::Changed)
+        );
+        let project = fired(&second, project_entry);
+        assert!(
+            project.contains(&581),
+            "a project settings entry changed: {project:?}"
+        );
+        assert!(!project.contains(&580), "{project:?}");
+        let user = fired(&second, "~/.claude/settings.json#statusLine");
+        assert!(user.contains(&580), "{user:?}");
+        assert!(!user.contains(&581), "{user:?}");
     }
 
     /// The Baseline heuristics stay silent on content a known action stands

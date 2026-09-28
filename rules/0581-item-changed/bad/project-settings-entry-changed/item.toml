@@ -1,0 +1,23 @@
+# Fixture for as_0581. A settings key committed to the project is not the one
+# AgentSweep accepted. Outside User Scope a settings entry is this Heuristic's,
+# so the change is carried rather than falling between 0580 and 0581.
+[item]
+agent = "claude-code"
+kind = "SettingsEntry"
+shape = "entry"
+scope = "project"
+project_root = "/Users/example/src/demo"
+path = "/Users/example/src/demo/.claude/settings.json"
+provenance = "repository"
+provenance_ref = "4f21c8ade0b9"
+activation = "active"
+registered = true
+baseline = "changed"
+file_type = "text"
+
+[settings]
+key_path = "model"
+value = "opus"
+
+[expect]
+fire = [581]

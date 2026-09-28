@@ -1,0 +1,5 @@
+{
+  "name": "chat-bridge",
+  "version": "0.1.0",
+  "description": "Relay messages between a chat channel and the current session."
+}

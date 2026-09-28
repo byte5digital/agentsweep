@@ -17,7 +17,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use agentsweep_core::item::{FileFacts, Kind};
+use agentsweep_core::item::{FileFacts, Kind, is_document};
 use agentsweep_core::views::Views;
 use serde_json::{Number, Value};
 
@@ -174,6 +174,8 @@ impl Fixture {
     /// same way is what lets a tree Fixture hold a binary beside a SKILL.md
     /// and have each read as what it is; what `item.toml` states about them is
     /// the Item's own fact, which is what a file or an entry Fixture uses.
+    /// `file_is_document` is the same kind of per file fact, read off the
+    /// file's place in the tree the way the core reads it.
     pub fn globals_for(&self, unit: &Unit) -> Vec<(&'static str, Value)> {
         let mut globals = self.globals.clone();
         let tree = self.shape() == "tree";
@@ -200,6 +202,11 @@ impl Fixture {
                 view,
                 "max_blank_run",
                 Value::Number(Number::from(facts.max_blank_run)),
+            );
+            set(
+                view,
+                "file_is_document",
+                Value::Bool(is_document(&unit.file)),
             );
         }
         globals
@@ -447,6 +454,39 @@ mod tests {
                 .expect("the item view");
             assert_eq!(item["file"], Value::String(unit.file.clone()));
         }
+    }
+
+    #[test]
+    fn a_readme_in_a_tree_fixture_reads_as_a_document_and_its_neighbours_do_not() {
+        let fixture = load(
+            "0001-decode-pipe-exec",
+            false,
+            "plugin-readme-documents-an-install",
+        )
+        .expect("the fixture loads");
+        let flags: Vec<(String, Value)> = fixture
+            .units
+            .iter()
+            .map(|unit| {
+                let globals = fixture.globals_for(unit);
+                let (_, item) = globals
+                    .iter()
+                    .find(|(name, _)| *name == "item")
+                    .expect("the item view");
+                (unit.file.clone(), item["file_is_document"].clone())
+            })
+            .collect();
+        assert!(
+            flags.contains(&("README.md".to_string(), Value::Bool(true))),
+            "{flags:?}"
+        );
+        assert!(
+            flags
+                .iter()
+                .filter(|(file, _)| file != "README.md")
+                .all(|(_, flag)| *flag == Value::Bool(false)),
+            "{flags:?}"
+        );
     }
 
     #[test]

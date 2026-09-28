@@ -1,0 +1,22 @@
+# Near miss: a plugin README that tells its human reader to install a runtime with a fetch piped into a shell, as two plugins of the official marketplace do. No Agent loads a README as instructions, and the command the plugin does ship is quiet.
+[item]
+agent = "claude-code"
+kind = "Plugin"
+shape = "tree"
+scope = "user"
+path = ".claude/plugins/cache/claude-plugins-official/chat-bridge/0.1.0"
+provenance = "marketplace"
+provenance_ref = "chat-bridge@claude-plugins-official"
+activation = "active"
+registered = true
+file_type = "text"
+
+[plugin]
+name = "chat-bridge"
+name_reserved_distance = 17
+bin_names = [""]
+bin_names_n = 0
+has_monitors = false
+
+[expect]
+fire = []

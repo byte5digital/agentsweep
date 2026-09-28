@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
+use agentsweep_core::adapter::{Enumeration, SurfaceAdapter, eligibility};
 use agentsweep_core::derived::{QuarantineEntry, QuarantineManifest};
 use agentsweep_core::drift::{AcknowledgeError, Acknowledgement};
 use agentsweep_core::enforcement::{Cause, Enforcement, FIXABLE_EXPOSURES, may_quarantine};
@@ -40,7 +40,7 @@ use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::eventlog::{Actor, EventLog, Outcome, Primitive, ReceiptStep};
 use agentsweep_core::finding::{Category, Finding, FindingState, RuleStatus, Severity, Source};
 use agentsweep_core::host::Host;
-use agentsweep_core::item::{Item, ItemId, Kind, Scope, Shape};
+use agentsweep_core::item::{Activation, InactiveReason, Item, ItemId, Kind, Scope, Shape};
 use agentsweep_core::keychain::KeySource;
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::quarantine::{Conflict, EnforcementError, Receipt, ReceiptId};
@@ -133,6 +133,21 @@ pub fn moves_other_items(kind: Option<Kind>) -> bool {
     matches!(kind, Some(Kind::Plugin | Kind::Marketplace))
 }
 
+/// True when a write about an Item of this kind is compared before and after:
+/// the composites of [`moves_other_items`], and the kinds whose Quarantine may
+/// be the Agent's own switch alone, which flips a record in a config layer
+/// other Items are read from (a hook's state, a skill's config entry).
+pub fn compares_before_and_after(kind: Option<Kind>) -> bool {
+    moves_other_items(kind) || kind.is_some_and(|kind| eligibility(kind).switch_first)
+}
+
+/// True when this Item is still what a switch-only Quarantine left: switched
+/// off where it stands. It is quarantined for as long as that holds, and only
+/// the switch coming back on is a reappearance.
+fn still_switched_off(entry: &QuarantineEntry, item: &Item) -> bool {
+    entry.switched_in_place() && item.activation == Activation::Inactive(InactiveReason::Disabled)
+}
+
 /// The adapter that yields Items of this agent id.
 pub fn adapter_for(agent: &str) -> Option<Box<dyn SurfaceAdapter>> {
     adapters()
@@ -205,13 +220,19 @@ pub fn act_in_scan(
     let host = acting.host();
 
     for item in &enumeration.items {
-        // The Receipt that took exactly this content out, the latest one where
-        // the user quarantined it again after it kept coming back.
+        // The Receipt that took exactly this content out, or switched it off
+        // where it stands, the latest one where the user quarantined it again
+        // after it kept coming back.
         let held = manifest
             .entries()
-            .filter(|entry| entry.item_id == item.id && entry.content_hash == item.content_hash)
+            .filter(|entry| entry.item_id == item.id && entry.stands_for(&item.content_hash))
             .max_by_key(|entry| entry.quarantined_at);
         if let Some(entry) = held {
+            // Switched off and still off: the Quarantine holds, and there is
+            // nothing to do. Only the switch coming back on is a return.
+            if still_switched_off(entry, item) {
+                continue;
+            }
             reappeared(
                 acting,
                 directory,
@@ -245,7 +266,7 @@ pub fn act_in_scan(
                 .sessions
                 .get_or_insert_with(|| acting.sessions())
                 .running;
-            let before = match moves_other_items(Some(item.kind)) {
+            let before = match compares_before_and_after(Some(item.kind)) {
                 true => acting.entries_now(),
                 false => BTreeMap::new(),
             };
@@ -332,7 +353,7 @@ fn reappeared<'k>(
         .sessions
         .get_or_insert_with(|| acting.sessions())
         .running;
-    let before = match moves_other_items(Some(item.kind)) {
+    let before = match compares_before_and_after(Some(item.kind)) {
         true => acting.entries_now(),
         false => BTreeMap::new(),
     };
@@ -613,7 +634,7 @@ impl Daemon {
             drift: finding.source == "drift",
             sessions_running: sessions.running,
         };
-        let before = match moves_other_items(Some(item.kind)) {
+        let before = match compares_before_and_after(Some(item.kind)) {
             true => acting.entries_now(),
             false => BTreeMap::new(),
         };
@@ -627,11 +648,25 @@ impl Daemon {
         drop(enforcement);
 
         let receipt_id = receipt.id.to_string();
-        self.settle(|recorded| stop(recorded, &item.id, &item.content_hash, &receipt_id));
-        let mut message = format!(
-            "Quarantined the {}. `agentsweep restore {receipt_id}` puts it back.",
-            named(Some(item.kind), item.id.as_str())
-        );
+        let switched = receipt.switched_in_place();
+        self.settle(|recorded| {
+            let stopped = stop(recorded, &item.id, &item.content_hash, &receipt_id);
+            if stopped {
+                recorded.switched = switched;
+            }
+            stopped
+        });
+        let mut message = match switched {
+            true => format!(
+                "Switched the {} off with the Agent's own switch; it stays where it is and is \
+                 not loaded. `agentsweep restore {receipt_id}` switches it back on.",
+                named(Some(item.kind), item.id.as_str())
+            ),
+            false => format!(
+                "Quarantined the {}. `agentsweep restore {receipt_id}` puts it back.",
+                named(Some(item.kind), item.id.as_str())
+            ),
+        };
         if item.id.is_project() {
             message = format!("{message} {PROJECT_LINE}");
         }
@@ -728,7 +763,7 @@ impl Daemon {
             roots: &roots,
         };
         let sessions = acting.sessions();
-        let before = match moves_other_items(entry.kind) {
+        let before = match compares_before_and_after(entry.kind) {
             true => acting.entries_now(),
             false => BTreeMap::new(),
         };
@@ -1143,6 +1178,20 @@ mod tests {
         assert!(!moves_other_items(None));
     }
 
+    /// A switch alone flips a record in a config layer other Items are read
+    /// from, so a write about a kind that may be switched off is compared
+    /// before and after as well.
+    #[test]
+    fn a_kind_that_may_be_switched_off_is_compared_before_and_after() {
+        for kind in [Kind::McpServer, Kind::Hook, Kind::Skill, Kind::Plugin] {
+            assert!(compares_before_and_after(Some(kind)), "{kind}");
+        }
+        for kind in [Kind::SettingsEntry, Kind::InstructionFile, Kind::EnvFile] {
+            assert!(!compares_before_and_after(Some(kind)), "{kind}");
+        }
+        assert!(!compares_before_and_after(None));
+    }
+
     #[test]
     fn an_item_named_by_id_means_its_rule_finding_first() {
         let rule = RecordedFinding {
@@ -1175,6 +1224,7 @@ mod tests {
             drift: String::new(),
             receipt_id: String::new(),
             fixed_version: String::new(),
+            switched: false,
             first_seen: Timestamp::now(),
             notified_at: None,
         }

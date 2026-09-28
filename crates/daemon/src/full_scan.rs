@@ -18,13 +18,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use agentsweep_core::adapter::{Descriptor, Enumeration, SurfaceAdapter, WatchRoots};
+use agentsweep_core::adapter::{Descriptor, Enumeration, SWITCH_ONLY, SurfaceAdapter, WatchRoots};
 use agentsweep_core::baseline::{Baseline, BaselineWriter};
 use agentsweep_core::chain::{ChainError, ChainState};
 use agentsweep_core::coverage::CoveragePlan;
 use agentsweep_core::derived::QuarantineEntry;
 use agentsweep_core::derived::{KnownActions, QuarantineManifest, TrustTable};
 use agentsweep_core::drift::Declarations;
+use agentsweep_core::enforcement::primitives_for;
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::evaluation::{Evaluations, NoCache};
 use agentsweep_core::eventlog::{Action, EventLog};
@@ -105,6 +106,9 @@ pub struct ScanRun {
     /// The newer, clean version found for each quarantined plugin, by the
     /// Receipt that stopped it, which is what offers Re-enable.
     pub fixed_versions: BTreeMap<String, String>,
+    /// The Findings whose Quarantine switches the Item off where it stands,
+    /// or did, which is what labels its pair of actions.
+    pub switched: BTreeSet<FindingId>,
 }
 
 /// What a Scan reports as it goes.
@@ -239,6 +243,7 @@ impl FullScan<'_> {
             last_compaction: judged.last_compaction,
             acted: judged.acted,
             fixed_versions: judged.fixed_versions,
+            switched: judged.switched,
         })
     }
 }
@@ -386,6 +391,8 @@ pub struct Judged {
     pub acted: ScanActions,
     /// The newer, clean version of each quarantined plugin, by Receipt.
     pub fixed_versions: BTreeMap<String, String>,
+    /// The Findings whose Quarantine is, or was, the Agent's own switch alone.
+    pub switched: BTreeSet<FindingId>,
 }
 
 /// Reading the stores, running one pass and writing what it decided.
@@ -543,6 +550,7 @@ impl Judgement<'_> {
         }
         withdrawn(&mut standing, self.pack);
         let fixed_versions = fixed_versions(&quarantined, enumeration, &raised);
+        let switched = switched(&standing, &quarantined, enumeration, self.acting);
 
         let bands = count_bands(&outcome);
         let summary = ScanSummary {
@@ -581,6 +589,7 @@ impl Judgement<'_> {
                 .next_back(),
             acted,
             fixed_versions,
+            switched,
         })
     }
 }
@@ -675,6 +684,43 @@ fn stopped_by(entry: &QuarantineEntry, pack: &RulePack) -> Standing {
         state: FindingState::Stopped,
         receipt_id: entry.receipt_id.clone(),
     }
+}
+
+/// The Findings whose Quarantine is the Agent's own switch alone: a stopped
+/// one whose Receipt switched the Item off in place, and an open one on an
+/// Item the adapter would switch off rather than take out, asked of the file
+/// as it stands. Nothing is written; it only decides how the pair of actions
+/// reads.
+fn switched(
+    standing: &[Standing],
+    quarantined: &QuarantineManifest,
+    enumeration: &Enumeration,
+    acting: Option<&Acting<'_>>,
+) -> BTreeSet<FindingId> {
+    let host = acting.map(Acting::host);
+    let mut switched = BTreeSet::new();
+    for placed in standing {
+        let by_receipt = quarantined
+            .for_receipt(&placed.receipt_id)
+            .map(QuarantineEntry::switched_in_place);
+        let flips = match (by_receipt, &host) {
+            (Some(done), _) => done,
+            (None, Some(host)) => enumeration
+                .items
+                .iter()
+                .find(|item| item.id == placed.finding.item_id)
+                .and_then(|item| {
+                    let adapter = crate::actions::adapter_for(&item.agent)?;
+                    primitives_for(&*adapter, host, item).ok()
+                })
+                .is_some_and(|primitives| primitives == SWITCH_ONLY),
+            (None, None) => false,
+        };
+        if flips {
+            switched.insert(placed.id.clone());
+        }
+    }
+    switched
 }
 
 /// The newer version of each quarantined plugin that this Scan found and

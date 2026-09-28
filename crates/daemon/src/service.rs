@@ -650,6 +650,7 @@ impl Daemon {
                 if let Some(fixed) = run.fixed_versions.get(&recorded.receipt_id) {
                     recorded.fixed_version = fixed.clone();
                 }
+                recorded.switched = run.switched.contains(&recorded.id);
                 recorded
             }));
 

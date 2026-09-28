@@ -2,8 +2,8 @@
 //!
 //! It runs as a user-level launch agent, watches the Surfaces, runs the three
 //! Scan kinds and is the only process that writes the Event Log, the Baseline,
-//! the verdict cache and the state file, and the only one that touches the
-//! Keychain (spec section 6.2). This crate is the only one that turns the
+//! the verdict cache, the state file and the settings file, and the only one
+//! that touches the Keychain (spec section 6.2). This crate is the only one that turns the
 //! core's `daemon` feature on, so the write side of the chains exists in this
 //! binary and in no other.
 //!
@@ -18,7 +18,8 @@
 //! bad during a Scan, and takes out again what keeps coming back. It asks the
 //! Rule Feed at start and once a day, verifies a newer Rule Pack against the
 //! keys pinned in the binary and puts it in force for every Tier, with the
-//! Full Scan a new pack brings.
+//! Full Scan a new pack brings. The Rule Feed toggle is kept in the settings
+//! file, which a rebuilt state file leaves alone.
 //!
 //! The binary is a few lines around [`run`]; everything else is here so that a
 //! test can start a daemon against a temporary home, a temporary data

@@ -20,6 +20,7 @@ use std::time::Duration;
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::eventlog::{Action, Actor, EventLog};
 use agentsweep_core::finding::{FindingState, RULE_WITHDRAWN_GONE, RULE_WITHDRAWN_STOPPED};
+use agentsweep_core::health::{SETTINGS_UNREADABLE, StateFileHealth};
 use agentsweep_core::keychain::{ChainKey, KeyError, KeySource, MemoryKeySource};
 use agentsweep_core::pack::{Bands, MANIFEST_FILE, Manifest, PACK_TREES};
 use agentsweep_core::pack_archive::{self, ARCHIVE_FILE};
@@ -948,6 +949,95 @@ fn the_fetch_is_one_request_with_no_identifiers_and_none_when_the_toggle_is_off(
             .any(|note| note.starts_with("The rule feed is off")),
         "{:?}",
         daemon.daemon().health().notes()
+    );
+}
+
+/// The toggle is a choice the user made and lives in the settings file, so a
+/// state file that is lost or tampered with and rebuilt takes nothing of it
+/// along: the feed stays off and no request is made, not even at start.
+#[test]
+fn switching_the_feed_off_survives_a_lost_or_tampered_state_file() {
+    let sandbox = Sandbox::with_a_planted_skill("settings");
+    let feed = FeedServer::start();
+    feed.offer_index(1);
+    {
+        let _daemon = sandbox.start(&feed, true);
+        assert!(until(|| feed.seen().len() == 1), "the fetch at start");
+        assert!(!sandbox.client().set_rule_feed(false).expect("the toggle"));
+    }
+    let settings = std::fs::read(sandbox.data().settings_file()).expect("a settings file");
+    std::fs::remove_file(sandbox.data().state_file()).expect("the state file goes");
+
+    {
+        let daemon = sandbox.start(&feed, true);
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            daemon.daemon().health().state_file,
+            StateFileHealth::Missing
+        );
+        assert!(!daemon.daemon().rule_feed_enabled());
+        assert!(!sandbox.client().rule_feed().expect("the toggle"));
+        assert!(!sandbox.status().health.rule_feed);
+        assert_eq!(feed.seen().len(), 1, "no request with the toggle off");
+    }
+
+    let state = sandbox.data().state_file();
+    let mut tampered: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&state).expect("a rebuilt state file"))
+            .expect("a state file");
+    tampered["state"]["readable_classes"] = serde_json::json!(["documents"]);
+    std::fs::write(&state, tampered.to_string()).expect("a tampered state file");
+    let daemon = sandbox.start(&feed, true);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        daemon.daemon().health().state_file,
+        StateFileHealth::Rebuilt
+    );
+    assert!(!daemon.daemon().rule_feed_enabled());
+    assert_eq!(feed.seen().len(), 1, "no request with the toggle off");
+    assert_eq!(
+        std::fs::read(sandbox.data().settings_file()).expect("the settings file"),
+        settings,
+        "a rebuilt state file leaves the settings alone"
+    );
+}
+
+/// A settings file with a syntax error is reported in Health, every default is
+/// in force, and the daemon does not write over the file.
+#[test]
+fn a_settings_file_with_a_syntax_error_raises_the_notice_and_is_left_alone() {
+    let sandbox = Sandbox::with_a_planted_skill("broken-settings");
+    let broken = b"{\n  \"rule_feed\": false,,\n}\n".to_vec();
+    std::fs::write(sandbox.data().settings_file(), &broken).expect("a broken settings file");
+    let feed = FeedServer::start();
+    feed.offer_index(1);
+
+    let daemon = sandbox.start(&feed, true);
+    assert!(
+        daemon.daemon().rule_feed_enabled(),
+        "the default is in force"
+    );
+    assert!(
+        until(|| feed.seen().len() == 1),
+        "the fetch the default makes"
+    );
+    let health = sandbox.status().health;
+    assert!(health.settings_unreadable);
+    assert!(
+        health.notes().contains(&SETTINGS_UNREADABLE.to_string()),
+        "{:?}",
+        health.notes()
+    );
+    assert!(
+        health.headline().starts_with("All clear"),
+        "{}",
+        health.headline()
+    );
+    assert_eq!(daemon.daemon().fetch_rule_feed(), FeedOutcome::Unchanged);
+    assert_eq!(
+        std::fs::read(sandbox.data().settings_file()).expect("the settings file"),
+        broken,
+        "the file is not rewritten"
     );
 }
 

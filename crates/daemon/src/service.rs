@@ -34,6 +34,7 @@ use agentsweep_core::packs::{LoadedPack, PackOrigin, PackStore, Verdict, judge};
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::{BACKGROUND_WORKERS, ScanKind, on_demand_workers};
+use agentsweep_core::settings::{Settings, SettingsError, SettingsFile, SettingsWriter};
 use agentsweep_core::state::{RecordedFinding, State, StateFile, StateWriter, Trigger};
 use agentsweep_ipc::peer::PeerCheck;
 use agentsweep_ipc::protocol::{
@@ -167,6 +168,9 @@ pub struct Daemon {
     tuning: Tuning,
     /// The cached derivation, which is what a client is answered out of.
     pub(crate) state: Mutex<State>,
+    /// The user's choices, as the settings file holds them, or every default
+    /// while that file cannot be read.
+    settings: Mutex<Settings>,
     /// Every state a client is shown, by the precedence of spec section 6.6.
     pub(crate) health: Mutex<Health>,
     /// Held by whatever writes the Event Log or the Baseline: a Scan from
@@ -312,7 +316,8 @@ impl Daemon {
             .endpoints
             .clone()
             .or_else(|| (!options.is_developer_run()).then(Endpoints::github));
-        let pack = pack_at_start(&directory, &bundled, &mut state);
+        let (settings, settings_unreadable) = settings_at_start(&directory, &*keys, &mut state);
+        let pack = pack_at_start(&directory, &bundled, &mut state, settings.rule_feed);
         let now = (tuning.due.now)();
 
         let health = Health {
@@ -321,6 +326,7 @@ impl Daemon {
             baseline,
             projects_need_permission: 0,
             state_file,
+            settings_unreadable,
             scanning: false,
             last_full_scan: state.last_full_scan,
             items: state.last_scan().map(|scan| scan.items).unwrap_or_default(),
@@ -328,9 +334,9 @@ impl Daemon {
             rule_pack: pack.manifest.pack_version,
             rule_pack_origin: pack.origin,
             rules_released_at: pack.manifest.released_at.clone(),
-            rule_feed: state.feed.enabled,
+            rule_feed: settings.rule_feed,
             ignored_pack: state.feed.ignored.clone(),
-            feed_unreachable: match state.feed.enabled {
+            feed_unreachable: match settings.rule_feed {
                 true => Health::feed_unreachable_at(state.feed.unreachable_since, now),
                 false => None,
             },
@@ -343,6 +349,7 @@ impl Daemon {
             check,
             tuning,
             state: Mutex::new(state),
+            settings: Mutex::new(settings),
             health: Mutex::new(health),
             writing: Mutex::new(()),
             raised: Mutex::new(Vec::new()),
@@ -1044,6 +1051,46 @@ pub enum FeedOutcome {
     Unreachable(String),
 }
 
+/// The user's choices at start, and whether the settings file could not be
+/// read.
+///
+/// A missing settings file means every default, unless the state file is one
+/// written before the settings file existed and still carries the Rule Feed
+/// toggle: that toggle is taken over into a new settings file, once, and the
+/// state file is written again without it. A settings file that cannot be read
+/// back is left as it is and every default is in force, which Health reports.
+fn settings_at_start(
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+    state: &mut State,
+) -> (Settings, bool) {
+    let file = SettingsFile::in_data_directory(directory);
+    match file.read() {
+        Ok(settings) => (settings, false),
+        Err(SettingsError::Missing) => {
+            let Some(rule_feed) = state.legacy_rule_feed.take() else {
+                return (Settings::default(), false);
+            };
+            let settings = Settings { rule_feed };
+            match SettingsWriter::write(&file, &settings) {
+                Ok(()) => {
+                    say!("the Rule Feed toggle moved from the state file to the settings file");
+                    let state_file = StateFile::in_data_directory(directory);
+                    if let Err(error) = StateWriter::write(&state_file, keys, state) {
+                        say!("the cached state could not be written: {error}");
+                    }
+                }
+                Err(error) => say!("the settings file could not be written: {error}"),
+            }
+            (settings, false)
+        }
+        Err(error) => {
+            say!("every setting is at its default and the settings file is left as it is: {error}");
+            (Settings::default(), true)
+        }
+    }
+}
+
 /// The Rule Pack in force at start: the stored one when the feed is on and
 /// the stored pack verifies and beats the bundled one, the bundled one
 /// otherwise. A stored pack that fails verification is discarded, never
@@ -1052,6 +1099,7 @@ fn pack_at_start(
     directory: &DataDirectory,
     bundled: &Arc<LoadedPack>,
     state: &mut State,
+    feed_on: bool,
 ) -> Arc<LoadedPack> {
     // A pack that was ignored for needing a newer AgentSweep is asked for
     // again once this binary is new enough: the validators go, so the next
@@ -1066,7 +1114,7 @@ fn pack_at_start(
         state.feed.etag.clear();
         state.feed.last_modified.clear();
     }
-    if !state.feed.enabled {
+    if !feed_on {
         return Arc::clone(bundled);
     }
     let store = PackStore::in_data_directory(directory);
@@ -1106,11 +1154,10 @@ fn pack_at_start(
 impl Daemon {
     /// Whether the Rule Feed toggle is on.
     pub fn rule_feed_enabled(&self) -> bool {
-        self.state
+        self.settings
             .lock()
-            .expect("the state is not poisoned")
-            .feed
-            .enabled
+            .expect("the settings are not poisoned")
+            .rule_feed
     }
 
     /// Moves the Rule Feed toggle and answers with where it stands.
@@ -1120,11 +1167,26 @@ impl Daemon {
     /// Full Scan any change of pack brings. The stored pack stays on disk, so
     /// switching the feed on again puts it back in force without a request.
     /// On asks the feed at once, after the jitter.
+    ///
+    /// The toggle is written to the settings file, which a rebuilt state file
+    /// leaves alone. A settings file that could not be read is written over
+    /// here and only here: the user has just made the choice it holds.
     pub fn set_rule_feed(self: &Arc<Daemon>, enabled: bool) -> bool {
         let _switching = self.switching.lock().expect("the switch is not poisoned");
+        let written = {
+            let mut settings = self.settings.lock().expect("the settings are not poisoned");
+            settings.rule_feed = enabled;
+            let file = SettingsFile::in_data_directory(&self.directory);
+            match SettingsWriter::write(&file, &settings) {
+                Ok(()) => true,
+                Err(error) => {
+                    say!("the settings file could not be written: {error}");
+                    false
+                }
+            }
+        };
         {
             let mut state = self.state.lock().expect("the state is not poisoned");
-            state.feed.enabled = enabled;
             if !enabled {
                 state.feed.ignored = None;
                 state.feed.unreachable_since = None;
@@ -1132,6 +1194,9 @@ impl Daemon {
             self.write_state(&state);
             let mut health = self.health.lock().expect("the health is not poisoned");
             health.rule_feed = enabled;
+            if written {
+                health.settings_unreadable = false;
+            }
             if !enabled {
                 health.ignored_pack = None;
                 health.feed_unreachable = None;
@@ -1218,19 +1283,16 @@ impl Daemon {
             .fetching
             .lock()
             .expect("the fetch lock is not poisoned");
-        let (enabled, validators) = {
-            let state = self.state.lock().expect("the state is not poisoned");
-            (
-                state.feed.enabled,
-                Validators {
-                    etag: state.feed.etag.clone(),
-                    last_modified: state.feed.last_modified.clone(),
-                },
-            )
-        };
-        if !enabled {
+        if !self.rule_feed_enabled() {
             return FeedOutcome::Off;
         }
+        let validators = {
+            let state = self.state.lock().expect("the state is not poisoned");
+            Validators {
+                etag: state.feed.etag.clone(),
+                last_modified: state.feed.last_modified.clone(),
+            }
+        };
         let host = endpoints.host();
         let client = FeedClient::new(endpoints);
         let store = PackStore::in_data_directory(&self.directory);
@@ -1653,5 +1715,52 @@ mod tests {
         assert!(matches!(queue.next(), Some(Work::Full(Trigger::Watcher))));
         assert!(queue.batch.is_empty());
         assert!(queue.next().is_none());
+    }
+
+    /// An older state file's toggle is taken over into the settings file
+    /// once: the state file is written again without it, and a settings file
+    /// that exists already is never overwritten by what a state file says.
+    #[test]
+    fn an_older_state_files_toggle_moves_to_the_settings_file_once() {
+        let temporary = tempfile::TempDir::new().expect("a temporary directory");
+        let directory = DataDirectory::at(temporary.path());
+        let keys = MemoryKeySource::empty();
+        let older = State {
+            legacy_rule_feed: Some(false),
+            ..State::empty()
+        };
+
+        let mut state = older.clone();
+        let (settings, unreadable) = settings_at_start(&directory, &keys, &mut state);
+        assert_eq!(settings, Settings { rule_feed: false });
+        assert!(!unreadable);
+        assert_eq!(state.legacy_rule_feed, None);
+        let settings_file = SettingsFile::in_data_directory(&directory);
+        assert_eq!(settings_file.read().expect("a settings file"), settings);
+        let rewritten = StateFile::in_data_directory(&directory)
+            .read(&keys)
+            .expect("the state file written again");
+        assert_eq!(rewritten.legacy_rule_feed, None);
+
+        // The user switches the feed on; a stale state file that still says
+        // off does not win.
+        SettingsWriter::write(&settings_file, &Settings { rule_feed: true }).expect("on");
+        let mut stale = older;
+        let (settings, _) = settings_at_start(&directory, &keys, &mut stale);
+        assert!(settings.rule_feed);
+        assert!(settings_file.read().expect("a settings file").rule_feed);
+    }
+
+    /// A state file with no toggle and no settings file means every default,
+    /// and nothing is written.
+    #[test]
+    fn no_settings_file_and_no_older_toggle_means_every_default() {
+        let temporary = tempfile::TempDir::new().expect("a temporary directory");
+        let directory = DataDirectory::at(temporary.path());
+        let keys = MemoryKeySource::empty();
+        let (settings, unreadable) = settings_at_start(&directory, &keys, &mut State::empty());
+        assert_eq!(settings, Settings::default());
+        assert!(!unreadable);
+        assert!(!directory.settings_file().exists());
     }
 }

@@ -131,9 +131,8 @@ impl SettingsFile {
         };
         let document: Value = serde_json::from_slice(&bytes)
             .map_err(|error| SettingsError::Malformed(error.to_string()))?;
-        Settings::from_value(&document).ok_or_else(|| {
-            SettingsError::Malformed("the settings are not readable".to_string())
-        })
+        Settings::from_value(&document)
+            .ok_or_else(|| SettingsError::Malformed("the settings are not readable".to_string()))
     }
 }
 
@@ -230,9 +229,8 @@ mod tests {
     fn the_settings_file_holds_exactly_the_choices() {
         let (_temporary, file) = a_file();
         SettingsWriter::write(&file, &Settings::default()).expect("a written settings file");
-        let written: Value =
-            serde_json::from_slice(&std::fs::read(file.path()).expect("the file"))
-                .expect("plain JSON");
+        let written: Value = serde_json::from_slice(&std::fs::read(file.path()).expect("the file"))
+            .expect("plain JSON");
         let keys: BTreeSet<&str> = written
             .as_object()
             .expect("an object")

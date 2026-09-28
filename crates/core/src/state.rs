@@ -406,6 +406,11 @@ pub struct State {
     pub last_full_scan: Option<Timestamp>,
     /// What the daemon remembers about the Rule Feed.
     pub feed: FeedRecord,
+    /// The Rule Feed toggle an older state file carried in its feed record,
+    /// before the toggle moved to the settings file. It is read so that it
+    /// can be taken over once, and it is never written back: absent in every
+    /// state file this version writes.
+    pub legacy_rule_feed: Option<bool>,
 }
 
 /// A newer Rule Pack that was ignored because it needs a newer AgentSweep.
@@ -418,12 +423,11 @@ pub struct IgnoredPack {
     pub minimum_engine_version: String,
 }
 
-/// What the daemon remembers about the Rule Feed between two starts.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// What the daemon remembers about the Rule Feed between two starts: the
+/// fetch bookkeeping and nothing else. The toggle is a choice the user made,
+/// so it lives in the settings file, which a rebuilt state file leaves alone.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FeedRecord {
-    /// The one toggle (spec section 9.4). On by default; off means no request
-    /// at all and the bundled pack only.
-    pub enabled: bool,
     /// The `ETag` of the last index answer that was acted on, sent back as
     /// `If-None-Match` so an unchanged index costs one small answer.
     pub etag: String,
@@ -440,27 +444,12 @@ pub struct FeedRecord {
     pub ignored: Option<IgnoredPack>,
 }
 
-impl Default for FeedRecord {
-    fn default() -> FeedRecord {
-        FeedRecord {
-            enabled: true,
-            etag: String::new(),
-            last_modified: String::new(),
-            last_attempt: None,
-            last_contact: None,
-            unreachable_since: None,
-            ignored: None,
-        }
-    }
-}
-
 impl FeedRecord {
     /// The record as the file carries it.
     pub fn to_value(&self) -> Value {
         let moment =
             |at: Option<Timestamp>| Value::from(at.map(|at| at.to_string()).unwrap_or_default());
         let mut map = Map::new();
-        map.insert("enabled".to_string(), Value::from(self.enabled));
         map.insert("etag".to_string(), Value::from(self.etag.as_str()));
         map.insert(
             "ignored".to_string(),
@@ -493,7 +482,9 @@ impl FeedRecord {
         Value::Object(map)
     }
 
-    /// Reads back what [`FeedRecord::to_value`] wrote.
+    /// Reads back what [`FeedRecord::to_value`] wrote. An `enabled` field an
+    /// older state file carries is passed over here and read by
+    /// [`State::from_value`] as [`State::legacy_rule_feed`].
     pub fn from_value(value: &Value) -> Option<FeedRecord> {
         let text = |field: &str| value.get(field).and_then(Value::as_str);
         let moment = |field: &str| -> Option<Option<Timestamp>> {
@@ -510,7 +501,6 @@ impl FeedRecord {
             }),
         };
         Some(FeedRecord {
-            enabled: value.get("enabled")?.as_bool()?,
             etag: text("etag")?.to_string(),
             last_modified: text("last_modified")?.to_string(),
             last_attempt: moment("last_attempt")?,
@@ -632,17 +622,26 @@ impl State {
             written => Some(Timestamp::parse(written)?),
         };
         // A state file written before the Rule Feed existed has no record of
-        // it, which reads as the default: the toggle on, nothing remembered.
+        // it, which reads as nothing remembered.
         let feed = match value.get("feed") {
             None => FeedRecord::default(),
             Some(feed) => FeedRecord::from_value(feed)?,
         };
+        // A state file written before the settings file existed carries the
+        // toggle in its feed record. A toggle that is there and is not a
+        // switch is passed over: the default stands, as it would for a
+        // settings file nobody wrote.
+        let legacy_rule_feed = value
+            .get("feed")
+            .and_then(|feed| feed.get("enabled"))
+            .and_then(Value::as_bool);
         Some(State {
             findings,
             scans,
             readable_classes,
             last_full_scan,
             feed,
+            legacy_rule_feed,
         })
     }
 }
@@ -898,16 +897,12 @@ mod tests {
         state
     }
 
-    /// The Rule Feed is on by default, and what the daemon remembers about it
-    /// survives the file; a file written before the feed existed reads as the
-    /// default.
+    /// What the daemon remembers about the Rule Feed survives the file; a
+    /// file written before the feed existed reads as nothing remembered.
     #[test]
-    fn the_feed_record_is_on_by_default_and_round_trips() {
-        assert!(State::empty().feed.enabled);
-
+    fn the_feed_record_round_trips() {
         let mut state = a_state();
         state.feed = FeedRecord {
-            enabled: false,
             etag: "\"abc\"".to_string(),
             last_modified: "Thu, 24 Sep 2026 08:00:00 GMT".to_string(),
             last_attempt: Some(moment("2026-09-24T08:00:00.000Z")),
@@ -924,6 +919,58 @@ mod tests {
         older.as_object_mut().expect("an object").remove("feed");
         let read = State::from_value(&older).expect("an older state file reads");
         assert_eq!(read.feed, FeedRecord::default());
+    }
+
+    /// The toggle is a choice the user made and lives in the settings file:
+    /// the state file this version writes does not carry it.
+    #[test]
+    fn the_state_file_does_not_carry_the_rule_feed_toggle() {
+        let written = a_state().to_value();
+        let feed = written.get("feed").expect("a feed record");
+        assert!(feed.get("enabled").is_none(), "{feed}");
+        assert_eq!(a_state().legacy_rule_feed, None);
+    }
+
+    /// An older state file that carries the toggle reads without error, and
+    /// its toggle is handed over for the one migration into the settings file.
+    /// Writing the state again leaves it behind.
+    #[test]
+    fn an_older_state_file_with_the_toggle_reads_and_hands_it_over() {
+        let mut older = a_state().to_value();
+        older["feed"]
+            .as_object_mut()
+            .expect("a feed record")
+            .insert("enabled".to_string(), Value::from(false));
+        let read = State::from_value(&older).expect("an older state file reads");
+        assert_eq!(read.legacy_rule_feed, Some(false));
+        assert_eq!(read.feed, a_state().feed);
+
+        let again = State::from_value(&read.to_value()).expect("a state file");
+        assert_eq!(again.legacy_rule_feed, None);
+    }
+
+    /// The same through the sealed file, as the daemon reads it.
+    #[test]
+    fn an_older_sealed_state_file_with_the_toggle_verifies_and_reads() {
+        let temporary = TempDir::new().expect("a temporary directory");
+        let file = StateFile::at(temporary.path().join("state.json"));
+        let keys = MemoryKeySource::empty();
+        let key = keys.renew().expect("a key");
+        let mut body = a_state().to_value();
+        body["feed"]
+            .as_object_mut()
+            .expect("a feed record")
+            .insert("enabled".to_string(), Value::from(false));
+        let mut document = Map::new();
+        document.insert(
+            "mac".to_string(),
+            Value::from(hmac_sha256_hex(&key, &canonical(&body))),
+        );
+        document.insert("state".to_string(), body);
+        std::fs::write(file.path(), canonical(&Value::Object(document))).expect("a state file");
+
+        let read = file.read(&keys).expect("an older sealed state file reads");
+        assert_eq!(read.legacy_rule_feed, Some(false));
     }
 
     #[test]

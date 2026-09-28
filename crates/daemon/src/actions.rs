@@ -679,11 +679,15 @@ impl Daemon {
             drift: false,
             sessions_running: sessions.running,
         };
+        // Taking one member out of a list moves every member after it up one
+        // index, and those are AgentSweep's own write too: the next Scan
+        // reads them `unchanged` through the hashes named here.
+        let before = acting.entries_now();
         let (mut enforcement, _) =
             Enforcement::open(&self.directory, &*self.keys).map_err(failed)?;
         let receipt = enforcement
-            .fix_with(&*adapter, &acting.host(), &item, &cause, &mut |_| {
-                Vec::new()
+            .fix_with(&*adapter, &acting.host(), &item, &cause, &mut |receipt| {
+                acting.collateral(&before, receipt)
             })
             .map_err(failed)?;
         drop(enforcement);

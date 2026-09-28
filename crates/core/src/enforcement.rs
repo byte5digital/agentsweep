@@ -598,11 +598,22 @@ mod writer {
     }
 
     /// The record with every other Item the write moved named beside the hash
-    /// it left there. The Item the record is about is never collateral of
-    /// itself.
+    /// it left there.
+    ///
+    /// The Item the record is about is never collateral of itself, but its
+    /// own locator can still hold something after the write: taking one
+    /// member out of a list moves the next member up to its index. That hash
+    /// is what the write left at the Item, so it is recorded as such unless
+    /// the record already names one.
     fn also_left(mut event: Event, own: &ItemId, left: Vec<(ItemId, String)>) -> Event {
         for (item_id, hash) in left {
-            if &item_id == own || hash.is_empty() {
+            if hash.is_empty() {
+                continue;
+            }
+            if &item_id == own {
+                if !event.detail.contains_key(crate::eventlog::LEFT_HASH) {
+                    event = event.leaving(&hash);
+                }
                 continue;
             }
             event = event.also_leaving(&item_id, &hash);

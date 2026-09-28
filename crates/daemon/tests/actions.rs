@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use agentsweep_adapter_conformance::fixtures;
+use agentsweep_core::baseline::{AcceptedBy, Baseline};
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::eventlog::{Action, Actor, EventLog, EventLogView, SessionsRunning};
 use agentsweep_core::finding::{Category, FindingState};
@@ -495,6 +496,65 @@ fn the_fix_of_0019_takes_the_setting_out_and_restore_puts_it_back() {
         .expect("a Restore");
     let back = std::fs::read_to_string(&settings).expect("the settings file");
     assert!(back.contains("bypassPermissions"), "{back}");
+}
+
+/// The fix of Exposures 0018 and 0019 is AgentSweep's own write, known by
+/// what it left: taking one member out of `permissions.allow` moves the next
+/// member up to its place, and the next Scan reads that Item `unchanged`
+/// through the hash the fix left there, asking nothing. The Item a standing
+/// Exposure is on was accepted all the same, so it reads `unchanged` too.
+#[test]
+fn the_fix_of_0018_leaves_the_items_it_moved_unchanged_on_the_next_scan() {
+    let sandbox = Sandbox::empty("fix-left-hash");
+    std::fs::write(sandbox.registry(), b"{\n  \"projects\": {}\n}\n").expect("a registry");
+    let settings = sandbox.home.join(".claude/settings.json");
+    let written = "{\n  \"permissions\": {\n    \"allow\": [\"Bash(*)\", \"Bash(git status)\"],\n    \"defaultMode\": \"bypassPermissions\"\n  }\n}\n";
+    std::fs::write(&settings, written).expect("a settings file");
+    let daemon = sandbox.start();
+
+    let status = sandbox.status();
+    let exposure = status
+        .open()
+        .find(|finding| finding.rule_id == 18)
+        .unwrap_or_else(|| panic!("the 0018 Exposure: {:?}", status.findings))
+        .clone();
+    let standing = status
+        .open()
+        .find(|finding| finding.rule_id == 19)
+        .unwrap_or_else(|| panic!("the 0019 Exposure: {:?}", status.findings))
+        .clone();
+    let fixed = sandbox.client().fix(exposure.id.as_str()).expect("the fix");
+    assert_eq!(fixed.state, "stopped");
+    let now = std::fs::read_to_string(&settings).expect("the settings file");
+    assert!(!now.contains("Bash(*)"), "{now}");
+    assert!(now.contains("Bash(git status)"), "{now}");
+
+    scan_again(&sandbox, &daemon);
+    let status = sandbox.status();
+    let open: Vec<i64> = status.open().map(|finding| finding.rule_id).collect();
+    assert_eq!(open, [19], "{:?}", status.findings);
+    assert!(
+        status.open().all(|finding| finding.source != "drift"),
+        "{:?}",
+        status.findings
+    );
+
+    let baseline = Baseline::in_data_directory(&sandbox.data())
+        .read(&sandbox.keys)
+        .expect("a readable Baseline");
+    // The member that moved up sits where the fixed one was, at the hash the
+    // fix left there.
+    let moved = baseline
+        .record(&exposure.item_id)
+        .expect("the member that moved up is recorded");
+    assert_eq!(moved.accepted_by, AcceptedBy::AgentsweepWrite, "{moved:?}");
+    assert_eq!(moved.accepted_hash, moved.last_seen_hash, "{moved:?}");
+    // The Exposure that still stands did not hold its Item.
+    let kept = baseline
+        .record(&standing.item_id)
+        .expect("the standing Exposure's Item is recorded");
+    assert_eq!(kept.accepted_hash, standing.content_hash, "{kept:?}");
+    assert_eq!(kept.accepted_hash, kept.last_seen_hash, "{kept:?}");
 }
 
 /// A Rule on Probation never acts alone; the same Rule stable in a test pack

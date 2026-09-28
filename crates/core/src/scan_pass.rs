@@ -3,7 +3,7 @@
 //!
 //! Per Item: enumerate, apply the known actions to the Baseline, compute
 //! `item.baseline`, run T0, T1 and T2, and advance the accepted hash for every
-//! Item the Scan left without an open Finding. T3 is a queue the Scan feeds,
+//! Item the Scan left without an open Threat Finding. T3 is a queue the Scan feeds,
 //! never a step that blocks it, so nothing here waits for a Verdict.
 //!
 //! The pass decides and writes nothing. It is handed what the daemon has
@@ -15,9 +15,9 @@
 //! The Drift question sits in the per-Item step between the Tiers and the
 //! advance: [`crate::drift`] decides whether the change is one the user is
 //! asked about, the question folds into an open Threat Finding or stands on
-//! its own, and because it is a Finding like any other the Item keeps its
-//! `changed` until the question is answered. What is not a question but is
-//! still worth remembering, a consistent plugin update and content that
+//! its own, and because it is a Threat Finding like any other the Item keeps
+//! its `changed` until the question is answered. What is not a question but
+//! is still worth remembering, a consistent plugin update and content that
 //! changed back, comes out as a [`Note`].
 
 use std::collections::BTreeSet;
@@ -98,6 +98,9 @@ pub struct ScannedItem {
     pub accepted: Option<AcceptedBy>,
     /// How many Findings the Tiers raised on it.
     pub findings: usize,
+    /// How many of them are Threat Findings, which are the only ones that
+    /// hold the accepted hash where it is.
+    pub threats: usize,
     /// How it stands against its Baseline, where it moved: the context line
     /// every Finding about it carries, and the question when one was raised.
     pub drift: Option<Drift>,
@@ -107,10 +110,16 @@ pub struct ScannedItem {
 }
 
 impl ScannedItem {
-    /// True when a Finding on this Item asks something of the user, which is
-    /// what holds the Baseline where it is.
+    /// True when a Finding on this Item asks something of the user.
     pub fn has_open_finding(&self) -> bool {
         self.findings > 0
+    }
+
+    /// True when a Threat Finding stands on this Item, which is the one thing
+    /// that holds the Baseline where it is. An Exposure is the user's own
+    /// configuration and lets the accepted hash advance like a clean Item.
+    pub fn holds_the_baseline(&self) -> bool {
+        self.threats > 0
     }
 }
 
@@ -390,6 +399,7 @@ impl<'a> ScanPass<'a> {
                 baseline: decision.state,
                 accepted,
                 findings: assessment.findings.len(),
+                threats: threats(&assessment),
                 drift,
                 asked,
             });
@@ -592,7 +602,7 @@ impl<'a> ScanPass<'a> {
             Some(held) if held.accepted_hash == item.content_hash => BaselineState::Unchanged,
             Some(_) if known.is_some() => BaselineState::Unchanged,
             // A record with nothing accepted yet is the Item the last Scan
-            // left an open Finding on: it stays `added` until it is accepted.
+            // left an open Threat Finding on: it stays `added` until it is accepted.
             Some(held) if held.accepted_hash.is_empty() => {
                 if covered {
                     BaselineState::Added
@@ -628,15 +638,18 @@ impl<'a> ScanPass<'a> {
 
     /// What moves the accepted hash, or nothing when it stays where it is.
     ///
-    /// The accepted hash advances when a Scan ends with no open Finding on the
-    /// Item, or through a known action. Nothing else moves it, and time never
-    /// does. The Ambiguous Band is not a Finding and does not hold the
-    /// Baseline (spec section 4.6.4).
+    /// The accepted hash advances when a Scan ends with no open Threat
+    /// Finding on the Item, or through a known action. Nothing else moves it,
+    /// and time never does. An Exposure is the user's own configuration and
+    /// does not hold the Baseline, so a later edit is an ordinary `changed`
+    /// rather than `added` forever; the Ambiguous Band is not a Finding and
+    /// does not hold it either; a Suspicious Finding and a Drift question do,
+    /// both being Threats (spec section 4.6.4 as amended).
     fn acceptance(&self, decision: &Decision, assessment: &Assessment) -> Option<AcceptedBy> {
         if let Some((by, _)) = &decision.known {
             return Some(*by);
         }
-        if !assessment.findings.is_empty() {
+        if threats(assessment) > 0 {
             return None;
         }
         Some(
@@ -651,8 +664,8 @@ impl<'a> ScanPass<'a> {
     /// The record to append for one Item, or nothing when the Baseline already
     /// says what this Scan saw.
     ///
-    /// An Item nothing was ever accepted for and that a Finding stands on gets
-    /// no record at all: there is nothing to remember yet, and writing one
+    /// An Item nothing was ever accepted for and that a Threat Finding stands
+    /// on gets no record at all: there is nothing to remember yet, and writing one
     /// would be writing down an acceptance that did not happen.
     fn advance(
         &self,
@@ -683,6 +696,15 @@ impl<'a> ScanPass<'a> {
             _ => Some(next),
         }
     }
+}
+
+/// How many Threat Findings stand in one Assessment.
+fn threats(assessment: &Assessment) -> usize {
+    assessment
+        .findings
+        .iter()
+        .filter(|finding| finding.category == Category::Threat)
+        .count()
 }
 
 /// What the Baseline says about one Item before the Rules run.
@@ -1459,10 +1481,10 @@ mod tests {
         );
     }
 
-    /// Spec section 4.6.4: the accepted hash waits while a Finding is open,
-    /// and moves the moment the Item is left without one.
+    /// Spec section 4.6.4: the accepted hash waits while a Threat Finding is
+    /// open, and moves the moment the Item is left without one.
     #[test]
-    fn an_open_finding_holds_the_baseline_and_resolving_it_advances() {
+    fn an_open_threat_finding_holds_the_baseline_and_resolving_it_advances() {
         let host = FakeHost::new();
         host.instruction_file("# demo\n\nRun the tests.\n");
         let daemon = Daemon::new();
@@ -1474,9 +1496,11 @@ mod tests {
         let (second, _) = daemon.scan(&host, "2026-09-24T10:00:00.000Z");
         assert_eq!(state_of(&second, "CLAUDE.md"), BaselineState::Changed);
         assert_eq!(second.report.findings.len(), 1);
+        assert_eq!(second.report.findings[0].category, Category::Threat);
         let scanned = second.items.first().expect("the file was scanned");
         assert_eq!(scanned.accepted, None);
         assert!(scanned.has_open_finding());
+        assert!(scanned.holds_the_baseline());
 
         // A second Scan over the same content says the same thing, and writes
         // nothing: the Finding still stands.
@@ -1522,6 +1546,100 @@ mod tests {
 
         let (third, _) = daemon.scan(&host, "2026-09-24T11:00:00.000Z");
         assert_eq!(state_of(&third, "skills/planted"), BaselineState::Added);
+    }
+
+    /// Only a Threat Finding holds the accepted hash: the user's own
+    /// `bypassPermissions`, a standing Exposure of Rule 0019, is accepted at
+    /// the end of a Scan like a clean Item. A later edit is then an ordinary
+    /// Drift question rather than `added` forever, and acknowledging it
+    /// settles it (spec section 4.6.4 as amended).
+    #[test]
+    fn a_standing_exposure_lets_the_baseline_advance() {
+        let host = FakeHost::new();
+        host.setting("permissions.defaultMode", json!("bypassPermissions"));
+        let daemon = Daemon::new();
+        let (first, _) = daemon.scan_with(&host, "2026-09-24T09:00:00.000Z", &wide(&host));
+        let exposure = first
+            .report
+            .findings
+            .iter()
+            .find(|finding| finding.source == Source::Rule(19))
+            .expect("Rule 0019 fired");
+        assert_eq!(exposure.category, Category::Exposure);
+        let scanned = first
+            .item(&exposure.item_id)
+            .expect("the entry was scanned");
+        assert!(scanned.has_open_finding());
+        assert!(!scanned.holds_the_baseline());
+        assert_eq!(scanned.accepted, Some(AcceptedBy::Bootstrap));
+
+        // The Exposure still stands, and the Item reads `unchanged` all the
+        // same: nothing about it moved.
+        let (second, _) = daemon.scan_with(&host, "2026-09-24T10:00:00.000Z", &wide(&host));
+        assert_eq!(
+            state_of(&second, "#permissions.defaultMode"),
+            BaselineState::Unchanged
+        );
+        assert!(
+            second
+                .report
+                .findings
+                .iter()
+                .any(|finding| finding.source == Source::Rule(19))
+        );
+        assert!(
+            questions(&second).is_empty(),
+            "{:?}",
+            second.report.findings
+        );
+
+        // An edit in between is `changed` and the question "was that you?".
+        host.setting("permissions.defaultMode", json!("dontAsk"));
+        let (third, edited) = daemon.scan_with(&host, "2026-09-24T11:00:00.000Z", &wide(&host));
+        assert_eq!(
+            state_of(&third, "#permissions.defaultMode"),
+            BaselineState::Changed
+        );
+        let asked = questions(&third);
+        assert_eq!(asked.len(), 1, "{:?}", third.report.findings);
+        assert!(
+            asked[0]
+                .item_id
+                .as_str()
+                .ends_with("#permissions.defaultMode")
+        );
+        let scanned = third
+            .item(&asked[0].item_id)
+            .expect("the entry was scanned");
+        assert!(scanned.holds_the_baseline(), "the question holds the hash");
+        assert_eq!(scanned.accepted, None);
+
+        // The user says it was them, and the Item reads `unchanged` again.
+        let entry = edited
+            .items
+            .iter()
+            .find(|item| item.id == asked[0].item_id)
+            .expect("the entry is enumerated");
+        daemon.record(&Event::new(Action::Acknowledge, Actor::User).about(
+            &entry.id,
+            Kind::SettingsEntry,
+            &entry.content_hash,
+        ));
+        let (fourth, _) = daemon.scan_with(&host, "2026-09-24T12:00:00.000Z", &wide(&host));
+        assert_eq!(
+            state_of(&fourth, "#permissions.defaultMode"),
+            BaselineState::Unchanged
+        );
+        assert!(
+            questions(&fourth).is_empty(),
+            "{:?}",
+            fourth.report.findings
+        );
+        let (fifth, _) = daemon.scan_with(&host, "2026-09-24T13:00:00.000Z", &wide(&host));
+        assert_eq!(
+            state_of(&fifth, "#permissions.defaultMode"),
+            BaselineState::Unchanged
+        );
     }
 
     /// Spec section 4.6.6: disappearance is never a Finding. The record is
@@ -2029,11 +2147,11 @@ mod tests {
         assert!(!scanned.asked);
     }
 
-    /// An Exposure holds the accepted hash as any open Finding does, and that
-    /// is not itself a reason to ask: a `changed` Item follows the rows of the
-    /// table like any other.
+    /// An Exposure is not itself a reason to ask: a `changed` Item follows
+    /// the rows of the table like any other, and the question beside the
+    /// Exposure is what holds the accepted hash.
     #[test]
-    fn an_exposure_holding_the_hash_does_not_decide_the_question() {
+    fn an_exposure_does_not_decide_the_question() {
         let host = FakeHost::new();
         host.instruction_file("# demo\n\nRun the tests.\n");
         host.servers(&json!({

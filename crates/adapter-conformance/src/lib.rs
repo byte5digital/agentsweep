@@ -144,10 +144,11 @@ fn check_descriptor(adapter: &dyn SurfaceAdapter, report: &mut Report) {
             continue;
         }
         // The core's table decides what one Quarantine does to a kind; an
-        // adapter may only declare what it can carry out of that.
+        // adapter may only declare what it can carry out of that, the switch
+        // a row puts first included.
         let row = eligibility(*kind);
         for primitive in declared {
-            if !row.primitives.contains(primitive) {
+            if !row.allows(*primitive) {
                 report.note(
                     agent,
                     "-",

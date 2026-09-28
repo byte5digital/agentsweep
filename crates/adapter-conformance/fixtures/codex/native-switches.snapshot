@@ -1,0 +1,33 @@
+item codex/user/settings-entry/~/.codex/config.toml#/features/hooks
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=23
+  sha256=a50bd505683f11510805e6a2da3a7c42c63d45852e1c5de135a74ac4d4488510
+  view settings {key_path="features.hooks" trust_has_sessions=false trust_stated=false value="true" value_host=""}
+item codex/user/settings-entry/~/.codex/config.toml#/skills/config/0
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=34
+  sha256=ff43e3b53774b305ae420d18fa158e62597a08a94a1d23a64da335b53e6f2912
+  view settings {key_path="skills.config.0" trust_has_sessions=false trust_stated=false value="{\"enabled\":true,\"name\":\"switched\"}" value_host=""}
+item codex/user/mcp-server/~/.codex/config.toml#unwritten
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=48
+  sha256=2302f854ec8319ecafdba27f2459a56159ad12b07a4eb5a585e94d84dc1813f7
+  view mcp {args=["artisan", "boost:mcp"] args_n=2 command="php" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_outside_root=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="unwritten" package="" package_version="" transport="stdio" url="" url_host=""}
+item codex/user/mcp-server/~/.codex/config.toml#written
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=88
+  sha256=470cbd699d56b3174da643f8b1eb55868a891dcc1586d061b180bff14b15624c
+  view mcp {args=["-y", "@modelcontextprotocol/server-everything"] args_n=2 command="npx" command_in_downloads=false command_in_temp=false command_in_unknown_hidden_home=false command_outside_root=false command_resolved="" command_world_writable=false env_keys=[""] env_keys_n=0 has_literal_authorization=false header_keys=[""] header_keys_n=0 name="written" package="@modelcontextprotocol/server-everything" package_version="" transport="stdio" url="" url_host=""}
+item codex/user/hook/~/.codex/hooks.json#SessionStart//13a5ef60cb02
+  shape=entry scope=user provenance=manual activation=active registered=true symlink=false size=133
+  sha256=13a5ef60cb029fca4374738f67eb56a77cfad382af3c0853a2a689c2e86096d1
+  view hook {command="bash ~/.codex/hooks/session-start.sh" command_file_type="text" command_resolved="<root>/home/.codex/hooks/session-start.sh" event="SessionStart" matcher="" type="command" url=""}
+item codex/user/hook/~/.codex/hooks.json#Stop//f31df4cf69c5
+  shape=entry scope=user provenance=manual activation=inactive(stale_hook_hash) registered=true symlink=false size=103
+  sha256=f31df4cf69c50fc583367c01626ad51e5cfcd2c88e608547ae87afb7ab4fd5b6
+  view hook {command="bash ~/.codex/hooks/stop.sh" command_file_type="text" command_resolved="<root>/home/.codex/hooks/stop.sh" event="Stop" matcher="" type="command" url=""}
+item codex/user/skill/~/.codex/skills/plain
+  shape=file scope=user provenance=manual activation=active registered=true symlink=false size=98
+  sha256=a8fbacd971469034f1ee9d9bb630d41e728b64a19dd2ad50805c04c740f5d441
+  view skill {allowed_tools=[""] allowed_tools_n=0 has_dynamic_context=false name="plain"}
+item codex/user/skill/~/.codex/skills/switched
+  shape=file scope=user provenance=manual activation=active registered=true symlink=false size=109
+  sha256=6c34090761ac7100dae361e0871ff4e05af788ae06fd4eac885ba319b3baab2e
+  view skill {allowed_tools=[""] allowed_tools_n=0 has_dynamic_context=false name="switched"}
+watch recursive <root>/home/.codex

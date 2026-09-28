@@ -4,9 +4,16 @@
 //! A declared capability that does not work is worse than none, so the suite
 //! does the real thing to every Item of every kind an adapter declares a
 //! primitive for: it quarantines the Item with the primitives the eligibility
-//! table of spec section 5.2 names, checks that the Agent would no longer load
-//! what the Finding was about, and then restores it and compares the whole
-//! Surface with what it held before, byte for byte and mode for mode.
+//! table of spec section 5.2 names, or with the Agent's own switch where the
+//! row puts it first and the Item has one, checks that the Agent would no
+//! longer load what the Finding was about, and then restores it and compares
+//! the whole Surface with what it held before, byte for byte and mode for
+//! mode.
+//!
+//! A switch that is declared has to be refused where it does not apply: every
+//! Item of a kind that does not declare NativeDisable, and every Item without
+//! a switch of a kind that does, is asked to be switched off alone, and the
+//! adapter has to say no and leave the Surface as it was.
 //!
 //! The comparison is over the whole fixture copy rather than the Item's own
 //! path, because a composite touches more than one file: a plugin is switched
@@ -16,9 +23,10 @@
 //!
 //! What "the Agent would no longer load it" means is asked of the adapter
 //! rather than of the file system: the case is enumerated again, and the Item
-//! must be gone from it or carry another content hash. That is the one
-//! question every primitive answers the same way, whether the Item was moved
-//! out, dropped from a shared file or commented out where it lay.
+//! must be gone from it or carry another content hash, or, for a switch that
+//! left it in place, read Inactive because it is disabled. That is the one
+//! question every primitive answers, whether the Item was moved out, dropped
+//! from a shared file, commented out where it lay or switched off.
 //!
 //! Nothing here touches the real machine. The Surface is the fixture copy and
 //! the quarantine store is a scratch directory beside it, both removed when
@@ -31,10 +39,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use agentsweep_core::adapter::{Primitive, SurfaceAdapter, eligibility};
+use agentsweep_core::adapter::{Primitive, SWITCH_ONLY, SurfaceAdapter, eligibility};
+use agentsweep_core::enforcement::primitives_for;
 use agentsweep_core::eventlog::Outcome;
 use agentsweep_core::host::Host;
-use agentsweep_core::item::{Item, ItemId, Kind, Scope};
+use agentsweep_core::item::{Activation, InactiveReason, Item, ItemId, Kind, Scope};
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::quarantine::{Conflict, QuarantineStore, Store};
 
@@ -120,6 +129,7 @@ pub fn check_case(
         if item.scope == Scope::Managed || !kinds.contains(&item.kind) {
             continue;
         }
+        refuses_a_switch_it_lacks(adapter, case, &copy, &host, &store, item, report);
         exercised.extend(round_trip(
             adapter, case, &copy, &host, &store, item, report,
         ));
@@ -154,7 +164,17 @@ fn round_trip(
         return Vec::new();
     }
 
-    let primitives = eligibility(item.kind).primitives;
+    let primitives = match primitives_for(adapter, host, item) {
+        Ok(primitives) => primitives,
+        Err(error) => {
+            wrong(
+                report,
+                "quarantine",
+                format!("{} has no primitive the adapter declares: {error}", item.id),
+            );
+            return Vec::new();
+        }
+    };
     let receipt = match adapter.enforce(host, store, item, primitives) {
         Ok(receipt) => receipt,
         Err(error) => {
@@ -177,10 +197,18 @@ fn round_trip(
 
     let mut whole = true;
     // What the Agent would load is the adapter's own answer, so the case is
-    // read again and the Item has to be gone from it or to have changed.
-    if let Some(found) = enumerated(adapter, host, &item.id)
-        && found == item.content_hash
-    {
+    // read again and the Item has to be gone from it or to have changed. A
+    // switch leaves it in place, where it has to read switched off.
+    let found = enumerated_item(adapter, host, &item.id);
+    let still_loaded = match primitives == SWITCH_ONLY {
+        true => found
+            .as_ref()
+            .is_none_or(|found| found.activation != Activation::Inactive(InactiveReason::Disabled)),
+        false => found
+            .as_ref()
+            .is_some_and(|found| found.content_hash == item.content_hash),
+    };
+    if still_loaded {
         wrong(
             report,
             "quarantine",
@@ -252,6 +280,66 @@ fn round_trip(
         .collect()
 }
 
+/// Asks for the Agent's own switch alone on an Item that has none to flip, and
+/// checks that the adapter refuses and leaves the Surface as it was.
+///
+/// That is every Item of a kind the adapter declares no NativeDisable for, and
+/// every Item without a switch of a kind it does. A kind whose row makes the
+/// switch one half of a composite (a plugin) is asked for the whole row
+/// instead, so it is left to the round trip.
+fn refuses_a_switch_it_lacks(
+    adapter: &dyn SurfaceAdapter,
+    case: &str,
+    copy: &fixtures::Copy,
+    host: &Host,
+    store: &QuarantineStore,
+    item: &Item,
+    report: &mut Report,
+) {
+    let row = eligibility(item.kind);
+    if row.primitives.contains(&Primitive::NativeDisable) {
+        return;
+    }
+    let declares = adapter
+        .descriptor()
+        .capabilities_for(item.kind)
+        .contains(&Primitive::NativeDisable);
+    if declares && adapter.has_switch(host, item) {
+        return;
+    }
+    let agent = adapter.descriptor().agent;
+    let before = Snapshot::of(copy.root());
+    match adapter.enforce(host, store, item, SWITCH_ONLY) {
+        Ok(receipt) => {
+            report.note(
+                agent,
+                case,
+                "switch",
+                format!(
+                    "{} has no switch to flip and was switched off anyway",
+                    item.id
+                ),
+            );
+            let _ = adapter.restore(host, store, &receipt, Conflict::Replace);
+        }
+        Err(_) => {
+            let after = Snapshot::of(copy.root());
+            if after != before {
+                report.note(
+                    agent,
+                    case,
+                    "switch",
+                    format!(
+                        "refusing to switch {} off still changed the Surface: {}",
+                        item.id,
+                        after.against(&before)
+                    ),
+                );
+            }
+        }
+    }
+}
+
 /// What the store holds for every MoveOut step of one Receipt: a payload, with
 /// no executable bit left on it and nothing of the Item's name in its path.
 fn moved_out_cleanly(
@@ -308,12 +396,16 @@ fn moved_out_cleanly(
 /// The content hash one Item has in the case as it stands now, absent when the
 /// adapter no longer enumerates it.
 fn enumerated(adapter: &dyn SurfaceAdapter, host: &Host, id: &ItemId) -> Option<String> {
+    enumerated_item(adapter, host, id).map(|item| item.content_hash)
+}
+
+/// One Item as the adapter enumerates it in the case as it stands now.
+fn enumerated_item(adapter: &dyn SurfaceAdapter, host: &Host, id: &ItemId) -> Option<Item> {
     adapter
         .enumerate(host, host.project_roots())
         .items
         .into_iter()
         .find(|item| item.id == *id)
-        .map(|item| item.content_hash)
 }
 
 /// What one path holds: the bytes and the permission bits of everything below
@@ -493,6 +585,46 @@ mod tests {
         }
     }
 
+    /// An adapter that answers a request for a switch it does not have with a
+    /// Receipt, as if it had flipped one.
+    struct SwitchesAnything;
+
+    impl SurfaceAdapter for SwitchesAnything {
+        fn descriptor(&self) -> &'static Descriptor {
+            Wrapping::inner().descriptor()
+        }
+        fn detect(&self, _host: &Host) -> Detection {
+            Detection::default()
+        }
+        fn projects(&self, _host: &Host) -> Vec<ProjectRegistration> {
+            Vec::new()
+        }
+        fn enumerate(&self, host: &Host, roots: &[PathBuf]) -> Enumeration {
+            Wrapping::inner().enumerate(host, roots)
+        }
+        fn enforce(
+            &self,
+            host: &Host,
+            store: &dyn Store,
+            item: &Item,
+            primitives: &[Primitive],
+        ) -> Result<Receipt, EnforcementError> {
+            if primitives == SWITCH_ONLY {
+                return Ok(Receipt::new(store.begin()?, item));
+            }
+            Wrapping::inner().enforce(host, store, item, primitives)
+        }
+        fn restore(
+            &self,
+            host: &Host,
+            store: &dyn Store,
+            receipt: &Receipt,
+            conflict: Conflict,
+        ) -> agentsweep_core::quarantine::RestoreReport {
+            Wrapping::inner().restore(host, store, receipt, conflict)
+        }
+    }
+
     /// The case every MoveOut kind of the Claude Code adapter appears in.
     const CASE: &str = "user-skills-and-commands";
 
@@ -534,8 +666,10 @@ mod tests {
             declared(&agentsweep_adapter_codex::Codex::new()),
             vec![
                 (Kind::InstructionFile, Primitive::MoveOut),
+                (Kind::Skill, Primitive::NativeDisable),
                 (Kind::Skill, Primitive::MoveOut),
-                (Kind::McpServer, Primitive::RemoveEntry),
+                (Kind::McpServer, Primitive::NativeDisable),
+                (Kind::Hook, Primitive::NativeDisable),
                 (Kind::Hook, Primitive::RemoveEntry),
                 (Kind::SettingsEntry, Primitive::RemoveEntry),
                 (Kind::ExecPolicy, Primitive::MoveOut),
@@ -565,6 +699,27 @@ mod tests {
             "{:?}",
             report.violations
         );
+    }
+
+    /// Every kind that declares no NativeDisable is asked to be switched off
+    /// alone, and an adapter that says yes is told so.
+    #[test]
+    fn an_adapter_that_switches_off_what_has_no_switch_is_told_so() {
+        let mut report = Report::default();
+
+        check_case(&SwitchesAnything, CASE, &mut report);
+
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.contains("has no switch to flip")),
+            "{:?}",
+            report.violations
+        );
+        let mut clean = Report::default();
+        check_case(&Wrapping::inner(), CASE, &mut clean);
+        assert!(clean.is_clean(), "{:?}", clean.violations);
     }
 
     #[test]
@@ -789,6 +944,112 @@ mod tests {
             "[mcp_servers.kit]\ncommand = \"~/Downloads/kit/server\"\nargs = [\"--stdio\"]\n\n";
         assert!(before.contains(table), "{before}");
         assert_eq!(after, before.replace(table, ""));
+    }
+
+    /// The owner's decision of 2026-09-28: a Codex MCP server is switched off
+    /// with its own `enabled = false`, written or not, and the layer differs
+    /// from what it was in that one value and nothing else. Restore gives the
+    /// layer back to the byte.
+    #[test]
+    fn switching_off_a_codex_server_changes_one_value_and_flips_back_byte_for_byte() {
+        let adapter = agentsweep_adapter_codex::Codex::new();
+        for (server, expected) in [
+            (
+                "config.toml#written",
+                Box::new(|before: &str| {
+                    before.replacen(
+                        "enabled = true # switched on by hand",
+                        "enabled = false # switched on by hand",
+                        1,
+                    )
+                }) as Box<dyn Fn(&str) -> String>,
+            ),
+            (
+                "config.toml#unwritten",
+                Box::new(|before: &str| {
+                    before.replacen(
+                        "args = [\"artisan\", \"boost:mcp\"]\n",
+                        "args = [\"artisan\", \"boost:mcp\"]\nenabled = false\n",
+                        1,
+                    )
+                }),
+            ),
+        ] {
+            let bench = Bench::of(&adapter, "native-switches");
+            let item = bench.item(Kind::McpServer, server);
+            let before = std::fs::read_to_string(&item.path).expect("the layer");
+            let primitives =
+                primitives_for(&adapter, &bench.host, &item).expect("a row the adapter declares");
+            assert_eq!(primitives, [Primitive::NativeDisable], "{server}");
+
+            let receipt = adapter
+                .enforce(&bench.host, &bench.store, &item, primitives)
+                .expect("a Quarantine");
+
+            assert_eq!(receipt.steps.len(), 1, "{:?}", receipt.steps);
+            assert_eq!(
+                receipt.steps[0].primitive,
+                agentsweep_core::eventlog::Primitive::NativeDisable
+            );
+            let after = std::fs::read_to_string(&item.path).expect("the layer");
+            assert_eq!(after, expected(&before), "{server}");
+            let found = enumerated_item(&adapter, &bench.host, &item.id).expect("still there");
+            assert_eq!(
+                found.activation,
+                Activation::Inactive(InactiveReason::Disabled)
+            );
+            assert_ne!(found.content_hash, item.content_hash);
+
+            let report = adapter.restore(&bench.host, &bench.store, &receipt, Conflict::Refuse);
+
+            assert!(report.is_complete(), "{report:?}");
+            assert_eq!(
+                std::fs::read_to_string(&item.path).expect("the layer"),
+                before
+            );
+        }
+    }
+
+    /// A hook whose record in `[hooks.state]` writes `enabled`, and a skill a
+    /// `[[skills.config]]` entry names with `enabled`, are switched off there;
+    /// a hook or a skill without one is taken out as before, and the Receipt
+    /// says which primitive it was.
+    #[test]
+    fn a_hook_or_a_skill_is_switched_off_only_where_its_switch_is_written() {
+        let adapter = agentsweep_adapter_codex::Codex::new();
+        use agentsweep_core::eventlog::Primitive as Recorded;
+        for (kind, locator, first) in [
+            (Kind::Hook, "SessionStart", Recorded::NativeDisable),
+            (Kind::Hook, "Stop", Recorded::RemoveEntry),
+            (Kind::Skill, "skills/switched", Recorded::NativeDisable),
+            (Kind::Skill, "skills/plain", Recorded::MoveOut),
+        ] {
+            let bench = Bench::of(&adapter, "native-switches");
+            let item = bench.item(kind, locator);
+            let before = Snapshot::of(bench.copy.root());
+            let primitives =
+                primitives_for(&adapter, &bench.host, &item).expect("a row the adapter declares");
+
+            let receipt = adapter
+                .enforce(&bench.host, &bench.store, &item, primitives)
+                .expect("a Quarantine");
+
+            assert_eq!(receipt.steps[0].primitive, first, "{locator}");
+            let switched = first == Recorded::NativeDisable;
+            assert_eq!(receipt.switched_in_place(), switched, "{locator}");
+            if switched {
+                let layer = bench
+                    .host
+                    .home()
+                    .expect("a home")
+                    .join(".codex/config.toml");
+                assert_eq!(receipt.steps[0].path, layer.display().to_string());
+                assert!(item.path.exists(), "a switch leaves {locator} in place");
+            }
+            let report = adapter.restore(&bench.host, &bench.store, &receipt, Conflict::Refuse);
+            assert!(report.is_complete(), "{report:?}");
+            assert_eq!(Snapshot::of(bench.copy.root()), before, "{locator}");
+        }
     }
 
     /// Acceptance of ticket 16: RemoveEntry on a Claude Code settings file

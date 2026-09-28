@@ -255,13 +255,19 @@ static SURFACES: &[Surface] = &[
 
 /// What one Quarantine does to each kind this adapter yields (spec section
 /// 5.2). An entry is removed from the file that holds it; a file is moved out
-/// by the core. NativeDisable is the first half of the plugin composite and
-/// this slice yields no plugin, so nothing declares it yet.
+/// by the core. An MCP server, a hook and a skill are switched off with
+/// Codex's own `enabled = false` instead, wherever they have one (the owner's
+/// decision of 2026-09-28). A hook and a skill without one fall back to their
+/// own primitive; every MCP server Codex reads sits in a table of a config
+/// layer, which always takes the switch, so the server declares nothing else.
 static CAPABILITIES: &[(Kind, &[Primitive])] = &[
     (Kind::InstructionFile, &[Primitive::MoveOut]),
-    (Kind::Skill, &[Primitive::MoveOut]),
-    (Kind::McpServer, &[Primitive::RemoveEntry]),
-    (Kind::Hook, &[Primitive::RemoveEntry]),
+    (Kind::Skill, &[Primitive::NativeDisable, Primitive::MoveOut]),
+    (Kind::McpServer, &[Primitive::NativeDisable]),
+    (
+        Kind::Hook,
+        &[Primitive::NativeDisable, Primitive::RemoveEntry],
+    ),
     (Kind::SettingsEntry, &[Primitive::RemoveEntry]),
     (Kind::ExecPolicy, &[Primitive::MoveOut]),
 ];
@@ -1076,10 +1082,18 @@ impl SurfaceAdapter for Codex {
             .collect()
     }
 
+    /// An MCP server always has Codex's own switch; a hook and a skill have
+    /// one where the user layer's hook state or the skills config writes an
+    /// `enabled` key for them already.
+    fn has_switch(&self, host: &Host, item: &Item) -> bool {
+        enforce::switch_of(self, host, item).is_some()
+    }
+
     /// An instruction file, a skill and an execution policy are one file or
     /// one directory, so one MoveOut is the whole Quarantine, exactly as it is
     /// for the other Agent. Every other kind this adapter yields is an entry
-    /// and waits for the entry primitives.
+    /// and waits for the entry primitives. Where Codex has a switch for the
+    /// Item, the switch is the whole Quarantine instead.
     fn enforce(
         &self,
         host: &Host,
@@ -1386,7 +1400,7 @@ mod tests {
             assert!(!declared.is_empty(), "{kind}");
             for primitive in declared {
                 assert!(
-                    eligibility(*kind).primitives.contains(primitive),
+                    eligibility(*kind).allows(*primitive),
                     "{kind} declares {primitive:?}"
                 );
             }

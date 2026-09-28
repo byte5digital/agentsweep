@@ -57,7 +57,7 @@ A Finding about the user's own risky configuration, such as a plaintext secret o
 _Avoid_: Hygiene, warning, misconfiguration
 
 **Baseline**:
-The content hash AgentSweep last accepted for each Item it protects, kept per Item so the next Scan can tell what changed. It moves forward only when a Scan leaves the Item without an open Finding or a known action stands behind the change, never merely because time passed. An Item scanned before its Surface was covered has no Baseline yet and is never Drift.
+The content hash AgentSweep last accepted for each Item it protects, kept per Item so the next Scan can tell what changed. It moves forward only when a Scan leaves the Item without an open Threat Finding or a known action stands behind the change, never merely because time passed. An Exposure does not hold it. An Item scanned before its Surface was covered has no Baseline yet and is never Drift.
 _Avoid_: Snapshot, fingerprint store, cache
 
 **Drift**:

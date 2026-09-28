@@ -37,7 +37,7 @@ pub enum AcceptedBy {
     /// The Item was first seen before its Surface was covered, so there was
     /// nothing to compare it with.
     Bootstrap,
-    /// A Scan ended with no open Finding on the Item.
+    /// A Scan ended with no open Threat Finding on the Item.
     CleanScan,
     /// AgentSweep wrote the content itself: a Quarantine, a Restore, a
     /// re-enforce, a Re-enable, a Gate registration.
@@ -1020,8 +1020,8 @@ mod writer {
     /// It runs after a completed Full Scan and at most once a day. What it
     /// drops is what a record is kept for no longer: an Item that has been
     /// absent for more than ninety days, and the records and the coverage of a
-    /// project root that left every registry. A record any open Finding refers
-    /// to is never dropped, whatever else is.
+    /// project root that left every registry. A record any open Threat
+    /// Finding refers to is never dropped, whatever else is.
     ///
     /// The Event Log is never compacted, and the one record appended to it
     /// carries the old head and the new one, so the chain that was replaced
@@ -1602,7 +1602,7 @@ mod tests {
         assert!(after.record(&present.id).is_some());
         assert!(
             after.record(&referenced.id).is_some(),
-            "a record an open Finding refers to is never dropped"
+            "a record an open Threat Finding refers to is never dropped"
         );
         assert!(after.record(&lately_gone.id).is_some());
         assert!(after.record(&long_gone.id).is_none());

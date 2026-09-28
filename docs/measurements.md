@@ -99,3 +99,20 @@ What changed against the day before, and why:
   itself took 9 ms to 13 ms.
 - **Compiling the Rule Pack takes 0.78 s to 0.84 s**, unchanged, and is still
   done once at start.
+
+## 2026-09-28, how two of the budgets are read
+
+No new figures; the owner settled how two of the measurements above count
+against specification section 6.10.
+
+- **Idle memory is read five minutes after a Scan.** The budget of under
+  100 MB is measured against the settled footprint, taken once the allocator
+  has handed back the pages a Full Scan used, which on the author's machine is
+  about five minutes after the Scan ends. The higher figure in those first
+  minutes is recorded beside it on every measurement and is not a miss.
+- **The due check wakes once a minute.** The daemon asks whether a Full Scan
+  is due every fifteen minutes, as the specification says, but the loop that
+  asks sleeps a minute at a time, so a wall clock that jumped (a machine that
+  was asleep) is noticed soon after the wake without subscribing to a wake
+  notification. That minute is part of idle: idle CPU is measured with it
+  running and stays at 0.0 %.

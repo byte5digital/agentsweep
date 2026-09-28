@@ -389,6 +389,13 @@ pub trait SurfaceAdapter {
     /// system.
     fn projects(&self, host: &Host) -> Vec<ProjectRegistration>;
 
+    /// The config layers this Agent merges that this adapter does not read,
+    /// named in plain words for the Inventory, so that nothing reads as
+    /// checked when it was not. The default is none.
+    fn layers_not_read(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Every Item on this Agent's Surfaces, at the user level and at each of
     /// the pooled project roots, with content and hashes in one pass.
     fn enumerate(&self, host: &Host, roots: &[PathBuf]) -> Enumeration;

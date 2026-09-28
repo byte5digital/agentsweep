@@ -13,7 +13,9 @@
 //! inside the binary, the MDM preference is a managed preference rather than a
 //! path, and the session flags are command line arguments. The cloud enterprise
 //! bundle is documented as living under the config directory without a file
-//! name, so nothing is guessed for it either. What is enumerated is every layer
+//! name, so nothing is guessed for it either. Neither managed layer is read in
+//! v1, and the Inventory says so rather than letting either read as checked.
+//! What is enumerated is every layer
 //! that is a file on disk: the system layer, the legacy managed and
 //! `requirements.toml` files, the user layer, every profile layer beside it and
 //! each project layer, together with the hooks file, the execution policy
@@ -1011,6 +1013,14 @@ impl SurfaceAdapter for Codex {
                 root,
             })
             .collect()
+    }
+
+    /// The two managed layers v1 does not read: the cloud enterprise bundle
+    /// has no documented file name, and the MDM preference is a managed
+    /// preference rather than a path. The package defaults and the session
+    /// flags are not configuration on disk, so they are not named.
+    fn layers_not_read(&self) -> &'static [&'static str] {
+        &["the cloud enterprise bundle", "the MDM managed preference"]
     }
 
     fn enumerate(&self, host: &Host, roots: &[PathBuf]) -> Enumeration {

@@ -169,6 +169,15 @@ fn render(
                 .map(|dir| dir.display().to_string())
                 .unwrap_or_default()
         );
+        let not_read = agent.layers_not_read();
+        if detection.installed && !not_read.is_empty() {
+            let _ = writeln!(
+                out,
+                "{} not read in v1: {}",
+                agent.descriptor().display_name,
+                not_read.join(", ")
+            );
+        }
     }
     let _ = writeln!(out, "project roots: {}", roots.len());
     let _ = writeln!(out);
@@ -256,6 +265,40 @@ mod tests {
         assert!(
             !listed.contains("/opt/example/key"),
             "a value never reaches the listing: {listed}"
+        );
+
+        fs::remove_dir_all(&home).expect("the fake home goes away");
+    }
+
+    /// The two managed layers Codex merges that v1 does not read are named,
+    /// so a listing never reads as if they had been checked. The home is this
+    /// test's own, never the real one.
+    #[test]
+    fn the_listing_names_the_codex_layers_it_did_not_read() {
+        let home = std::env::temp_dir().join(format!(
+            "agentsweep-developer-not-read-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join(".codex")).expect("a fake Codex home");
+        fs::write(
+            home.join(".codex").join("config.toml"),
+            b"model = \"example\"\n",
+        )
+        .expect("a fake user layer");
+
+        let listed = list_items(Some(home.clone())).expect("the listing runs");
+
+        assert!(listed.contains("Codex installed=true"), "{listed}");
+        assert!(
+            listed.contains(
+                "Codex not read in v1: the cloud enterprise bundle, the MDM managed preference"
+            ),
+            "{listed}"
+        );
+        assert!(
+            !listed.contains("Claude Code not read"),
+            "Claude Code names no layer it skips: {listed}"
         );
 
         fs::remove_dir_all(&home).expect("the fake home goes away");

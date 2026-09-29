@@ -19,7 +19,7 @@ all-features = true
 # reason, never a relaxed default.
 yanked = "deny"
 ignore = [
-    # All three come from the rule engine. YARA-X 1.20 requires wasmtime
+    # All four come from the rule engine. YARA-X 1.20 requires wasmtime
     # 45.0.3, and the wasmtime advisories below have no fix on the 45 line, so
     # none of them can be resolved by an upgrade. Revisit on every YARA-X
     # release: the exception goes the moment a version that takes a patched
@@ -39,6 +39,12 @@ ignore = [
     # only, so `wasmtime-wasi` is not in the dependency graph and the
     # vulnerable code is never compiled in.
     "RUSTSEC-2026-0269",
+    # Dynamic record lifting in the component model can allocate past the
+    # hostcall fuel limit. YARA-X runs core WebAssembly modules from its own
+    # compiler and never instantiates a component, so no record is ever
+    # lifted dynamically and the fuel limit is not what bounds its runs.
+    # Accepted by the owner on 2026-09-29.
+    "RUSTSEC-2026-0316",
     # The next five come from the menu bar app. Tauri 2.11.5 matches the URLs
     # of its capabilities with `urlpattern`, which reads identifiers with the
     # unic Unicode tables, and those are unmaintained, not vulnerable. The app

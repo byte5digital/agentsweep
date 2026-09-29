@@ -20,6 +20,7 @@
 //!   subscribe stream, with the actions the daemon allows on each Finding.
 //! - [`folder`]: the answer of a Folder Scan as the window shows it.
 //! - [`window`]: when the app shows in the Dock.
+//! - [`placement`]: where the popover and the Findings window open.
 //! - [`glyph`]: the menu bar icon in its three states.
 //! - [`app`]: the Tauri shell around them, which the suite never starts.
 
@@ -32,6 +33,7 @@ pub mod folder;
 pub mod glyph;
 pub mod launch_agent;
 pub mod link;
+pub mod placement;
 pub mod popover;
 pub mod supervision;
 pub mod window;

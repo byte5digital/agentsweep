@@ -39,7 +39,10 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 use tauri::image::Image;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Rect, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, Manager, Monitor, PhysicalPosition, Rect, WebviewWindow,
+    WindowEvent,
+};
 
 use agentsweep_ipc::protocol::Message;
 
@@ -48,6 +51,7 @@ use crate::findings::{Findings, Follow, quarantine_confirmation};
 use crate::folder;
 use crate::glyph::{self, Mark};
 use crate::link::{Link, Socket, Update};
+use crate::placement;
 use crate::popover::View;
 use crate::supervision::{self, Services, SystemServices, Unsupervised};
 use crate::window::{Presence, presence};
@@ -291,6 +295,13 @@ fn show_window(app: &AppHandle) {
     }
     present(app, presence(true));
     if let Some(window) = app.get_webview_window(WINDOW) {
+        // A window already open, or in the Dock, comes back where it was; one
+        // that opens anew opens centred on the display the user is working on.
+        let open = window.is_visible().unwrap_or(false) || window.is_minimized().unwrap_or(false);
+        if !open && let Some(display) = display_under_pointer(app) {
+            let placed = placement::window_position(display, size_of(&window));
+            let _ = window.set_position(LogicalPosition::new(placed.x, placed.y));
+        }
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -400,7 +411,8 @@ fn take(app: &AppHandle, update: Update) {
     }
 }
 
-/// Shows the popover under the tray icon, or hides it when it is showing.
+/// Shows the popover under the tray icon, on the display the icon is on, or
+/// hides it when it is showing.
 fn toggle(app: &AppHandle, anchor: Rect) {
     let Some(window) = app.get_webview_window(POPOVER) else {
         return;
@@ -409,18 +421,54 @@ fn toggle(app: &AppHandle, anchor: Rect) {
         let _ = window.hide();
         return;
     }
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let at = anchor.position.to_physical::<f64>(scale);
-    let size = anchor.size.to_physical::<f64>(scale);
-    let width = window
-        .outer_size()
-        .map(|size| f64::from(size.width))
-        .unwrap_or(0.0);
-    let x = at.x + size.width / 2.0 - width / 2.0;
-    let y = at.y + size.height;
-    let _ = window.set_position(PhysicalPosition::new(x.max(0.0), y));
+    // The tray reports the icon in the physical pixels of its own display.
+    // The pointer is on the icon that was just clicked, so the display under
+    // the pointer is the display under the icon.
+    if let Some(display) = display_under_pointer(app) {
+        let at = anchor.position.to_physical::<f64>(display.scale);
+        let size = anchor.size.to_physical::<f64>(display.scale);
+        let icon = placement::Icon {
+            x: at.x,
+            y: at.y,
+            width: size.width,
+            height: size.height,
+        };
+        let placed = placement::popover_position(icon, display, size_of(&window));
+        let _ = window.set_position(LogicalPosition::new(placed.x, placed.y));
+    }
     let _ = window.show();
     let _ = window.set_focus();
+}
+
+/// A window's outer size in points.
+fn size_of(window: &WebviewWindow) -> placement::Size {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let size = window
+        .outer_size()
+        .map(|size| size.to_logical::<f64>(scale))
+        .unwrap_or_default();
+    placement::Size {
+        width: size.width,
+        height: size.height,
+    }
+}
+
+/// The display under the pointer, as the operating system reports it, or the
+/// main display when there is none.
+fn display_under_pointer(app: &AppHandle) -> Option<placement::Display> {
+    let main = app.primary_monitor().ok().flatten();
+    let under = app.cursor_position().ok().and_then(|pointer| {
+        let scale = main.as_ref().map_or(1.0, Monitor::scale_factor);
+        let point = placement::pointer_in_points(pointer.x, pointer.y, scale);
+        app.monitor_from_point(point.x, point.y).ok().flatten()
+    });
+    under.or(main).map(|monitor| placement::Display {
+        x: monitor.position().x,
+        y: monitor.position().y,
+        width: monitor.size().width,
+        height: monitor.size().height,
+        scale: monitor.scale_factor(),
+    })
 }
 
 /// Runs the app until it is quit.

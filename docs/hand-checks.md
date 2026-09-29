@@ -46,21 +46,21 @@ launchctl print gui/$(id -u)/de.byte5.agentsweep.daemon | grep -E 'state|pid|pro
 
 `--developer-status` prints where both registrations stand: `enabled` for the daemon and the login item after the first launch. SMAppService answers `not found` for a service that was never registered, which is why the app registers on that answer too.
 
-- [ ] macOS shows a "Background Items Added" notice naming AgentSweep.
-- [ ] The service is `running` with a pid, and its program is `.../AgentSweep.app/Contents/MacOS/agentsweepd`.
-- [ ] System Settings, General, Login Items lists AgentSweep under "Open at Login" and under "Allow in the Background".
-- [ ] `~/agentsweep-hand-check/AgentSweep.app/Contents/MacOS/agentsweep status` prints a Health sentence, not "Protection is off".
+- [X] macOS shows a "Background Items Added" notice naming AgentSweep.
+- [X] The service is `running` with a pid, and its program is `.../AgentSweep.app/Contents/MacOS/agentsweepd`.
+- [X] System Settings, General, Login Items lists AgentSweep under "Open at Login" and under "Allow in the Background".
+- [X] `~/agentsweep-hand-check/AgentSweep.app/Contents/MacOS/agentsweep status` prints a Health sentence, not "Protection is off".
 
 Quit from the popover (**Quit AgentSweep (protection stays on)**), or `pkill -x agentsweep-menubar`, then:
 
-- [ ] `launchctl print ...` still shows the same pid running, and `agentsweep status` still answers.
+- [X] `launchctl print ...` still shows the same pid running, and `agentsweep status` still answers.
 
 ## 2. The popover follows Health within a second
 
 Open the app again and click the menu bar icon.
 
-- [ ] The popover opens under the icon with the orb, one sentence, "Last check" and Quit.
-- [ ] Run `agentsweep scan` from the bundle in a terminal: the sentence turns to "Checking now." and back to the all-clear sentence within a second of the Scan starting and ending.
+- [-] The popover opens under the icon with the orb, one sentence, "Last check" and Quit. (Opens on the main screen only not on second screen)
+- [X] Run `agentsweep scan` from the bundle in a terminal: the sentence turns to "Checking now." and back to the all-clear sentence within a second of the Scan starting and ending.
 
 Seams in the suite: `link::tests::the_view_follows_the_health_on_the_stream` (app) and `a_subscriber_is_told_the_health_first_and_again_when_it_moves` (daemon).
 
@@ -70,8 +70,8 @@ Seams in the suite: `link::tests::the_view_follows_the_health_on_the_stream` (ap
 kill -9 $(pgrep -x agentsweepd)
 ```
 
-- [ ] With the popover open, "Protection is off" and the **Open Login Items** button appear at once.
-- [ ] Within about ten seconds `launchctl print ...` shows a new pid, and the popover returns to the Health sentence without being reopened.
+- [X] With the popover open, "Protection is off" and the **Open Login Items** button appear at once.
+- [X] Within about ten seconds `launchctl print ...` shows a new pid, and the popover returns to the Health sentence without being reopened. (Took longer than 10 Seconds)
 
 Seam in the suite: `link::tests::a_daemon_that_does_not_answer_is_protection_off_with_login_items`.
 

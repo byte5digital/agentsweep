@@ -461,7 +461,7 @@ pub fn trust_confirmation(finding: &RecordedFinding) -> Value {
 /// One progress event on one line, as the command line interface prints it.
 pub fn progress_line(done: usize, total: usize) -> String {
     match total {
-        0 => "Finding the Items to check.".to_string(),
+        0 => "Looking for what to check.".to_string(),
         _ => format!("Checked {done} of {}.", count(total, "Item", "Items")),
     }
 }
@@ -933,7 +933,7 @@ pub(crate) mod tests {
         };
         assert_eq!(list.apply(&started), Follow::Render);
         assert!(list.scan().running);
-        assert_eq!(list.scan().line, "Finding the Items to check.");
+        assert_eq!(list.scan().line, "Looking for what to check.");
         list.apply(&StateEvent::ScanProgress { done: 3, total: 17 });
         assert_eq!(list.scan().line, "Checked 3 of 17 Items.");
         let summary = ScanSummary {

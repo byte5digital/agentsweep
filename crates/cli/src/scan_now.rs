@@ -155,7 +155,7 @@ pub fn follow(
 /// One progress event on one line.
 pub fn progress_line(done: usize, total: usize) -> String {
     match total {
-        0 => "Finding the Items to check.".to_string(),
+        0 => "Looking for what to check.".to_string(),
         _ => format!("Checked {done} of {}.", count(total, "Item", "Items")),
     }
 }
@@ -268,7 +268,7 @@ mod tests {
         );
         assert_eq!(
             printed,
-            "Finding the Items to check.\nChecked 0 of 3 Items.\nChecked 3 of 3 Items.\n"
+            "Looking for what to check.\nChecked 0 of 3 Items.\nChecked 3 of 3 Items.\n"
         );
         assert_eq!(summary.expect("a summary").trigger, Trigger::ScanNow);
     }
@@ -295,8 +295,8 @@ mod tests {
         assert_eq!(
             printed,
             format!(
-                "\r{}\r{:<27}\n",
-                "Finding the Items to check.", "Checked 3 of 3 Items."
+                "\r{}\r{:<26}\n",
+                "Looking for what to check.", "Checked 3 of 3 Items."
             ),
         );
     }

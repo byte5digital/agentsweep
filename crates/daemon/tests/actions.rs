@@ -1124,6 +1124,19 @@ fn a_clean_newer_plugin_version_offers_re_enable_and_re_enable_switches_it_back_
         "nothing flips by itself"
     );
 
+    // The next Scan finds the machine as the last one did, so the Receipt
+    // still stands and so does the offer: the watcher's own Scan of the
+    // update, or any Scan after it, must not drop them.
+    scan_again(&sandbox, &daemon);
+    let status = sandbox.status();
+    let held = status
+        .findings
+        .iter()
+        .find(|finding| finding.receipt_id == stopped.receipt_id)
+        .unwrap_or_else(|| panic!("the stopped Finding, one Scan later: {:?}", status.findings));
+    assert_eq!(held.state, FindingState::Stopped);
+    assert!(!held.fixed_version.is_empty(), "{:?}", status.findings);
+
     let report = sandbox
         .client()
         .re_enable(&stopped.receipt_id)
@@ -1148,6 +1161,13 @@ fn a_clean_newer_plugin_version_offers_re_enable_and_re_enable_switches_it_back_
 
     scan_again(&sandbox, &daemon);
     let status = sandbox.status();
+    let held = status
+        .findings
+        .iter()
+        .find(|finding| finding.receipt_id == stopped.receipt_id)
+        .unwrap_or_else(|| panic!("the old version, still stopped: {:?}", status.findings));
+    assert_eq!(held.state, FindingState::Stopped);
+    assert!(held.fixed_version.is_empty(), "offered once");
     assert!(
         !status
             .findings

@@ -530,23 +530,32 @@ impl Judgement<'_> {
                 placed.receipt_id.clear();
             }
         }
-        // A Full Scan speaks for everything, so what the store holds stands
-        // as stopped even when no Scan since raised it: the Item is not on
-        // its Surface to raise anything about, and the Receipt is the record.
-        if self.kind == ScanKind::Full {
-            let present: BTreeSet<&ItemId> = kinds.keys().collect();
-            let mut held: Vec<&QuarantineEntry> = quarantined
-                .entries()
-                .filter(|entry| !present.contains(&entry.item_id))
-                .collect();
-            held.sort_by_key(|entry| entry.quarantined_at);
-            for entry in held {
-                let stopped = stopped_by(entry, self.pack);
-                if standing.iter().any(|placed| placed.id == stopped.id) {
-                    continue;
-                }
-                standing.push(stopped);
+        // What the store holds stands as stopped even when no Scan since
+        // raised it, because the Receipt is the record. A Full Scan speaks for
+        // everything, so that is every Receipt. A Change Scan speaks for the
+        // Items it looked at, so that is the Receipts on those. Where the Item
+        // is gone, there is nothing on its Surface to raise anything about;
+        // where it is there at another version, as a plugin the Agent updated
+        // after its switch was turned off, that version raises nothing about
+        // the one the Receipt stopped. Either way no Scan carries the Finding
+        // forward, and one that is left to the last Scan's memory lasts one
+        // Scan. An Item that is back with what was taken out, and was not
+        // taken out again, is the exception above and stays open.
+        let mut held: Vec<&QuarantineEntry> = quarantined
+            .entries()
+            .filter(|entry| self.kind == ScanKind::Full || kinds.contains_key(&entry.item_id))
+            .filter(|entry| !acted.returned.contains(&entry.item_id))
+            .collect();
+        held.sort_by_key(|entry| entry.quarantined_at);
+        for entry in held {
+            let stopped = stopped_by(entry, self.pack);
+            if standing
+                .iter()
+                .any(|placed| placed.id == stopped.id || placed.receipt_id == entry.receipt_id)
+            {
+                continue;
             }
+            standing.push(stopped);
         }
         withdrawn(&mut standing, self.pack);
         let fixed_versions = fixed_versions(&quarantined, enumeration, &raised);

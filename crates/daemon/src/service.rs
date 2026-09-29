@@ -339,7 +339,11 @@ impl Daemon {
                 pack.origin,
             );
             record.discarded_version = version;
-            PendingPackChange { record, before }
+            PendingPackChange {
+                record,
+                before,
+                from: (version, PackOrigin::Fetched),
+            }
         });
         let activity = activity_in_the_event_log(&directory, &*keys);
         let now = (tuning.due.now)();
@@ -1126,6 +1130,9 @@ struct PendingPackChange {
     /// The Rules of the pack in force before, which what it withdrew and what
     /// left Probation are measured against.
     before: PackRules,
+    /// The version and origin of that pack: a change that puts it back in
+    /// force before any Scan ran without it changed nothing.
+    from: (u64, PackOrigin),
 }
 
 /// The Rules of one pack by id, with where each stands.
@@ -1461,45 +1468,45 @@ impl Daemon {
     /// withdrawn stays and says so, a Rule that left Probation acts through
     /// the automatic Quarantine every Scan applies.
     ///
-    /// A fetched pack is a change the Event Log records, with what it withdrew
-    /// and what left Probation, just before that Full Scan; its Activity lines
-    /// are built from the record. Two packs accepted before the Scan are one
-    /// change, measured against the pack the last Scan ran with. The bundled
-    /// pack put back by the toggle is no such change and has its line only.
+    /// Every pack put in force is a change the Event Log records, with what
+    /// it withdrew and what left Probation, just before that Full Scan: a
+    /// fetched pack as accepted, the bundled pack put back by switching the
+    /// Rule Feed off as the stored pack set aside. Its Activity lines are
+    /// built from the record. Changes made before the Scan are one change,
+    /// measured against the pack the last Scan ran with, and none at all when
+    /// they put that pack back in force.
     fn adopt(self: &Arc<Daemon>, pack: Arc<LoadedPack>) {
-        let line = format!(
-            "Rule Pack {} ({}) is in force, released {}.",
-            pack.manifest.pack_version,
-            pack.origin,
-            pack.manifest.released_on()
-        );
         {
             let mut pending = self
                 .pack_change
                 .lock()
                 .expect("the pack change is not poisoned");
-            match pack.origin {
-                PackOrigin::Fetched => {
-                    let before = match pending.take() {
-                        Some(earlier) => earlier.before,
-                        None => rules_of(&self.pack_in_force().rules),
-                    };
-                    let record = RulePackRecord::new(
-                        PackChange::Accepted,
-                        pack.manifest.pack_version,
-                        &pack.manifest.released_at,
-                        pack.origin,
-                    );
-                    *pending = Some(PendingPackChange { record, before });
+            let (before, from) = match pending.take() {
+                Some(earlier) => (earlier.before, earlier.from),
+                None => {
+                    let in_force = self.pack_in_force();
+                    (
+                        rules_of(&in_force.rules),
+                        (in_force.manifest.pack_version, in_force.origin),
+                    )
                 }
-                PackOrigin::Bundled => {
-                    if pending
-                        .as_ref()
-                        .is_some_and(|earlier| earlier.record.change == PackChange::Accepted)
-                    {
-                        *pending = None;
-                    }
-                }
+            };
+            let change = match pack.origin {
+                PackOrigin::Fetched => PackChange::Accepted,
+                PackOrigin::Bundled => PackChange::SetAside,
+            };
+            if from != (pack.manifest.pack_version, pack.origin) {
+                let record = RulePackRecord::new(
+                    change,
+                    pack.manifest.pack_version,
+                    &pack.manifest.released_at,
+                    pack.origin,
+                );
+                *pending = Some(PendingPackChange {
+                    record,
+                    before,
+                    from,
+                });
             }
         }
         {
@@ -1508,16 +1515,8 @@ impl Daemon {
             health.rule_pack_origin = pack.origin;
             health.rules_released_at = pack.manifest.released_at.clone();
         }
-        let recorded = pack.origin == PackOrigin::Fetched;
         *self.pack.write().expect("the pack is not poisoned") = pack;
         self.forget_evaluations();
-        if !recorded {
-            say!("{line}");
-            self.publish(StateEvent::Activity {
-                line,
-                sequence: None,
-            });
-        }
         self.tell_health();
         self.scan_with_the_new_pack();
     }

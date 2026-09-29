@@ -337,6 +337,30 @@ fn rule_0001_withdrawn(version: u64) -> Release {
     })
 }
 
+/// The pack with a Rule 0021 the bundled pack lacks: a copy of Rule 0001 under
+/// a new id, so it fires on the planted skill too.
+fn rule_0021_added(version: u64) -> Release {
+    a_release(version, "0.1.0", |root| {
+        let from = root.join("rules/0001-decode-pipe-exec");
+        let to = root.join("rules/0021-decode-pipe-exec-again");
+        copy_tree(&from, &to);
+        let rule = to.join("rule.yar");
+        let text = std::fs::read_to_string(&rule).expect("rule 0001");
+        let renamed = text
+            .replacen(
+                "as_0001_decode_pipe_exec",
+                "as_0021_decode_pipe_exec_again",
+                1,
+            )
+            .replacen("id          = 1\n", "id          = 21\n", 1);
+        assert!(
+            renamed.contains("id          = 21\n"),
+            "Rule 0021 has its id"
+        );
+        std::fs::write(&rule, renamed).expect("rule 0021");
+    })
+}
+
 fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).expect("a directory");
     for entry in std::fs::read_dir(from).expect("a readable tree") {
@@ -1143,6 +1167,118 @@ fn switching_the_feed_off_puts_the_bundled_pack_in_force_and_on_puts_the_stored_
     sandbox.client().set_rule_feed(true).expect("on");
     assert_eq!(daemon.daemon().pack_in_force().manifest.pack_version, 2);
     assert_eq!(feed.requests_for(&archive), downloads, "no second download");
+}
+
+/// Switching the Rule Feed off sets the stored pack aside and puts the bundled
+/// pack in force, which is a change the Event Log records like any other: the
+/// Rule the stored pack had and the bundled one lacks is withdrawn, its open
+/// Finding goes gone, and the Activity lines carry the record's sequence.
+/// Switching off again changes nothing and records nothing.
+#[test]
+fn switching_the_feed_off_records_the_bundled_pack_and_what_it_withdrew() {
+    let sandbox = Sandbox::with_a_planted_skill("set-aside");
+    let feed = FeedServer::start();
+    let daemon = sandbox.start(&feed, false);
+    feed.offer_index(2);
+    feed.offer_release(2, &rule_0021_added(2));
+    assert_eq!(
+        daemon.daemon().fetch_rule_feed(),
+        FeedOutcome::Accepted { pack_version: 2 }
+    );
+    wait_for_the_pack_scan(daemon.daemon());
+    let status = sandbox.status();
+    let finding = status
+        .findings
+        .iter()
+        .find(|finding| finding.item_id.as_str().contains("skills/setup") && finding.rule_id == 21)
+        .expect("the Finding of Rule 0021")
+        .clone();
+    assert_eq!(finding.state, FindingState::Open);
+
+    let mut stream = Client::connect_at(&sandbox.socket, Role::App)
+        .expect("a client")
+        .subscribe()
+        .expect("a subscription");
+    sandbox.client().set_rule_feed(false).expect("off");
+    let mut activity = Vec::new();
+    let mut sequences = Vec::new();
+    loop {
+        match stream.next_event().expect("an event") {
+            Some(StateEvent::Activity { line, sequence }) => {
+                activity.push(line);
+                sequences.push(sequence);
+            }
+            Some(StateEvent::ScanFinished { summary }) if summary.trigger == Trigger::RulePack => {
+                break;
+            }
+            Some(_) => {}
+            None => panic!("the stream ended before the Scan of the bundled pack did"),
+        }
+    }
+    wait_for_the_pack_scan(daemon.daemon());
+    let bundled = daemon.daemon().pack_in_force();
+    assert_eq!(bundled.origin, PackOrigin::Bundled);
+
+    let events = EventLog::in_data_directory(&sandbox.data())
+        .read(&sandbox.keys)
+        .expect("the Event Log");
+    assert_eq!(events.state, ChainState::Intact);
+    assert_eq!(events.rule_packs.len(), 2, "{:?}", events.rule_packs);
+    let recorded = &events.rule_packs[1];
+    assert!(recorded.verified);
+    assert_eq!(recorded.record.change, PackChange::SetAside);
+    assert_eq!(recorded.record.pack_version, bundled.manifest.pack_version);
+    assert_eq!(recorded.record.origin, PackOrigin::Bundled);
+    assert_eq!(recorded.record.released_at, bundled.manifest.released_at);
+    assert_eq!(recorded.record.withdrawn, vec![21]);
+    assert_eq!(recorded.record.gone, vec![finding.id.clone()]);
+    assert!(recorded.record.left_probation.is_empty());
+
+    assert!(
+        activity
+            .iter()
+            .any(|line| line.contains("switched off") && line.contains("in force")),
+        "{activity:?}"
+    );
+    assert!(
+        activity.iter().any(
+            |line| line.starts_with("Rule 0021 was withdrawn") && line.contains("skills/setup")
+        ),
+        "{activity:?}"
+    );
+    assert!(
+        sequences
+            .iter()
+            .all(|sequence| *sequence == Some(recorded.sequence)),
+        "{sequences:?}"
+    );
+    let status = sandbox.status();
+    let gone = status
+        .findings
+        .iter()
+        .find(|recorded| recorded.id == finding.id)
+        .expect("the gone Finding is kept");
+    assert_eq!(gone.state, FindingState::Gone);
+    assert_eq!(gone.plain, RULE_WITHDRAWN_GONE);
+
+    // Off again changes nothing: the Scan after it records no change.
+    sandbox.client().set_rule_feed(false).expect("off again");
+    assert!(sandbox.client().scan_now().expect("a Scan"));
+    assert!(
+        until(|| {
+            !daemon.daemon().health().scanning
+                && daemon
+                    .daemon()
+                    .status()
+                    .scan
+                    .is_some_and(|scan| scan.trigger == Trigger::ScanNow)
+        }),
+        "the Scan after the second switch did not finish"
+    );
+    let events = EventLog::in_data_directory(&sandbox.data())
+        .read(&sandbox.keys)
+        .expect("the Event Log");
+    assert_eq!(events.rule_packs.len(), 2, "{:?}", events.rule_packs);
 }
 
 /// A stored pack that no longer verifies at start is discarded, never

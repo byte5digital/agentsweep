@@ -59,10 +59,11 @@ Quit from the popover (**Quit AgentSweep (protection stays on)**), or `pkill -x 
 
 Open the app again and click the menu bar icon.
 
-- [-] The popover opens under the icon with the orb, one sentence, "Last check" and Quit. (Opens on the main screen only not on second screen)
+- [-] The popover opens under the icon with the orb, one sentence, "Last check" and Quit. (2026-09-29: it opened on the main display only. It now opens on the display of the icon that was clicked; the next line checks that.)
+- [ ] With a second display attached, click the menu bar icon on that display, then on the main one: each time the popover opens under the icon that was clicked and inside that display, also with the second display arranged left of or above the main one. With the pointer on the second display, choose to open the Findings window: it opens centred on that display. Move it, open it again from the popover: it stays where it was.
 - [X] Run `agentsweep scan` from the bundle in a terminal: the sentence turns to "Checking now." and back to the all-clear sentence within a second of the Scan starting and ending.
 
-Seams in the suite: `link::tests::the_view_follows_the_health_on_the_stream` (app) and `a_subscriber_is_told_the_health_first_and_again_when_it_moves` (daemon).
+Seams in the suite: `link::tests::the_view_follows_the_health_on_the_stream` (app) and `a_subscriber_is_told_the_health_first_and_again_when_it_moves` (daemon); for where the popover and the window open, the tests of `placement` (app), which place them from the display's bounds and scale but never ask a real display.
 
 ## 3. Killing the daemon shows Protection off, KeepAlive brings it back
 
@@ -71,7 +72,7 @@ kill -9 $(pgrep -x agentsweepd)
 ```
 
 - [X] With the popover open, "Protection is off" and the **Open Login Items** button appear at once.
-- [X] Within about ten seconds `launchctl print ...` shows a new pid, and the popover returns to the Health sentence without being reopened. (Took longer than 10 Seconds)
+- [X] Within about ten seconds `launchctl print ...` shows a new pid, and the popover returns to the Health sentence without being reopened. (2026-09-29: took longer than ten seconds with the debug daemon of the hand-check bundle. Moved to ticket 36, which rewords this promise to what launchd does and notes how long a debug build takes to its first answer.)
 
 Seam in the suite: `link::tests::a_daemon_that_does_not_answer_is_protection_off_with_login_items`.
 

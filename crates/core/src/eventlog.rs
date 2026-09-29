@@ -626,6 +626,10 @@ pub enum PackChange {
     /// no longer verified, the bundled pack had caught up with it, or it
     /// needs a newer AgentSweep. The pack named is the one in force instead.
     Discarded,
+    /// The Rule Feed was switched off, so the stored pack from the Rule Feed
+    /// was set aside, kept on disk for the day the feed goes on again, and
+    /// the bundled pack named is in force.
+    SetAside,
 }
 
 impl PackChange {
@@ -634,6 +638,7 @@ impl PackChange {
         match self {
             PackChange::Accepted => "accepted",
             PackChange::Discarded => "discarded",
+            PackChange::SetAside => "set-aside",
         }
     }
 
@@ -642,6 +647,7 @@ impl PackChange {
         match text {
             "accepted" => Some(PackChange::Accepted),
             "discarded" => Some(PackChange::Discarded),
+            "set-aside" => Some(PackChange::SetAside),
             _ => None,
         }
     }
@@ -797,6 +803,10 @@ impl RulePackRecord {
             (PackChange::Discarded, discarded) => format!(
                 "Rule Pack {discarded} from the Rule Feed was discarded; Rule Pack {version} \
                  ({origin}) is in force."
+            ),
+            (PackChange::SetAside, _) => format!(
+                "The Rule Feed was switched off; Rule Pack {version} ({origin}) is in force, \
+                 released {released}."
             ),
         }];
         let mut accounted = std::collections::BTreeSet::new();
@@ -1276,6 +1286,23 @@ mod tests {
         assert_eq!(
             RulePackRecord::from_payload(&discarded.to_payload()),
             Some(discarded)
+        );
+
+        let set_aside = RulePackRecord::new(
+            PackChange::SetAside,
+            1,
+            "2026-09-25T00:00:00Z",
+            PackOrigin::Bundled,
+        );
+        assert_eq!(set_aside.to_payload()["change"], Value::from("set-aside"));
+        assert_eq!(
+            RulePackRecord::from_payload(&set_aside.to_payload()),
+            Some(set_aside.clone())
+        );
+        assert_eq!(
+            set_aside.activity()[0],
+            "The Rule Feed was switched off; Rule Pack 1 (bundled) is in force, released \
+             2026-09-25."
         );
     }
 

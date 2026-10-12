@@ -4,7 +4,10 @@
 //! still running, and a drag to the Trash takes the bundle away from under it.
 //! Spec section 9.5 settles both: a bundle that was replaced means finish the
 //! work in hand and exit, so `KeepAlive` starts the new binary; a bundle that
-//! is gone means exit cleanly for good. The version handshake the app makes at
+//! is gone means exit cleanly for good. A bundle that vanished is given a
+//! grace to come back, and is looked at once more when the daemon is about to
+//! exit: one that is back at its path by then was replaced, so only a path
+//! still empty at exit is gone. The version handshake the app makes at
 //! every launch is the backstop for anything this misses.
 //!
 //! Two things live here, kept apart the way the Scan watcher keeps them.
@@ -152,6 +155,34 @@ pub fn settle(first: Change, grace: Duration, mut look_again: impl FnMut() -> Ch
     }
     std::thread::sleep(grace);
     look_again()
+}
+
+/// Looks once more at the moment of exit, after the work in hand is finished.
+///
+/// A bundle that stayed away past the grace may still come back while the
+/// Full Scan in hand runs, which on a debug build takes minutes: a rebuild in
+/// place removes the bundle for longer than the grace and then puts the new
+/// one at the same path. A bundle back at its path by the time the daemon
+/// exits was replaced, and only a path still empty means gone. Replaced stays
+/// replaced and same stays same.
+pub fn at_exit(change: Change, bundle: &Path) -> Change {
+    if change == Change::Gone && FileId::of(bundle).is_some() {
+        return Change::Replaced;
+    }
+    change
+}
+
+impl Change {
+    /// The status a daemon exits with for this change, or nothing when it
+    /// does not exit: [`EXIT_REPLACED`] for replaced, so `KeepAlive` starts
+    /// the binary that is there now, and zero for gone, so it stays down.
+    pub fn exit_status(self) -> Option<i32> {
+        match self {
+            Change::Same => None,
+            Change::Replaced => Some(i32::from(EXIT_REPLACED)),
+            Change::Gone => Some(0),
+        }
+    }
 }
 
 /// A running watch on the bundle. Dropping it stops the watch.
@@ -357,6 +388,65 @@ mod tests {
             settle(Change::Same, Duration::from_secs(3600), || unreachable!()),
             Change::Same
         );
+    }
+
+    /// A rebuild in place: the bundle vanishes, is still away when the grace
+    /// is over, and the new one is at the same path by the time the Full Scan
+    /// in hand has finished. That is replaced, and the daemon exits 75 so
+    /// `KeepAlive` starts the new binary.
+    #[test]
+    fn a_bundle_back_by_the_time_of_exit_was_replaced_and_exits_75() {
+        let folder = tempfile::tempdir().expect("a temporary directory");
+        let own = bundle_in(folder.path(), "0.1.0");
+        let started = own.snapshot();
+        fs::remove_dir_all(&own.bundle).expect("the bundle removed by the rebuild");
+
+        let settled = settle(
+            judge(&started, &own.snapshot()),
+            Duration::from_millis(1),
+            || judge(&started, &own.snapshot()),
+        );
+        assert_eq!(settled, Change::Gone, "still away when the grace is over");
+
+        // The work in hand runs; meanwhile the rebuild puts the new bundle in.
+        bundle_in(folder.path(), "0.1.0");
+
+        let last = at_exit(settled, &own.bundle);
+        assert_eq!(last, Change::Replaced);
+        assert_eq!(last.exit_status(), Some(75));
+    }
+
+    /// A bundle still away at the moment of exit is gone, and the daemon
+    /// exits 0 so `KeepAlive` leaves it down.
+    #[test]
+    fn a_bundle_still_away_at_exit_is_gone_and_exits_0() {
+        let folder = tempfile::tempdir().expect("a temporary directory");
+        let own = bundle_in(folder.path(), "0.1.0");
+        let started = own.snapshot();
+        let trash = folder.path().join(".Trash");
+        fs::create_dir_all(&trash).expect("a trash");
+        fs::rename(&own.bundle, trash.join("AgentSweep.app")).expect("the bundle trashed");
+
+        let settled = settle(
+            judge(&started, &own.snapshot()),
+            Duration::from_millis(1),
+            || judge(&started, &own.snapshot()),
+        );
+        let last = at_exit(settled, &own.bundle);
+        assert_eq!(last, Change::Gone);
+        assert_eq!(last.exit_status(), Some(0));
+    }
+
+    /// The last look never turns a replaced bundle into gone, and a daemon
+    /// whose bundle is the same does not exit.
+    #[test]
+    fn the_last_look_changes_only_gone() {
+        let folder = tempfile::tempdir().expect("a temporary directory");
+        let missing = folder.path().join("AgentSweep.app");
+        assert_eq!(at_exit(Change::Replaced, &missing), Change::Replaced);
+        assert_eq!(Change::Replaced.exit_status(), Some(75));
+        assert_eq!(at_exit(Change::Same, &missing), Change::Same);
+        assert_eq!(Change::Same.exit_status(), None);
     }
 
     /// The watch itself, end to end on a temporary bundle: a replacement is

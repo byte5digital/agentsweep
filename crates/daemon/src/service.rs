@@ -1809,26 +1809,32 @@ fn watch_the_bundle(daemon: &Arc<Daemon>, socket: &std::path::Path) -> Option<Bu
 ///
 /// Replaced exits with [`bundle_watch::EXIT_REPLACED`], which `KeepAlive`
 /// answers by starting the binary that is there now; gone exits with zero,
-/// which it answers by leaving the daemon down.
+/// which it answers by leaving the daemon down. A bundle judged gone is
+/// looked at once more after the work in hand: one back at its path by then
+/// was replaced (a rebuild in place outlasts the grace).
 fn leave(daemon: &Daemon, change: Change, bundle: &std::path::Path, socket: &std::path::Path) {
-    let code = match change {
+    match change {
         Change::Same => return,
-        Change::Replaced => {
-            say!(
-                "the bundle at {} was replaced: finishing the work in hand, then exiting so the new binary starts",
-                bundle.display()
-            );
-            i32::from(bundle_watch::EXIT_REPLACED)
-        }
-        Change::Gone => {
-            say!(
-                "the bundle at {} is gone: finishing the work in hand, then exiting for good",
-                bundle.display()
-            );
-            0
-        }
-    };
+        Change::Replaced => say!(
+            "the bundle at {} was replaced: finishing the work in hand, then exiting so the new binary starts",
+            bundle.display()
+        ),
+        Change::Gone => say!(
+            "the bundle at {} is gone: finishing the work in hand, then exiting for good",
+            bundle.display()
+        ),
+    }
     daemon.finish_the_work_in_hand();
+    let last = bundle_watch::at_exit(change, bundle);
+    if last != change {
+        say!(
+            "a bundle is back at {}: it was replaced, so exiting for the new binary to start",
+            bundle.display()
+        );
+    }
+    let Some(code) = last.exit_status() else {
+        return;
+    };
     let _ = std::fs::remove_file(socket);
     say!("exiting with status {code}");
     std::process::exit(code);

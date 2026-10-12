@@ -10,6 +10,8 @@
 use agentsweep_core::health::{Health, Rung};
 use serde_json::{Value, json};
 
+use crate::supervision::Stale;
+
 /// The state the orb and the menu bar glyph show.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Orb {
@@ -136,6 +138,27 @@ impl View {
             protection_off: false,
             login_items: false,
             detail: String::new(),
+        }
+    }
+
+    /// The view after the app registered a stale job again: what it did, and
+    /// why, while the daemon it started comes up. A passing state like an
+    /// update, so the orb shows a dash and no Login Items button.
+    pub fn registered_again(stale: &Stale) -> View {
+        View {
+            orb: Orb::Updating,
+            sentence: "AgentSweep registered its background item again.".to_string(),
+            last_check: None,
+            protection_off: false,
+            login_items: false,
+            detail: match stale {
+                Stale::Version { registered } => {
+                    format!("The background item was registered by version {registered}.")
+                }
+                Stale::CannotSpawn => {
+                    "launchd could not start the background item as registered.".to_string()
+                }
+            },
         }
     }
 

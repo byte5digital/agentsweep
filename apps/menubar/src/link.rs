@@ -10,20 +10,36 @@
 //! The handshake is where the version check happens (spec section 9.5): a
 //! daemon of another version is from another bundle, and the app re-registers
 //! it once per launch, which stops that daemon and starts its own.
+//!
+//! A daemon that does not answer at all can be the same thing one step
+//! earlier: a job SMAppService calls enabled, registered by another bundle
+//! version or with a code identity launchd now refuses to spawn. While no
+//! daemon answers, the link asks launchd about the job, and re-registers a
+//! stale one on the same once-per-launch allowance.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agentsweep_ipc::protocol::{Refusal, Role, StateEvent};
 use agentsweep_ipc::{Client, ClientError};
 
 use crate::popover::{Off, View};
-use crate::supervision::{self, Services};
+use crate::supervision::{self, ServiceState, Services, Stale};
 
 /// How long the link waits before it asks a daemon that did not answer again.
 pub const RETRY: Duration = Duration::from_secs(1);
+
+/// How often, at most, the link asks launchd about the daemon's job while no
+/// daemon answers: launchd's own pace between two spawns of a job that keeps
+/// failing, so each look can see a new last exit.
+pub const JOB_CHECK: Duration = Duration::from_secs(10);
+
+/// How long the popover keeps saying the background item was registered
+/// again while the daemon it started has not answered yet; after that, a
+/// daemon still silent is Protection off.
+pub const REGISTERED_AGAIN: Duration = Duration::from_secs(60);
 
 /// What the link hands to whoever shows it.
 #[derive(Clone, Debug, PartialEq)]
@@ -72,10 +88,14 @@ pub struct Link {
     services: Arc<dyn Services>,
     retry: Duration,
     stopping: Arc<AtomicBool>,
-    /// A daemon of another version is re-registered once per launch. A
-    /// second mismatch means the bundle itself is half updated, and asking
-    /// again would only restart the daemon in a loop.
+    /// A daemon of another version, or a stale job, is re-registered once
+    /// per launch. A second mismatch means the bundle itself is half updated,
+    /// and asking again would only restart the daemon in a loop.
     restarted: bool,
+    /// When launchd was last asked about the job.
+    job_checked: Option<Instant>,
+    /// The stale job this launch registered again, and when.
+    registered_again: Option<(Instant, Stale)>,
 }
 
 impl Link {
@@ -87,6 +107,8 @@ impl Link {
             retry: RETRY,
             stopping: Arc::new(AtomicBool::new(false)),
             restarted: false,
+            job_checked: None,
+            registered_again: None,
         }
     }
 
@@ -129,12 +151,15 @@ impl Link {
                 return;
             }
             Err(error) => {
-                sink(Update::View(
-                    self.off(Off::Unreachable(error.unreachable())),
-                ));
+                let view = match self.repair_stale_job() {
+                    Some(view) => view,
+                    None => self.off(Off::Unreachable(error.unreachable())),
+                };
+                sink(Update::View(view));
                 return;
             }
         };
+        self.registered_again = None;
         let mut stream = match client.subscribe() {
             Ok(stream) => stream,
             Err(error) => {
@@ -171,6 +196,50 @@ impl Link {
         }
     }
 
+    /// While no daemon answers: re-registers a stale job, once per launch,
+    /// and answers with the view that says so for as long as the daemon it
+    /// started takes to answer. `None` is a daemon that is merely down.
+    fn repair_stale_job(&mut self) -> Option<View> {
+        if let Some((at, stale)) = &self.registered_again {
+            return (at.elapsed() < REGISTERED_AGAIN).then(|| View::registered_again(stale));
+        }
+        if self.restarted || !self.services.supervises() {
+            return None;
+        }
+        if self
+            .job_checked
+            .is_some_and(|checked| checked.elapsed() < JOB_CHECK)
+        {
+            return None;
+        }
+        self.job_checked = Some(Instant::now());
+        // Only an enabled registration can be stale, so launchd is asked
+        // nothing about any other.
+        let agent = self.services.agent();
+        if agent != ServiceState::Enabled {
+            return None;
+        }
+        let stale = supervision::stale_job(
+            agent,
+            self.services.job().as_ref(),
+            supervision::BUNDLE_VERSION,
+        )?;
+        self.restarted = true;
+        match supervision::restart_daemon(&*self.services) {
+            Ok(()) => {
+                let view = View::registered_again(&stale);
+                self.registered_again = Some((Instant::now(), stale));
+                Some(view)
+            }
+            Err(error) => {
+                eprintln!(
+                    "agentsweep-menubar: the stale daemon job could not be registered again: {error}"
+                );
+                None
+            }
+        }
+    }
+
     /// Protection off, for the reason the registration gives when it gives
     /// one, and for `otherwise` when it does not.
     fn off(&self, otherwise: Off) -> View {
@@ -189,8 +258,8 @@ mod tests {
     use agentsweep_ipc::socket::SocketListener;
 
     use crate::popover::Orb;
-    use crate::supervision::ServiceState;
     use crate::supervision::tests::Recorded;
+    use crate::supervision::{BUNDLE_VERSION, EX_CONFIG, Job};
 
     fn socket_in(directory: &tempfile::TempDir) -> PathBuf {
         directory.path().join("agentsweep.sock")
@@ -342,6 +411,140 @@ mod tests {
             seen.iter().all(|view| view.orb == Orb::Updating),
             "{seen:?}"
         );
+    }
+
+    fn silent_daemon_with(job: Job) -> (Arc<Recorded>, Link, tempfile::TempDir) {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let services =
+            Arc::new(Recorded::with(ServiceState::Enabled, ServiceState::Enabled).holding(job));
+        let link = Link::new(Socket::At(socket_in(&directory)), services.clone());
+        (services, link, directory)
+    }
+
+    /// The job SMAppService calls enabled was registered by another bundle
+    /// version, and no daemon answers: the app registers it again, once, and
+    /// the popover says so instead of Protection off.
+    #[test]
+    fn a_job_of_another_version_with_no_daemon_answering_is_registered_again_once() {
+        let (services, mut link, _directory) = silent_daemon_with(Job {
+            parent_bundle_version: Some("0.0.1".to_string()),
+            last_exit: None,
+        });
+        let updates = Mutex::new(Vec::new());
+        for _ in 0..3 {
+            link.once(&|update| updates.lock().expect("the updates").push(update));
+        }
+        assert_eq!(services.calls(), vec!["unregister agent", "register agent"]);
+        let seen = views(&updates);
+        assert_eq!(seen.len(), 3);
+        for view in &seen {
+            assert_eq!(view.orb, Orb::Updating);
+            assert!(!view.protection_off);
+            assert_eq!(
+                view.sentence,
+                "AgentSweep registered its background item again."
+            );
+            assert_eq!(
+                view.detail,
+                "The background item was registered by version 0.0.1."
+            );
+        }
+    }
+
+    /// A job of the app's own version whose daemon does not answer, within
+    /// the KeepAlive window or after it, is Protection off and is left to
+    /// launchd.
+    #[test]
+    fn a_job_of_this_version_with_no_daemon_answering_is_left_alone() {
+        for last_exit in [None, Some(0), Some(75), Some(9)] {
+            let (services, mut link, _directory) = silent_daemon_with(Job {
+                parent_bundle_version: Some(BUNDLE_VERSION.to_string()),
+                last_exit,
+            });
+            // Asked past the pace at which launchd is consulted.
+            link.job_checked = Some(Instant::now() - JOB_CHECK * 2);
+            let updates = Mutex::new(Vec::new());
+            link.once(&|update| updates.lock().expect("the updates").push(update));
+            link.once(&|update| updates.lock().expect("the updates").push(update));
+            assert!(services.calls().is_empty(), "{last_exit:?}");
+            assert!(views(&updates).iter().all(|view| view.protection_off));
+        }
+    }
+
+    /// launchd refused to spawn the job (exit 78, `EX_CONFIG`), which is what
+    /// a new code identity behind an old registration looks like: the app
+    /// registers it again, once.
+    #[test]
+    fn a_job_launchd_cannot_spawn_with_no_daemon_answering_is_registered_again_once() {
+        let (services, mut link, _directory) = silent_daemon_with(Job {
+            parent_bundle_version: Some(BUNDLE_VERSION.to_string()),
+            last_exit: Some(EX_CONFIG),
+        });
+        let updates = Mutex::new(Vec::new());
+        link.once(&|update| updates.lock().expect("the updates").push(update));
+        // The fresh job fails again, and the allowance is spent.
+        *services.job.lock().expect("the job") = Some(Job {
+            parent_bundle_version: Some(BUNDLE_VERSION.to_string()),
+            last_exit: Some(EX_CONFIG),
+        });
+        link.job_checked = Some(Instant::now() - JOB_CHECK * 2);
+        link.registered_again = None;
+        link.once(&|update| updates.lock().expect("the updates").push(update));
+        assert_eq!(services.calls(), vec!["unregister agent", "register agent"]);
+        let seen = views(&updates);
+        assert_eq!(seen[0].orb, Orb::Updating);
+        assert_eq!(
+            seen[0].detail,
+            "launchd could not start the background item as registered."
+        );
+        assert!(seen[1].protection_off, "{:?}", seen[1]);
+    }
+
+    /// The popover says the item was registered again only for a while: a
+    /// daemon that still does not answer after that is Protection off.
+    #[test]
+    fn a_daemon_silent_long_after_registering_again_is_protection_off() {
+        let (_services, mut link, _directory) = silent_daemon_with(Job {
+            parent_bundle_version: Some("0.0.1".to_string()),
+            last_exit: None,
+        });
+        let updates = Mutex::new(Vec::new());
+        link.once(&|update| updates.lock().expect("the updates").push(update));
+        link.registered_again = Some((Instant::now() - REGISTERED_AGAIN * 2, Stale::CannotSpawn));
+        link.once(&|update| updates.lock().expect("the updates").push(update));
+        let seen = views(&updates);
+        assert_eq!(seen[0].orb, Orb::Updating);
+        assert!(seen[1].protection_off, "{:?}", seen[1]);
+    }
+
+    /// A version mismatch at the handshake and a stale job share the one
+    /// re-registration a launch allows.
+    #[test]
+    fn a_handshake_restart_spends_the_allowance_for_a_stale_job() {
+        let (services, mut link, _directory) = silent_daemon_with(Job {
+            parent_bundle_version: Some("0.0.1".to_string()),
+            last_exit: Some(EX_CONFIG),
+        });
+        link.restarted = true;
+        let updates = Mutex::new(Vec::new());
+        link.once(&|update| updates.lock().expect("the updates").push(update));
+        assert!(services.calls().is_empty());
+        assert!(views(&updates)[0].protection_off);
+    }
+
+    /// A developer run supervises nothing, so it never asks launchd and never
+    /// registers, whatever a job would say.
+    #[test]
+    fn a_developer_run_never_registers_a_job_again() {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let mut link = Link::new(
+            Socket::At(socket_in(&directory)),
+            Arc::new(supervision::Unsupervised),
+        );
+        let updates = Mutex::new(Vec::new());
+        link.once(&|update| updates.lock().expect("the updates").push(update));
+        assert!(views(&updates)[0].protection_off);
+        assert!(link.job_checked.is_none());
     }
 
     /// The loop itself: a stopped link returns, and while the daemon is away

@@ -72,9 +72,22 @@ kill -9 $(pgrep -x agentsweepd)
 ```
 
 - [X] With the popover open, "Protection is off" and the **Open Login Items** button appear at once.
-- [X] Within about ten seconds `launchctl print ...` shows a new pid, and the popover returns to the Health sentence without being reopened. (2026-09-29: took longer than ten seconds with the debug daemon of the hand-check bundle. Moved to ticket 36, which rewords this promise to what launchd does and notes how long a debug build takes to its first answer.)
+- [X] launchd starts the daemon again by itself: once its throttle interval has passed (typically ten seconds after the last start) and the daemon has started, `launchctl print ...` shows a new pid, and the popover returns to the Health sentence without being reopened. A debug build, like the one in the hand-check bundle, takes minutes to its first answer, because its first Full Scan and Rule Pack compile are slow; a release build answers within its start budget. (2026-09-29: took longer than ten seconds with the debug daemon of the hand-check bundle; the line now says what launchd does.)
 
-Seam in the suite: `link::tests::a_daemon_that_does_not_answer_is_protection_off_with_login_items`.
+Then rebuild the bundle in place, the way a developer does, while the new debug daemon's first Full Scan is still running (it takes minutes, so start right after the restart above):
+
+```sh
+old=$(pgrep -x agentsweepd)
+rm -rf ~/agentsweep-hand-check/AgentSweep.app
+sleep 15   # longer than the ten seconds a vanished bundle is given
+cp -R target/debug/bundle/macos/AgentSweep.app ~/agentsweep-hand-check/
+```
+
+- [ ] Without any further terminal command, once the Full Scan in hand has finished and launchd's throttle interval has passed, `pgrep -x agentsweepd` shows a pid other than `$old`. `~/Library/Logs/AgentSweep/daemon.log` says the bundle is gone, then that a bundle is back at its path, and that the daemon exited with status 75, not 0.
+
+A bundle still away when the work in hand is finished is gone for good, by design: if the daemon had nothing in hand, the copy has to be back within the ten seconds, or the check ends with the daemon down and a last exit status 0, as in section 5.
+
+Seams in the suite: `link::tests::a_daemon_that_does_not_answer_is_protection_off_with_login_items` (app), and for the rebuild in place `bundle_watch::tests::a_bundle_back_by_the_time_of_exit_was_replaced_and_exits_75` (daemon).
 
 ## 4. Replacing the bundle restarts the daemon from the new one
 

@@ -122,6 +122,9 @@ Move the bundle back to `~/agentsweep-hand-check/` for the clean-up; the daemon 
 - [ ] With the popover closed, AgentSweep has no Dock icon and no Cmd-Tab entry; `lsappinfo info -only ApplicationType -app agentsweep-menubar` says `UIElement`.
 - [ ] `~/Library/Logs/AgentSweep/daemon.log` exists, names paths and ids and never file content, MCP env values, headers or tokens.
 - [ ] Rotation at five files of five megabytes is covered by `log::tests::the_log_rotates_at_its_size_and_keeps_its_count_of_files` on a temporary directory; filling 25 MB by hand is not needed.
+- [ ] Rebuild the bundle in place at a new version, relaunch the app, the daemon is running within a minute without any terminal command. If launchd still held the job registered by the old bundle, the popover says "AgentSweep registered its background item again." until the daemon answers.
+
+Seams in the suite for the last line: the stale-job tests in `link::tests` (a job of another version, a job launchd could not spawn, a job of the app's own version left alone) and `supervision::tests::the_job_is_read_from_launchds_record`.
 
 ## 7. The Findings window acts through the daemon and follows the stream
 

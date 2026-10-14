@@ -99,9 +99,14 @@ impl Sandbox {
     /// way the daemon's Full Scans do. The bundled pack is compiled once for
     /// the whole test binary, as the daemon compiles it once.
     fn full_scan(&self) -> ScanRun {
+        self.full_scan_with(Some(&GateCommand::at(CLI)))
+    }
+
+    /// One Full Scan that verifies and mends the Gate's registration under
+    /// this command, or leaves the Gate alone when handed none.
+    fn full_scan_with(&self, command: Option<&GateCommand>) -> ScanRun {
         static PACK: OnceLock<LoadedPack> = OnceLock::new();
         let pack = PACK.get_or_init(|| LoadedPack::bundled().expect("the bundled pack"));
-        let command = GateCommand::at(CLI);
         FullScan {
             machine: &self.machine(),
             directory: &self.data(),
@@ -113,7 +118,7 @@ impl Sandbox {
             workers: BACKGROUND_WORKERS,
             progress: &Unwatched,
             acts: true,
-            gate: Some(&command),
+            gate: command,
         }
         .run(Trigger::ScanNow)
         .expect("a Full Scan")
@@ -143,6 +148,19 @@ impl Sandbox {
                 )
             })
             .collect()
+    }
+
+    /// A command line interface that reads as a native executable, built
+    /// into `target/debug` of a checkout at `checkout`, below the sandbox.
+    /// Its bytes are a Mach-O header and nothing else, so nothing could run
+    /// it.
+    fn built_cli(&self, checkout: &str) -> GateCommand {
+        let path = self.root.join(checkout).join("target/debug/agentsweep");
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+        let mut bytes = vec![0xcf, 0xfa, 0xed, 0xfe];
+        bytes.resize(64, 0);
+        std::fs::write(&path, bytes).expect("a built command line interface");
+        GateCommand::at(path)
     }
 
     fn check(&self, adapter: &dyn SurfaceAdapter) -> GateCheck {
@@ -253,6 +271,93 @@ fn the_first_full_scan_registers_both_agents_and_the_next_writes_nothing() {
     assert_eq!(std::fs::read(sandbox.hooks()).expect("the file"), hooks);
     assert_eq!(std::fs::read(sandbox.config()).expect("the file"), config);
     assert!(second.standing.is_empty(), "{:?}", second.standing);
+}
+
+/// AgentSweep's own Gate entries are never a Finding, wherever the command
+/// line interface they name lives: in the app bundle, in `target/debug` of a
+/// checkout, and in `target/debug` of a checkout below a `.claude` directory,
+/// which is where Claude Code keeps its worktrees and where Rule 0014 reads an
+/// Agent configuration directory. Neither the Full Scan that registers nor the
+/// one after it raises a Finding on any of them, for either Agent.
+#[test]
+fn a_full_scan_right_after_registration_raises_no_finding_on_the_gates_entries() {
+    let checkouts = [
+        ("bundle", None),
+        ("checkout", Some("checkout")),
+        ("worktree", Some("checkout/.claude/worktrees/integration")),
+    ];
+    for (name, checkout) in checkouts {
+        let sandbox = Sandbox::new(&format!("own-{name}"));
+        let command = match checkout {
+            Some(checkout) => sandbox.built_cli(checkout),
+            None => GateCommand::at(CLI),
+        };
+        let first = sandbox.full_scan_with(Some(&command));
+        let events = sandbox.gate_events();
+        let claude = events
+            .iter()
+            .filter(|(_, id)| id.starts_with("claude-code/"))
+            .count();
+        let codex = events
+            .iter()
+            .filter(|(_, id)| id.starts_with("codex/"))
+            .count();
+        assert_eq!((claude, codex), (3, 2), "{name}: {events:?}");
+        for (_, id) in &events {
+            assert!(
+                first.looked_at.iter().any(|seen| seen.as_str() == id),
+                "{name}: {id}"
+            );
+        }
+        assert!(first.standing.is_empty(), "{name}: {:?}", first.standing);
+
+        let second = sandbox.full_scan_with(Some(&command));
+        assert_eq!(sandbox.gate_events(), events, "{name}: no event appended");
+        assert!(second.standing.is_empty(), "{name}: {:?}", second.standing);
+    }
+}
+
+/// What clears the Gate's entries is AgentSweep's own registration of exactly
+/// that content, not their look: the same entries copied onto a machine whose
+/// Event Log never registered them are judged like any other hook, and a
+/// native executable below a `.claude` directory is Rule 0014's.
+#[test]
+fn the_same_entries_written_by_someone_else_are_judged() {
+    let registered = Sandbox::new("copied-from");
+    let command = registered.built_cli("checkout/.claude/worktrees/integration");
+    registered.full_scan_with(Some(&command));
+
+    let copied = Sandbox::new("copied-to");
+    for (from, to) in [
+        (registered.settings(), copied.settings()),
+        (registered.hooks(), copied.hooks()),
+        (registered.config(), copied.config()),
+    ] {
+        std::fs::copy(from, to).expect("a copied file");
+    }
+    let run = copied.full_scan_with(None);
+    let hits: Vec<&str> = run
+        .standing
+        .iter()
+        .filter(|found| found.finding.source == Source::Rule(14))
+        .map(|found| found.finding.item_id.as_str())
+        .collect();
+    assert_eq!(
+        hits.iter()
+            .filter(|id| id.starts_with("claude-code/user/hook/"))
+            .count(),
+        3,
+        "{:?}",
+        run.standing
+    );
+    assert_eq!(
+        hits.iter()
+            .filter(|id| id.starts_with("codex/user/hook/"))
+            .count(),
+        2,
+        "{:?}",
+        run.standing
+    );
 }
 
 /// One way the Gate's registration can be undone between two Full Scans.

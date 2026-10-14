@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use agentsweep_core::pack::{Manifest, STATEMENT_FILE};
 use agentsweep_core::pack_signature::PINNED_KEYS;
 use agentsweep_core::rules::RulePack;
-use agentsweep_xtask::{benign, corpus, iocs, pack_release, repo_root};
+use agentsweep_xtask::{bad, benign, corpus, iocs, pack_release, repo_root};
 
 const USAGE: &str = "\
 agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
@@ -22,6 +22,10 @@ agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
                                 the T1 hits and the hit count per Heuristic; with
                                 --record write the digest of what was fetched back into
                                 the manifest instead of holding the fetch to it
+    bad-corpus                  lint corpus/bad/, lay every sample out as the adapters
+                                would see it and report per sample the fired Rules and
+                                Heuristics and the Band, and per ranked class whether
+                                the bad set is sufficient for an eval result to count
     render-iocs [--check]       render the Indicator Lists into rules 0900 to 0903,
                                 or with --check only report a stale rendering
     pack [options]              write a Rule Pack release: manifest.json, which the
@@ -61,6 +65,7 @@ fn main() -> ExitCode {
         "benign-corpus" => {
             run_benign_corpus(arguments.iter().any(|argument| argument == "--record"))
         }
+        "bad-corpus" => run_bad_corpus(),
         "render-iocs" => render_iocs(arguments.iter().any(|argument| argument == "--check")),
         "pack" => build_pack(&arguments[1..]),
         "pack-gate" => gate_pack(&arguments[1..]),
@@ -166,6 +171,16 @@ fn run_benign_corpus(record: bool) -> Result<String, String> {
             Err(report)
         }
     }
+}
+
+/// Lints and runs the bad corpus. A sample that is not defanged fails; a
+/// corpus too small for an eval result to count does not, it says
+/// "insufficient".
+fn run_bad_corpus() -> Result<String, String> {
+    let root = repo_root();
+    let pack = RulePack::bundled().map_err(|error| format!("{error}\n"))?;
+    let report = bad::run(&root.join(bad::CORPUS), &root.join("rules"), &pack)?;
+    Ok(report.render())
 }
 
 /// Renders every Indicator List, or reports the ones whose committed Rule is

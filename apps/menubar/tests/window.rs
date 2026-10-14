@@ -1,6 +1,6 @@
 //! The Findings window against a real daemon: the list the app keeps from the
-//! status and the subscribe stream, the actions it sends, and the Folder Scan
-//! it asks for.
+//! status and the subscribe stream, the actions it sends, the Overview pane,
+//! and the Folder Scan it asks for.
 //!
 //! The daemon runs in this process on a temporary home, a temporary data
 //! directory and a temporary socket, with its chain key held in memory.
@@ -8,6 +8,7 @@
 //! directory or the login Keychain, and no window is opened: what the window
 //! would render is the view the app sends it.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, channel};
@@ -16,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use agentsweep_core::finding::{Category, FindingState};
 use agentsweep_core::keychain::MemoryKeySource;
+use agentsweep_core::pack::Manifest;
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::quarantine::Conflict;
 use agentsweep_core::settings::Posture;
@@ -31,6 +33,7 @@ use agentsweep_menubar::findings::{Findings, Follow, quarantine_confirmation};
 use agentsweep_menubar::folder::result_view;
 use agentsweep_menubar::frame::Frame;
 use agentsweep_menubar::link::{Link, Socket, Update};
+use agentsweep_menubar::popover::View;
 use agentsweep_menubar::supervision::Unsupervised;
 use serde_json::Value;
 
@@ -121,9 +124,11 @@ fn wait_for_a_scan(daemon: &Arc<Daemon>) {
     panic!("the Full Scan did not finish");
 }
 
-/// The app's link on a thread of its own, handing its state events over.
+/// The app's link on a thread of its own, handing its state events and the
+/// popover's views over.
 struct Following {
     events: Receiver<StateEvent>,
+    views: Receiver<View>,
     stop: Arc<AtomicBool>,
 }
 
@@ -133,15 +138,24 @@ impl Following {
             .retrying_every(Duration::from_millis(50));
         let stop = link.stopper();
         let (sender, events) = channel();
+        let (view_sender, views) = channel();
         let sender = Mutex::new(sender);
+        let view_sender = Mutex::new(view_sender);
         std::thread::spawn(move || {
-            link.run(|update| {
-                if let Update::Event(event) = update {
+            link.run(|update| match update {
+                Update::Event(event) => {
                     let _ = sender.lock().expect("the sender").send(event);
+                }
+                Update::View(view) => {
+                    let _ = view_sender.lock().expect("the sender").send(view);
                 }
             })
         });
-        Following { events, stop }
+        Following {
+            events,
+            views,
+            stop,
+        }
     }
 
     /// Applies what the stream says to the list the way the app does, asking
@@ -562,4 +576,124 @@ fn the_simple_posture_words_the_findings_a_real_daemon_sends() {
             "{card}"
         );
     }
+}
+
+/// Scan now from the Overview is the `scan_now` request the popover's button
+/// sends too; the Overview's progress and its last Scan line follow from the
+/// stream, and "Rules updated" names the bundled pack's date with no feed.
+#[test]
+fn the_overview_follows_scan_now_from_the_stream() {
+    let sandbox = Sandbox::new("overview");
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let following = Following::start(&sandbox);
+
+    let status: Status = asking.status().expect("a status");
+    let mut frame = Frame::new();
+    frame.load(&status);
+    frame.settings(&asking.settings().expect("the settings"));
+
+    // The Simple Overview: the popover's sentence, both Agents, the date of
+    // the bundled pack, both Scan actions and no summary line.
+    let simple = frame.overview();
+    assert!(!simple.off && simple.actions);
+    assert_eq!(simple.sentence, status.health.headline());
+    let lines: Vec<&str> = simple.agents.iter().map(|a| a.line.as_str()).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines[0].starts_with("Claude Code, version unknown: "),
+        "{lines:?}"
+    );
+    assert_eq!(lines[1], "Codex is not installed.");
+    assert_eq!(
+        simple.rules_updated,
+        Some(format!(
+            "Rules updated {}.",
+            Manifest::bundled().released_on()
+        ))
+    );
+    assert_eq!(
+        simple.last_check,
+        status.health.last_full_scan.map(|at| at.to_string())
+    );
+    assert_eq!(simple.summary, None);
+
+    // The Developer Posture, from the stream alone.
+    let mut other = Client::connect_at(&sandbox.socket, Role::App).expect("a second connection");
+    other
+        .change_settings(SettingsChange {
+            posture: Some(Posture::Developer),
+            ..SettingsChange::default()
+        })
+        .expect("the Posture moved");
+    following.until_frame(&mut frame, &asking, "the Developer Posture", |frame| {
+        frame.posture() == Posture::Developer
+    });
+    let before = frame.overview().summary.expect("the last Scan on one line");
+    assert!(before.starts_with("Last "), "{before}");
+    assert!(
+        before.contains("Bands ") && before.contains("Rule Pack "),
+        "{before}"
+    );
+
+    asking.scan_now().expect("a Full Scan");
+    let saw_progress = Cell::new(false);
+    following.until_frame(&mut frame, &asking, "the Scan now summary", |frame| {
+        let shown = frame.overview();
+        if shown.scanning && !shown.progress.is_empty() {
+            saw_progress.set(true);
+        }
+        !shown.scanning
+            && shown
+                .summary
+                .as_deref()
+                .is_some_and(|line| line.starts_with("Last full Scan (scan-now)"))
+    });
+    assert!(saw_progress.get(), "the progress showed while it ran");
+    let after = frame.overview();
+    let health = asking.status().expect("a status").health;
+    assert_eq!(
+        after.last_check,
+        health.last_full_scan.map(|at| at.to_string())
+    );
+    assert_ne!(after.last_check, simple.last_check, "a newer check");
+    assert!(after.actions);
+}
+
+/// With no daemon answering, the Overview says "Protection is off." and
+/// nothing else and offers neither Scan action; once a daemon answers, the
+/// stream fills it again.
+#[test]
+fn the_overview_shows_only_protection_off_until_the_daemon_answers() {
+    let sandbox = Sandbox::new("overview-off");
+    let asking = sandbox.asking();
+    let following = Following::start(&sandbox);
+    let mut frame = Frame::new();
+
+    let off = following
+        .views
+        .recv_timeout(Duration::from_secs(30))
+        .expect("a view while no daemon answers");
+    assert!(off.protection_off, "{off:?}");
+    frame.view(&off);
+    let shown = frame.overview();
+    assert!(shown.off);
+    assert_eq!(shown.sentence, "Protection is off.");
+    assert!(shown.agents.is_empty() && !shown.actions);
+    assert_eq!(shown.rules_updated, None);
+    let value = frame.to_value();
+    assert_eq!(value["overview"]["actions"], false);
+    assert_eq!(value["sidebar"][1]["count"], 0);
+
+    let _daemon = sandbox.start();
+    following.until_frame(&mut frame, &asking, "the Overview back", |frame| {
+        let shown = frame.overview();
+        !shown.off && shown.actions && shown.agents.len() == 2
+    });
+    let shown = frame.overview();
+    assert_eq!(
+        shown.sentence,
+        asking.status().expect("a status").health.headline()
+    );
+    assert!(shown.rules_updated.is_some());
 }

@@ -26,6 +26,7 @@
 pub mod document;
 pub mod enforce;
 pub mod files;
+pub mod gate;
 pub mod hooks;
 pub mod mcp;
 pub mod plugins;
@@ -39,6 +40,9 @@ use std::path::{Path, PathBuf};
 use agentsweep_core::adapter::{
     Descriptor, Detection, Enumeration, Primitive, ProjectRegistration, Surface, SurfaceAdapter,
     WatchRoots,
+};
+use agentsweep_core::gate_registration::{
+    GateCheck, GateCommand, GateEntry, GateError, SurfaceWriter,
 };
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{
@@ -944,11 +948,7 @@ impl ClaudeCode {
     ) {
         let base = scope.root().map(Path::to_path_buf);
         for found in hooks::handlers(document) {
-            let locator = format!(
-                "{}#{}",
-                document.surface,
-                HookView::locator(&found.event, &found.matcher, &found.handler)
-            );
+            let locator = found.locator(document);
             let mut view = HookView::of(&found.event, &found.matcher, &found.handler);
             let line = substituted(&view.command, base.as_deref());
             if let Some(resolved) = host.resolve_command_line(&line, base.as_deref()) {
@@ -963,11 +963,7 @@ impl ClaudeCode {
                 document.path.clone(),
                 provenance_of(document),
                 hook_activation(facts),
-                canonical_entry(&HookView::normal_form(
-                    &found.event,
-                    &found.matcher,
-                    &found.handler,
-                )),
+                found.content(),
             )
             .with_view(ParsedView::Hook(view));
             item.registered = registered;
@@ -1209,6 +1205,31 @@ impl SurfaceAdapter for ClaudeCode {
         conflict: Conflict,
     ) -> RestoreReport {
         quarantine::replay_in_reverse(host, store, receipt, conflict)
+    }
+
+    /// The Gate's three groups in the user settings file of the effective
+    /// config directory, appended where they are not there yet
+    /// ([`gate::register`]).
+    fn register_gate(
+        &self,
+        host: &Host,
+        writer: &dyn SurfaceWriter,
+        command: &GateCommand,
+    ) -> Result<Vec<GateEntry>, GateError> {
+        gate::register(self, host, writer, command)
+    }
+
+    fn check_gate(&self, host: &Host, command: &GateCommand) -> GateCheck {
+        gate::check(self, host, command)
+    }
+
+    fn remove_gate(
+        &self,
+        host: &Host,
+        writer: &dyn SurfaceWriter,
+        command: &GateCommand,
+    ) -> Result<Vec<GateEntry>, GateError> {
+        gate::remove(self, host, writer, command)
     }
 }
 

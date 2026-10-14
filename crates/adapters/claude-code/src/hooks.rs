@@ -9,6 +9,8 @@
 //! group's position is not part of a hook's identity (spec section 4.6.1), so
 //! reordering has to leave every id where it was.
 
+use agentsweep_core::item::canonical_entry;
+use agentsweep_core::views::HookView;
 use serde_json::Value;
 
 use crate::document::Document;
@@ -28,6 +30,28 @@ pub struct Handler {
     pub handler_index: usize,
     /// The handler itself, as it is written.
     pub handler: Value,
+}
+
+impl Handler {
+    /// The locator of the Hook Item this handler is, in the document it was
+    /// read from: `<file>#<event>/<matcher>/<hash prefix>` (spec section
+    /// 4.6.1). The enumeration and the Gate's own writes name it the same way.
+    pub fn locator(&self, document: &Document) -> String {
+        format!(
+            "{}#{}",
+            document.surface,
+            HookView::locator(&self.event, &self.matcher, &self.handler)
+        )
+    }
+
+    /// The content the Hook Item is hashed over: the canonical normal form.
+    pub fn content(&self) -> Vec<u8> {
+        canonical_entry(&HookView::normal_form(
+            &self.event,
+            &self.matcher,
+            &self.handler,
+        ))
+    }
 }
 
 /// Every hook handler a document registers, events in sorted order and the
@@ -64,7 +88,6 @@ pub fn handlers(document: &Document) -> Vec<Handler> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentsweep_core::views::HookView;
     use serde_json::json;
 
     fn document(value: Value) -> Document {

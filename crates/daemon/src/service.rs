@@ -1104,7 +1104,10 @@ fn settings_at_start(
             let Some(rule_feed) = state.legacy_rule_feed.take() else {
                 return (Settings::default(), false);
             };
-            let settings = Settings { rule_feed };
+            let settings = Settings {
+                rule_feed,
+                ..Settings::default()
+            };
             match SettingsWriter::write(&file, &settings) {
                 Ok(()) => {
                     say!("the Rule Feed toggle moved from the state file to the settings file");
@@ -1913,7 +1916,13 @@ mod tests {
 
         let mut state = older.clone();
         let (settings, unreadable) = settings_at_start(&directory, &keys, &mut state);
-        assert_eq!(settings, Settings { rule_feed: false });
+        assert_eq!(
+            settings,
+            Settings {
+                rule_feed: false,
+                ..Settings::default()
+            }
+        );
         assert!(!unreadable);
         assert_eq!(state.legacy_rule_feed, None);
         let settings_file = SettingsFile::in_data_directory(&directory);
@@ -1925,7 +1934,7 @@ mod tests {
 
         // The user switches the feed on; a stale state file that still says
         // off does not win.
-        SettingsWriter::write(&settings_file, &Settings { rule_feed: true }).expect("on");
+        SettingsWriter::write(&settings_file, &Settings::default()).expect("on");
         let mut stale = older;
         let (settings, _) = settings_at_start(&directory, &keys, &mut stale);
         assert!(settings.rule_feed);

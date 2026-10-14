@@ -19,7 +19,7 @@ all-features = true
 # reason, never a relaxed default.
 yanked = "deny"
 ignore = [
-    # All four come from the rule engine. YARA-X 1.20 requires wasmtime
+    # All five come from the rule engine. YARA-X 1.20 requires wasmtime
     # 45.0.3, and the wasmtime advisories below have no fix on the 45 line, so
     # none of them can be resolved by an upgrade. Revisit on every YARA-X
     # release: the exception goes the moment a version that takes a patched
@@ -45,6 +45,14 @@ ignore = [
     # lifted dynamically and the fuel limit is not what bounds its runs.
     # Accepted by the owner on 2026-09-29.
     "RUSTSEC-2026-0316",
+    # A stack buffer overflow from an unvalidated result count of an
+    # async-lifted callback in the component model. Like the entry above,
+    # it lives in code YARA-X never reaches: it runs core WebAssembly modules
+    # from its own compiler and never instantiates a component. No wasmtime
+    # 45 release carries the fix and YARA-X 1.21 still requires 45. Proposed
+    # by the orchestrator on 2026-10-14 on the ground the owner accepted for
+    # RUSTSEC-2026-0316; awaiting the owner's word.
+    "RUSTSEC-2026-0327",
     # The next five come from the menu bar app. Tauri 2.11.5 matches the URLs
     # of its capabilities with `urlpattern`, which reads identifiers with the
     # unic Unicode tables, and those are unmaintained, not vulnerable. The app

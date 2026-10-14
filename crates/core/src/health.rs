@@ -26,6 +26,12 @@ use crate::pack::released_day;
 use crate::packs::PackOrigin;
 use crate::state::{IgnoredPack, State};
 
+/// The note a reset nobody answered leaves while an open Threat holds the
+/// headline: the rung stays until "Start a fresh record" is pressed, ranked
+/// below every Threat rung (the owner's decision of 2026-10-14).
+pub const STATE_RESET_NOTE: &str = "Protection state was reset. AgentSweep started a fresh record \
+     because the key it keeps in your Keychain was missing.";
+
 /// How long the Rule Feed may go unanswered before Health says so: thirty
 /// days (spec section 6.6, notice 6).
 pub const FEED_UNREACHABLE_AFTER_MS: i64 = 30 * 24 * 3_600_000;
@@ -230,7 +236,9 @@ impl Health {
     }
 
     /// True when a chain is well formed but no key can vouch for it, which is
-    /// the "protection state was reset" state.
+    /// the "protection state was reset" state. A chain that started again
+    /// under a new key stays in it until the user answers "Start a fresh
+    /// record".
     pub fn state_was_reset(&self) -> bool {
         self.events == ChainState::KeyMissing || self.baseline == ChainState::KeyMissing
     }
@@ -260,8 +268,9 @@ impl Health {
 
     /// The rung of the precedence of spec section 6.6 this Health stands on.
     ///
-    /// The order is Protection off, records tampered, protection state reset,
-    /// projects that need permission, then the Gate lines once they exist,
+    /// The order is Protection off, records tampered, protection state reset
+    /// (unless a Threat Finding is open: the reset ranks below every Threat
+    /// rung and is a note meanwhile), projects that need permission, then the Gate lines once they exist,
     /// then a Scan in flight, then the open Findings that need the user's
     /// decision, then the Rule Pack notices (a newer pack ignored because it
     /// needs a newer AgentSweep, the Rule Feed unreachable for over thirty
@@ -271,7 +280,7 @@ impl Health {
             Rung::ProtectionOff
         } else if self.records_tampered() {
             Rung::RecordsTampered
-        } else if self.state_was_reset() {
+        } else if self.state_was_reset() && self.open_threats == 0 {
             Rung::StateReset
         } else if self.projects_need_permission > 0 {
             Rung::NeedsPermission
@@ -350,6 +359,9 @@ impl Health {
         }
         if self.settings_unreadable {
             notes.push(SETTINGS_UNREADABLE.to_string());
+        }
+        if self.state_was_reset() && self.rung() > Rung::StateReset {
+            notes.push(STATE_RESET_NOTE.to_string());
         }
         if let Some(ignored) = &self.ignored_pack {
             notes.push(format!(
@@ -459,6 +471,31 @@ mod tests {
         health.baseline = broken();
         assert!(health.records_tampered());
         assert_eq!(health.headline(), "Records tampered.");
+    }
+
+    /// A reset nobody answered stays, ranked below every Threat rung, so an
+    /// open Threat is never hidden behind it; while a Threat holds the
+    /// headline the reset is a note (the owner's decision of 2026-10-14).
+    #[test]
+    fn a_reset_nobody_answered_ranks_below_every_open_threat() {
+        let mut health = Health::running();
+        health.baseline = ChainState::KeyMissing;
+        assert_eq!(health.rung(), Rung::StateReset);
+        assert!(!health.notes().contains(&STATE_RESET_NOTE.to_string()));
+
+        health.open_exposures = 1;
+        assert_eq!(health.rung(), Rung::StateReset, "an Exposure is no Threat");
+
+        health.open_threats = 1;
+        assert_eq!(health.rung(), Rung::NeedsDecision);
+        assert!(
+            health.notes().contains(&STATE_RESET_NOTE.to_string()),
+            "{:?}",
+            health.notes()
+        );
+
+        health.events = broken();
+        assert_eq!(health.rung(), Rung::RecordsTampered);
     }
 
     /// A rebuilt state file is a note, never a state: nothing about the

@@ -2,8 +2,10 @@
 name = "agentsweep-ipc"
 description = "The AgentSweep inter-process vocabulary: the socket, the length-prefixed JSON frame, the hello handshake and the closed list of requests, responses and state events."
 # The vocabulary the daemon, the application and the in-bundle command line
-# interface share. It reaches crates.io with none of them.
-publish = false
+# interface share. It is published to crates.io only because the command line
+# interface names it as the optional dependency of its `bundle` feature, and a
+# published crate can name only published crates; the crates.io build of the
+# command line interface never links it.
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

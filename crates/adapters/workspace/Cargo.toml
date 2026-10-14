@@ -1,7 +1,6 @@
 [package]
 name = "agentsweep-adapter-workspace"
 description = "The built-in workspace Surface Adapter: Repository Metadata, env files and Repository Provenance, for every pooled project root."
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,7 +1,6 @@
 [package]
 name = "agentsweep-adapter-claude-code"
 description = "The Claude Code Surface Adapter: its settings layers, skills, plugins, marketplaces, MCP configs, hooks and instruction files."
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

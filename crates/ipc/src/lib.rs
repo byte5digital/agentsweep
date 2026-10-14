@@ -20,6 +20,7 @@ pub mod engine;
 pub mod frame;
 pub mod peer;
 pub mod protocol;
+pub mod settings;
 pub mod socket;
 
 pub use client::{Client, ClientError, Subscription};
@@ -28,8 +29,8 @@ pub use peer::{Nobody, Peer, PeerCheck, SameUser};
 pub use protocol::{
     ActionReport, AgentSessions, DO_NOT_OPEN_YET, EngineChange, EngineState, FolderFinding,
     FolderScanResult, Hello, Message, NOTHING_RECORDED, Offer, RESTART_AGENTSWEEP, Refusal,
-    Request, RequestError, RevealedReceipt, Role, SAFE_TO_OPEN, Sessions, StateEvent, Status,
-    check_version, offers, welcome,
+    Request, RequestError, RevealedReceipt, Role, SAFE_TO_OPEN, Sessions, SettingsChange,
+    SettingsState, StateEvent, Status, check_version, offers, welcome,
 };
 pub use socket::{Connection, SOCKET_NAME, SocketListener, connect, default_socket_path};
 

@@ -14,6 +14,7 @@ use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::quarantine::Conflict;
 
 use crate::engine::{EngineChange, EngineState};
+use crate::settings::{SettingsChange, SettingsState};
 
 use crate::protocol::{
     ActionReport, FolderScanResult, Hello, Message, Refusal, Request, RequestError,
@@ -252,6 +253,22 @@ impl Client {
     /// Removes the Claude API key, which turns an active Claude engine off.
     pub fn remove_claude_key(&mut self) -> Result<EngineState, ClientError> {
         self.engine_request(Request::RemoveClaudeKey)
+    }
+
+    /// Where every choice the user made stands.
+    pub fn settings(&mut self) -> Result<SettingsState, ClientError> {
+        self.change_settings(SettingsChange::default())
+    }
+
+    /// Moves some of the user's choices, and answers with where they all
+    /// stand now. A change the daemon refuses moves nothing.
+    pub fn change_settings(
+        &mut self,
+        change: SettingsChange,
+    ) -> Result<SettingsState, ClientError> {
+        let answer = self.ask(Request::Settings { change })?;
+        SettingsState::from_value(&answer)
+            .ok_or_else(|| ClientError::Unexpected("the settings could not be read".to_string()))
     }
 
     fn engine_request(&mut self, request: Request) -> Result<EngineState, ClientError> {

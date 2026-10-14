@@ -459,7 +459,8 @@ impl Daemon {
             | Request::Folder { .. }
             | Request::Engine { .. }
             | Request::SetClaudeKey { .. }
-            | Request::RemoveClaudeKey => Err(RequestError::unknown(request.as_str())),
+            | Request::RemoveClaudeKey
+            | Request::Settings { .. } => Err(RequestError::unknown(request.as_str())),
         }
     }
 

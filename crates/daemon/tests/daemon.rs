@@ -557,6 +557,9 @@ fn a_subscriber_is_told_when_a_scan_starts_gets_on_and_finishes() {
                 assert!(!health.protection.is_off());
                 seen.push("health-changed".to_string());
             }
+            Some(StateEvent::SettingsChanged { .. }) => {
+                seen.push("settings-changed".to_string());
+            }
             None => panic!("the stream ended before the Scan did"),
         }
     }

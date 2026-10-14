@@ -146,7 +146,7 @@ impl Findings {
                 }
             }
             StateEvent::HealthChanged { health } => self.health(health),
-            StateEvent::Activity { .. } => Follow::Nothing,
+            StateEvent::Activity { .. } | StateEvent::SettingsChanged { .. } => Follow::Nothing,
         }
     }
 

@@ -9,7 +9,9 @@
 //! what it knows; an id it does not know is a clean refusal. The only requests
 //! that take a path are revealing a Receipt and the Folder Scan:
 //! [`Request::takes_a_path`] says so, and a message that carries a path on any
-//! other request is not a message at all.
+//! other request is not a message at all. The one other path on the wire is
+//! the config-dir override per Agent of the `settings` request, a directory
+//! the user named, which travels under its own field.
 //!
 //! Every message is one JSON object with a `type`. The types are laid out here
 //! and nowhere else, so the daemon, the application and the command line
@@ -32,6 +34,7 @@ use agentsweep_core::quarantine::Conflict;
 use agentsweep_core::state::{IgnoredPack, RecordedFinding, ScanSummary, Trigger};
 
 pub use crate::engine::{EngineChange, EngineState};
+pub use crate::settings::{SettingsChange, SettingsState};
 
 /// Which peer is speaking. The daemon answers both the same way in this
 /// milestone; the role is carried because the notification flow of spec
@@ -223,7 +226,8 @@ pub enum Request {
     },
     /// Read the Rule Feed toggle, or set it. Off means no request at all and
     /// the bundled Rule Pack only (spec section 9.4). Answers with where the
-    /// toggle stands afterwards.
+    /// toggle stands afterwards. Kept for the command line interface; the
+    /// application moves the toggle through [`Request::Settings`].
     RuleFeed {
         /// The toggle's new position, absent to read it.
         enabled: Option<bool>,
@@ -260,11 +264,22 @@ pub enum Request {
     /// Remove the Claude API key from the Keychain. An active Claude engine is
     /// turned off with it. Answers with an [`EngineState`].
     RemoveClaudeKey,
+    /// Read every choice the user made, or move some of them: the Rule Feed
+    /// toggle, the app update check, the Posture and the config-dir override
+    /// per Agent (spec sections 6.9 and 8.10). Answers with a
+    /// [`SettingsState`]. A change the daemon refuses leaves every choice as
+    /// it was. The override is a directory the user named, the one path on
+    /// the wire outside revealing a Receipt and the Folder Scan (ADR 0008);
+    /// it travels under `config_dirs`, never as a `path`.
+    Settings {
+        /// What to move; nothing to read only.
+        change: SettingsChange,
+    },
 }
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 16] = [
+    pub const NAMES: [&'static str; 17] = [
         "status",
         "scan-now",
         "subscribe",
@@ -281,6 +296,7 @@ impl Request {
         "engine",
         "set-claude-key",
         "remove-claude-key",
+        "settings",
     ];
 
     /// The spelling a request carries.
@@ -302,11 +318,14 @@ impl Request {
             Request::Engine { .. } => "engine",
             Request::SetClaudeKey { .. } => "set-claude-key",
             Request::RemoveClaudeKey => "remove-claude-key",
+            Request::Settings { .. } => "settings",
         }
     }
 
-    /// True for the requests that may carry a path: revealing a Receipt and
-    /// the Folder Scan. Every other one addresses ids only (ADR 0008).
+    /// True for the requests that may carry a `path` field: revealing a
+    /// Receipt and the Folder Scan. Every other one addresses ids only (ADR
+    /// 0008), but for the config-dir override of the `settings` request,
+    /// which travels under its own field, never as a `path`.
     pub fn takes_a_path(name: &str) -> bool {
         matches!(name, "reveal-receipt" | "folder-scan")
     }
@@ -346,6 +365,7 @@ impl Request {
                 map.insert("enabled".to_string(), Value::from(*enabled));
             }
             Request::Engine { change } => change.write_into(map),
+            Request::Settings { change } => change.write_into(map),
             Request::SetClaudeKey { key } => {
                 map.insert("key".to_string(), Value::from(key.expose()));
             }
@@ -402,6 +422,9 @@ impl Request {
                 key: ClaudeKey::new(text("key")?).ok()?,
             },
             "remove-claude-key" => Request::RemoveClaudeKey,
+            "settings" => Request::Settings {
+                change: SettingsChange::read_from(value)?,
+            },
             _ => return None,
         })
     }
@@ -517,6 +540,13 @@ pub enum StateEvent {
         /// Every state the machine is in now.
         health: Box<Health>,
     },
+    /// A choice the user made moved, through any request and from any window.
+    /// It carries every choice, so a second open window follows without
+    /// asking again.
+    SettingsChanged {
+        /// Where every choice stands now.
+        settings: Box<SettingsState>,
+    },
 }
 
 impl StateEvent {
@@ -529,6 +559,7 @@ impl StateEvent {
             StateEvent::FindingChanged { .. } => "finding-changed",
             StateEvent::Activity { .. } => "activity",
             StateEvent::HealthChanged { .. } => "health-changed",
+            StateEvent::SettingsChanged { .. } => "settings-changed",
         }
     }
 }
@@ -1468,6 +1499,9 @@ impl Message {
                     StateEvent::HealthChanged { health } => {
                         map.insert("health".to_string(), health_to_value(health));
                     }
+                    StateEvent::SettingsChanged { settings } => {
+                        map.insert("settings".to_string(), settings.to_value());
+                    }
                 }
             }
         }
@@ -1543,6 +1577,9 @@ impl Message {
                     },
                     "health-changed" => StateEvent::HealthChanged {
                         health: Box::new(health_from_value(value.get("health")?)?),
+                    },
+                    "settings-changed" => StateEvent::SettingsChanged {
+                        settings: Box::new(SettingsState::from_value(value.get("settings")?)?),
                     },
                     _ => return None,
                 }))
@@ -1675,6 +1712,27 @@ mod tests {
                 open_threats: 2,
                 open_exposures: 1,
                 ..Health::running()
+            }),
+        }));
+        round_trip(Message::Event(StateEvent::SettingsChanged {
+            settings: Box::new(SettingsState {
+                rule_feed: true,
+                update_check: false,
+                posture: agentsweep_core::settings::Posture::Developer,
+                config_dirs: BTreeMap::from([(
+                    "codex".to_string(),
+                    "/Volumes/Work/.codex".to_string(),
+                )]),
+                engine: EngineState {
+                    engine: agentsweep_core::settings::JudgementEngine::Off,
+                    ollama_address: "127.0.0.1:11434".to_string(),
+                    ollama_model: String::new(),
+                    claude_model: String::new(),
+                    claude_model_in_use: "claude-sonnet-5".to_string(),
+                    caps: agentsweep_core::settings::CloudCaps::default(),
+                    claude_key_ending: None,
+                    recorded: 0,
+                },
             }),
         }));
     }
@@ -1824,6 +1882,23 @@ mod tests {
                 key: ClaudeKey::new(A_KEY).expect("a key"),
             },
             Request::RemoveClaudeKey,
+            Request::Settings {
+                change: SettingsChange::default(),
+            },
+            Request::Settings {
+                change: SettingsChange {
+                    rule_feed: Some(false),
+                    update_check: Some(false),
+                    posture: Some(agentsweep_core::settings::Posture::Developer),
+                    config_dirs: BTreeMap::from([
+                        (
+                            "claude-code".to_string(),
+                            Some("/Users/someone/.claude-work".to_string()),
+                        ),
+                        ("codex".to_string(), None),
+                    ]),
+                },
+            },
         ]
     }
 

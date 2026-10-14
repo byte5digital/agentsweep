@@ -369,6 +369,34 @@ pub fn put_back(text: &str, kept: &Kept, replace: bool) -> Result<String, EditEr
     }
 }
 
+/// Appends one element to the end of a list in a JSON file, creating the list
+/// and the objects above it where they are not there yet.
+///
+/// What the Gate is registered with: its hook groups go after every group
+/// already written, so no existing group moves and its order is untouched
+/// (spec section 7.2). Every other key keeps its place and the file is written
+/// with two spaces of indentation, as both Agents write it. Something other
+/// than an object or a list in the way is refused rather than written over.
+pub fn append_json(text: &str, list: &EntryPath, value: &Value) -> Result<String, EditError> {
+    json::append(text, list, value)
+}
+
+/// Drops every element of a list in a JSON file that `drops` picks, and says
+/// how many went.
+///
+/// A list this left empty goes with its key, and so does an object above it
+/// that this left empty, so that registering and removing the Gate on a file
+/// that had no hooks leaves no empty block behind. Nothing else moves. A list
+/// that is not there is no error: nothing is dropped and the text is returned
+/// as it was.
+pub fn drop_json(
+    text: &str,
+    list: &EntryPath,
+    drops: &dyn Fn(&Value) -> bool,
+) -> Result<(String, usize), EditError> {
+    json::drop_matching(text, list, drops)
+}
+
 /// The comment that marks a line one Quarantine switched off.
 fn banner(receipt_id: &str) -> String {
     format!("# agentsweep: quarantined {receipt_id} ")
@@ -567,6 +595,76 @@ mod json {
                 was_set: true,
             },
         })
+    }
+
+    pub(super) fn append(text: &str, list: &EntryPath, value: &Value) -> Result<String, EditError> {
+        let mut document = parse(text)?;
+        let taken = || EditError::Taken(list.pointer());
+        let segments = list.segments();
+        let mut current = &mut document;
+        for (depth, segment) in segments.iter().enumerate() {
+            let Value::Object(fields) = current else {
+                return Err(taken());
+            };
+            let made = match depth + 1 == segments.len() {
+                true => Value::Array(Vec::new()),
+                false => Value::Object(serde_json::Map::new()),
+            };
+            current = fields.entry(segment.clone()).or_insert(made);
+        }
+        let Value::Array(items) = current else {
+            return Err(taken());
+        };
+        items.push(value.clone());
+        Ok(render(&document))
+    }
+
+    pub(super) fn drop_matching(
+        text: &str,
+        list: &EntryPath,
+        drops: &dyn Fn(&Value) -> bool,
+    ) -> Result<(String, usize), EditError> {
+        let mut document = parse(text)?;
+        let Some(Value::Array(items)) = at_mut(&mut document, list) else {
+            return Ok((text.to_string(), 0));
+        };
+        let before = items.len();
+        items.retain(|item| !drops(item));
+        let dropped = before - items.len();
+        if dropped == 0 {
+            return Ok((text.to_string(), 0));
+        }
+        // A container this edit emptied goes with its key, from the list
+        // upwards, and the first one that still holds something stops it.
+        let mut path = list.clone();
+        while !path.is_empty() {
+            let emptied = match at(&document, &path) {
+                Some(Value::Array(items)) => items.is_empty(),
+                Some(Value::Object(fields)) => fields.is_empty(),
+                _ => false,
+            };
+            if !emptied {
+                break;
+            }
+            if let Some(Value::Object(fields)) = parent_of(&mut document, &path) {
+                fields.shift_remove(path.last());
+            }
+            path = path.parent();
+        }
+        Ok((render(&document), dropped))
+    }
+
+    /// The value at a key path, to write to.
+    fn at_mut<'a>(value: &'a mut Value, path: &EntryPath) -> Option<&'a mut Value> {
+        let mut current = value;
+        for segment in path.segments() {
+            current = match current {
+                Value::Object(fields) => fields.get_mut(segment)?,
+                Value::Array(items) => items.get_mut(segment.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+        Some(current)
     }
 
     pub(super) fn put_back(text: &str, kept: &Kept, replace: bool) -> Result<String, EditError> {
@@ -1020,6 +1118,78 @@ trust_level = "trusted"
 
     fn path(segments: &[&str]) -> EntryPath {
         EntryPath::of(segments)
+    }
+
+    /// Appending a hook group puts it after the groups already there, creates
+    /// the blocks above it where there are none, and moves no other key.
+    #[test]
+    fn appending_to_a_json_list_keeps_everything_else_where_it_was() {
+        let group = json!({"hooks": [{"type": "command", "command": "/x"}]});
+        let once = append_json(SETTINGS, &path(&["hooks", "Stop"]), &group).expect("appended");
+        let twice = append_json(&once, &path(&["hooks", "Stop"]), &json!(2)).expect("appended");
+        let value: Value = serde_json::from_str(&twice).expect("JSON");
+        assert_eq!(value["hooks"]["Stop"], json!([group, 2]));
+        let names: Vec<&str> = value
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "$schema",
+                "model",
+                "statusLine",
+                "env",
+                "permissions",
+                "hooks"
+            ]
+        );
+        assert!(twice.starts_with(&SETTINGS[..SETTINGS.len() - 3]));
+        assert!(twice.ends_with("}\n"));
+
+        let (back, dropped) =
+            drop_json(&twice, &path(&["hooks", "Stop"]), &|item| item.is_number())
+                .expect("dropped");
+        assert_eq!(dropped, 1);
+        assert_eq!(back, once);
+    }
+
+    /// A container the drop emptied goes with its key; one that still holds
+    /// something stays, and so does everything outside the list.
+    #[test]
+    fn dropping_from_a_json_list_takes_the_emptied_blocks_with_it() {
+        let group = json!({"hooks": []});
+        let added = append_json(SETTINGS, &path(&["hooks", "Stop"]), &group).expect("appended");
+        let (back, dropped) =
+            drop_json(&added, &path(&["hooks", "Stop"]), &|_| true).expect("dropped");
+        assert_eq!(dropped, 1);
+        assert_eq!(back, SETTINGS);
+
+        let two = append_json(&added, &path(&["hooks", "Start"]), &json!(1)).expect("appended");
+        let (left, _) = drop_json(&two, &path(&["hooks", "Stop"]), &|_| true).expect("dropped");
+        let value: Value = serde_json::from_str(&left).expect("JSON");
+        assert_eq!(value["hooks"], json!({"Start": [1]}));
+
+        let (same, none) =
+            drop_json(SETTINGS, &path(&["hooks", "Stop"]), &|_| true).expect("nothing to drop");
+        assert_eq!((same.as_str(), none), (SETTINGS, 0));
+    }
+
+    /// Nothing is written over a file that does not parse, and nothing over a
+    /// key that holds something other than a list.
+    #[test]
+    fn appending_refuses_an_unparseable_file_and_a_key_in_the_way() {
+        let refused = append_json("{ not json", &path(&["hooks", "Stop"]), &json!(1));
+        assert!(
+            matches!(refused, Err(EditError::Unparseable(_))),
+            "{refused:?}"
+        );
+        let refused = append_json(SETTINGS, &path(&["model", "Stop"]), &json!(1));
+        assert!(matches!(refused, Err(EditError::Taken(_))), "{refused:?}");
+        let refused = append_json(SETTINGS, &path(&["statusLine", "type"]), &json!(1));
+        assert!(matches!(refused, Err(EditError::Taken(_))), "{refused:?}");
     }
 
     /// The whole reason `preserve_order` is asked for in this crate's

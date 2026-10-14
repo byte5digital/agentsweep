@@ -386,6 +386,10 @@ fn shell_words(command: &str) -> Vec<String> {
 /// The fixed sentence of spec section 7.5 for one reason code.
 pub fn sentence(agent: Agent, reason: GateReason, count: usize) -> String {
     match reason {
+        GateReason::Project if count == 1 => "AgentSweep stopped this turn. 1 item in this \
+                                              project needs your decision. Open AgentSweep, \
+                                              decide, then try again."
+            .to_string(),
         GateReason::Project => format!(
             "AgentSweep stopped this turn. {count} items in this project need your decision. \
              Open AgentSweep, decide, then try again."
@@ -679,6 +683,11 @@ mod tests {
         assert_eq!(
             sentence(Agent::ClaudeCode, GateReason::Project, 3),
             "AgentSweep stopped this turn. 3 items in this project need your decision. Open \
+             AgentSweep, decide, then try again."
+        );
+        assert_eq!(
+            sentence(Agent::Codex, GateReason::Project, 1),
+            "AgentSweep stopped this turn. 1 item in this project needs your decision. Open \
              AgentSweep, decide, then try again."
         );
         assert_eq!(

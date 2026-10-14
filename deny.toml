@@ -52,9 +52,8 @@ ignore = [
     # 45 release carries the fix and YARA-X 1.21 still requires 45. Accepted
     # by the owner on 2026-10-14.
     "RUSTSEC-2026-0327",
-    # The next three were proposed by the orchestrator on 2026-10-14 and await
-    # the owner's word. None has a fix on the wasmtime 45 line that YARA-X 1.21
-    # requires.
+    # The next three were accepted by the owner on 2026-10-15. None has a fix
+    # on the wasmtime 45 line that YARA-X 1.21 requires.
     #
     # A guest that defines a long chain of recursive types overflows the host's
     # stack when the type is dropped. The WebAssembly YARA-X runs is generated

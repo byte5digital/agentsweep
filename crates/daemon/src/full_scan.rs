@@ -33,6 +33,7 @@ use agentsweep_core::finding::{Category, Decided, Finding, Standing, standing};
 use agentsweep_core::finding::{FindingId, FindingState, RuleStatus, Severity, Source, Tier};
 use agentsweep_core::finding::{RULE_WITHDRAWN_GONE, RULE_WITHDRAWN_STOPPED};
 use agentsweep_core::finding_facts::FindingFacts;
+use agentsweep_core::gate_facts::{self, GateFacts};
 use agentsweep_core::heuristics::Band;
 use agentsweep_core::item::{Item, ItemId, Kind, Scope};
 use agentsweep_core::keychain::KeySource;
@@ -112,6 +113,9 @@ pub struct ScanRun {
     pub switched: BTreeSet<FindingId>,
     /// What a client needs beside each standing Finding, by its id.
     pub facts: BTreeMap<FindingId, FindingFacts>,
+    /// The Gate facts of every open Threat Finding this Scan leaves, for the
+    /// Items it looked at.
+    pub gate_facts: BTreeMap<FindingId, GateFacts>,
 }
 
 /// What a Scan reports as it goes.
@@ -248,6 +252,7 @@ impl FullScan<'_> {
             fixed_versions: judged.fixed_versions,
             switched: judged.switched,
             facts: judged.facts,
+            gate_facts: judged.gate_facts,
         })
     }
 }
@@ -399,6 +404,8 @@ pub struct Judged {
     pub switched: BTreeSet<FindingId>,
     /// What a client needs beside each standing Finding, by its id.
     pub facts: BTreeMap<FindingId, FindingFacts>,
+    /// The Gate facts of every open Threat Finding the pass leaves.
+    pub gate_facts: BTreeMap<FindingId, GateFacts>,
 }
 
 /// Reading the stores, running one pass and writing what it decided.
@@ -567,6 +574,10 @@ impl Judgement<'_> {
         let fixed_versions = fixed_versions(&quarantined, enumeration, &raised);
         let switched = switched(&standing, &quarantined, enumeration, self.acting);
         let facts = facts(&standing, &quarantined, enumeration, self.pack);
+        // Where every Finding stands is settled, so the open Threat Findings
+        // are known, and the Items they are about are in hand: the facts the
+        // Gate answers from are taken now, in the same write as the Findings.
+        let gate_facts = gate_facts::for_open_threats(&standing, &enumeration.items);
 
         let bands = count_bands(&outcome);
         let summary = ScanSummary {
@@ -607,6 +618,7 @@ impl Judgement<'_> {
             fixed_versions,
             switched,
             facts,
+            gate_facts,
         })
     }
 }

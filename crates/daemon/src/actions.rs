@@ -1080,6 +1080,9 @@ impl Daemon {
                     ));
                 }
             }
+            // A Finding the action stopped, trusted or acknowledged takes its
+            // Gate facts with it, in the same write.
+            state.prune_gate_facts();
             let file = StateFile::in_data_directory(&self.directory);
             if let Err(error) = StateWriter::write(&file, &*self.keys, &state) {
                 say!("the cached state could not be written: {error}");

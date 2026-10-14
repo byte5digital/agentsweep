@@ -177,6 +177,7 @@ impl ChangeScan<'_> {
             fixed_versions: judged.fixed_versions,
             facts: judged.facts,
             switched: judged.switched,
+            gate_facts: judged.gate_facts,
         }))
     }
 }

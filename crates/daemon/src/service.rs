@@ -28,6 +28,7 @@ use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::evaluation::EvaluationCache;
 use agentsweep_core::eventlog::{EventLog, PackChange, PackRules, RulePackRecord};
 use agentsweep_core::finding::{Finding, FindingId, FindingState};
+use agentsweep_core::gate_facts::GateRecord;
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
 use agentsweep_core::item::Scope;
 use agentsweep_core::keychain::{ClaudeKeyStore, KeySource, MemoryKeySource};
@@ -426,6 +427,17 @@ impl Daemon {
         Arc::clone(&self.pack.read().expect("the pack is not poisoned"))
     }
 
+    /// What the state holds for the Gate: the pooled project roots and the
+    /// facts of every open Threat Finding, absent until a Full Scan of this
+    /// version has written them.
+    pub fn gate_record(&self) -> Option<GateRecord> {
+        self.state
+            .lock()
+            .expect("the state is not poisoned")
+            .gate
+            .clone()
+    }
+
     /// The project roots the last Scan pooled.
     pub fn pooled_roots(&self) -> Vec<PathBuf> {
         self.roots
@@ -682,6 +694,25 @@ impl Daemon {
             }
 
             state.findings = findings;
+            // The Gate answers from what is written here (spec section 7.3).
+            // A Full Scan writes all of it. A Change Scan moves the pooled
+            // roots and the facts of the Items it looked at, and only once a
+            // Full Scan has written the rest: an older state file read at
+            // start has none, and stays "state unavailable" until then.
+            match (whole, state.gate.as_mut()) {
+                (true, _) => {
+                    state.gate = Some(GateRecord {
+                        roots: run.roots.clone(),
+                        facts: run.gate_facts.clone(),
+                    });
+                }
+                (false, Some(gate)) => {
+                    gate.roots = run.roots.clone();
+                    gate.facts.extend(run.gate_facts.clone());
+                }
+                (false, None) => {}
+            }
+            state.prune_gate_facts();
             state.record_scan(run.summary.clone());
             let file = StateFile::in_data_directory(&self.directory);
             if let Err(error) = StateWriter::write(&file, &*self.keys, &state) {

@@ -94,6 +94,9 @@ pub enum Action {
     EngineChanged,
     /// The Baseline chain was compacted, with the old and new head hashes.
     BaselineCompacted,
+    /// The Verdict cache was compacted, with the counts before and after and
+    /// the hash of the compacted file: the twin of `baseline-compacted`.
+    VerdictsCompacted,
     /// The Gate was registered with an Agent.
     GateRegistered,
     /// The Gate was removed from an Agent.
@@ -102,7 +105,7 @@ pub enum Action {
 
 impl Action {
     /// Every action, in the order spec section 5.5 lists them.
-    pub const ALL: [Action; 12] = [
+    pub const ALL: [Action; 13] = [
         Action::Quarantine,
         Action::Restore,
         Action::ReEnable,
@@ -113,6 +116,7 @@ impl Action {
         Action::Acknowledge,
         Action::EngineChanged,
         Action::BaselineCompacted,
+        Action::VerdictsCompacted,
         Action::GateRegistered,
         Action::GateRemoved,
     ];
@@ -130,6 +134,7 @@ impl Action {
             Action::Acknowledge => "acknowledge",
             Action::EngineChanged => "engine-changed",
             Action::BaselineCompacted => "baseline-compacted",
+            Action::VerdictsCompacted => "verdicts-compacted",
             Action::GateRegistered => "gate-registered",
             Action::GateRemoved => "gate-removed",
         }

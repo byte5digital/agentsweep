@@ -61,6 +61,7 @@ pub mod machine;
 pub mod options;
 pub mod overview;
 pub mod peer_check;
+pub mod permission;
 pub mod rule_feed;
 pub mod service;
 pub mod sessions;

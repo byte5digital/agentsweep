@@ -19,7 +19,7 @@ all-features = true
 # reason, never a relaxed default.
 yanked = "deny"
 ignore = [
-    # All five come from the rule engine. YARA-X 1.20 requires wasmtime
+    # All eight come from the rule engine. YARA-X 1.20 requires wasmtime
     # 45.0.3, and the wasmtime advisories below have no fix on the 45 line, so
     # none of them can be resolved by an upgrade. Revisit on every YARA-X
     # release: the exception goes the moment a version that takes a patched
@@ -52,6 +52,22 @@ ignore = [
     # 45 release carries the fix and YARA-X 1.21 still requires 45. Accepted
     # by the owner on 2026-10-14.
     "RUSTSEC-2026-0327",
+    # The next three were proposed by the orchestrator on 2026-10-14 and await
+    # the owner's word. None has a fix on the wasmtime 45 line that YARA-X 1.21
+    # requires.
+    #
+    # A guest that defines a long chain of recursive types overflows the host's
+    # stack when the type is dropped. The WebAssembly YARA-X runs is generated
+    # by its own compiler from a signed Rule Pack, never written by an
+    # attacker, the ground of RUSTSEC-2026-0222 above.
+    "RUSTSEC-2026-0359",
+    # Mixing async and sync calls into one Store is not checked. The guest
+    # cannot trigger it; it needs the host to re-enter WebAssembly from an
+    # async context, and YARA-X calls into its modules synchronously only.
+    "RUSTSEC-2026-0362",
+    # Component-model handle tables charged to no limit. Like RUSTSEC-2026-0316
+    # and RUSTSEC-2026-0327: YARA-X never instantiates a component.
+    "RUSTSEC-2026-0363",
     # The next five come from the menu bar app. Tauri 2.11.5 matches the URLs
     # of its capabilities with `urlpattern`, which reads identifiers with the
     # unic Unicode tables, and those are unmaintained, not vulnerable. The app

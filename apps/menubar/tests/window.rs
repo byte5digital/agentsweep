@@ -92,6 +92,9 @@ impl Sandbox {
             Box::new(MemoryKeySource::empty()),
             Tuning {
                 watch: Timings::of(Duration::from_millis(100), Duration::from_millis(500)),
+                // The window follows the Scans this test causes; a Gate
+                // registration write would start a Change Scan of its own.
+                gate: None,
                 ..Tuning::default()
             },
         )

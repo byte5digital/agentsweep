@@ -171,6 +171,9 @@ impl Drop for Sandbox {
 fn quick() -> Tuning {
     Tuning {
         watch: Timings::of(Duration::from_millis(100), Duration::from_millis(500)),
+        // These tests count the records of a chain they wrote themselves, so
+        // the Full Scans leave the Gate's registration out.
+        gate: None,
         ..Tuning::default()
     }
 }

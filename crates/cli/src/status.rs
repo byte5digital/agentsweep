@@ -298,6 +298,7 @@ mod tests {
             scan: Some(summary()),
             findings: Vec::new(),
             activity: Vec::new(),
+            overview: Default::default(),
         };
         let rendered = render(&status);
         assert!(

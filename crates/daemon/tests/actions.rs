@@ -1445,7 +1445,7 @@ fn purge_deletes_a_quarantined_skill_for_good_and_its_finding_goes_with_an_activ
     let (mut told_gone, mut told_line) = (false, false);
     while !(told_gone && told_line) {
         match stream.next_event().expect("an event") {
-            Some(StateEvent::FindingChanged { id, state }) if id == planted.id => {
+            Some(StateEvent::FindingChanged { id, state, .. }) if id == planted.id => {
                 assert_eq!(state, "gone");
                 told_gone = true;
             }

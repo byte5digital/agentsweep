@@ -85,6 +85,11 @@ pub struct Tuning {
     /// the disk itself, unless a test hands in one that records, denies or
     /// blocks (spec section 9.7).
     pub folders: Arc<dyn Folders>,
+    /// Whether the answer to an `engine` request asks Ollama at the address
+    /// the settings name. Absent means yes for the installed daemon and no
+    /// for a developer run, so a test or a hand run never reaches an Ollama
+    /// on this Mac unless it says so.
+    pub detect_ollama: Option<bool>,
 }
 
 impl Default for Tuning {
@@ -97,6 +102,7 @@ impl Default for Tuning {
             pack: None,
             feed: FeedTuning::default(),
             folders: Arc::new(Disk),
+            detect_ollama: None,
         }
     }
 }
@@ -109,6 +115,7 @@ impl std::fmt::Debug for Tuning {
             .field("workers", &self.workers)
             .field("pack", &self.pack)
             .field("feed", &self.feed)
+            .field("detect_ollama", &self.detect_ollama)
             .finish_non_exhaustive()
     }
 }
@@ -211,6 +218,8 @@ pub struct Daemon {
     /// Where the Rule Feed is asked, absent when it is never asked: a
     /// developer run that named no feed.
     feed: Option<Endpoints>,
+    /// Whether the answer to an `engine` request asks Ollama.
+    pub(crate) detect_ollama: bool,
     /// Held while a fetch runs, so two never run at once.
     fetching: Mutex<()>,
     /// A change of the Rule Pack in force that is still to be recorded. It is
@@ -360,6 +369,7 @@ impl Daemon {
             .endpoints
             .clone()
             .or_else(|| (!options.is_developer_run()).then(Endpoints::github));
+        let detect_ollama = tuning.detect_ollama.unwrap_or(!options.is_developer_run());
         let (settings, settings_unreadable) = settings_at_start(&directory, &*keys, &mut state);
         let (pack, discarded) = pack_at_start(&directory, &bundled, &mut state, settings.rule_feed);
         // A stored pack discarded at start is recorded like an accepted one,
@@ -423,6 +433,7 @@ impl Daemon {
             pack: RwLock::new(pack),
             bundled,
             feed,
+            detect_ollama,
             fetching: Mutex::new(()),
             pack_change: Mutex::new(pack_change),
             activity: Mutex::new(activity),

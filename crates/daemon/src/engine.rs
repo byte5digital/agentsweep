@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use agentsweep_core::eventlog::{Action, Actor, Event};
 use agentsweep_core::keychain::{ClaudeKey, ClaudeKeyStore, MemoryClaudeKeyStore};
+use agentsweep_core::ollama::OllamaClient;
 use agentsweep_core::settings::{
     CLAUDE_MODEL, ChoiceRefused, JudgementEngine, JudgementSettings, OLLAMA_MODEL, OllamaAddress,
     SettingsFile, SettingsWriter, model_id,
@@ -161,6 +162,7 @@ impl Daemon {
             caps: judgement.caps,
             claude_key_ending,
             recorded,
+            ollama: None,
         }
     }
 
@@ -177,7 +179,24 @@ impl Daemon {
     /// refused leaves the settings file as it was. The Claude engine is
     /// refused while no key is set. An engine change appends one
     /// `engine-changed` event.
+    ///
+    /// The answer says whether Ollama runs at the address the settings now
+    /// name and which models it has pulled, asked on that loopback address
+    /// with a short timeout and after any write is done. AgentSweep never
+    /// pulls a model and never starts Ollama.
     pub fn change_engine(
+        self: &Arc<Daemon>,
+        change: &EngineChange,
+    ) -> Result<EngineState, RequestError> {
+        let mut state = self.change_engine_choices(change)?;
+        if self.detect_ollama {
+            let address = self.judgement().ollama_address;
+            state.ollama = Some(OllamaClient::new(&address).presence());
+        }
+        Ok(state)
+    }
+
+    fn change_engine_choices(
         self: &Arc<Daemon>,
         change: &EngineChange,
     ) -> Result<EngineState, RequestError> {

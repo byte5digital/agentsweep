@@ -172,6 +172,7 @@ mod tests {
             caps: CloudCaps::default(),
             claude_key_ending: None,
             recorded: 0,
+            ollama: None,
         }
     }
 

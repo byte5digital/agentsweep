@@ -13,13 +13,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use agentsweep_core::eventlog::{Action, Event, EventLog};
 use agentsweep_core::keychain::{ChainKey, ClaudeKey, KeyError, KeySource, MemoryKeySource};
+use agentsweep_core::ollama::OllamaPresence;
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::settings::{JudgementEngine, SettingsFile};
+use agentsweep_daemon::Tuning;
 use agentsweep_daemon::options::{KeySourceChoice, LogChoice, Options};
 use agentsweep_daemon::service::{self, Background, Daemon};
 use agentsweep_ipc::peer::{Nobody, PeerCheck, SameUser};
 use agentsweep_ipc::protocol::{EngineChange, Hello, Message, Request, Role};
 use agentsweep_ipc::{Client, ClientError, connect};
+
+#[path = "../../core/tests/fixture_ollama/mod.rs"]
+mod fixture_ollama;
 
 /// A defanged stand-in for a Claude API key.
 const A_KEY: &str = "sk-ant-api03-defanged-engine-test-1111-4f2a";
@@ -126,8 +131,12 @@ impl Sandbox {
     }
 
     fn start_answering(&self, check: Arc<dyn PeerCheck>) -> Background {
+        self.start_tuned(check, Tuning::default())
+    }
+
+    fn start_tuned(&self, check: Arc<dyn PeerCheck>, tuning: Tuning) -> Background {
         let options = self.options();
-        let daemon = Daemon::open_with(&options, check, Box::new(self.keys.clone()))
+        let daemon = Daemon::open_tuned(&options, check, Box::new(self.keys.clone()), tuning)
             .expect("an open daemon");
         let running = service::start_with(&options, daemon).expect("a listening daemon");
         let background = running.serve_in_the_background();
@@ -237,8 +246,92 @@ fn the_engine_state_starts_at_every_default() {
     assert_eq!(state.caps.cents_per_month, 500);
     assert_eq!(state.claude_key_ending, None);
     assert_eq!(state.recorded, 0);
+    assert_eq!(state.ollama, None, "a developer run asks no Ollama");
     assert_eq!(sandbox.settings_bytes(), None, "a read writes nothing");
     assert!(sandbox.engine_events().is_empty());
+}
+
+/// The engine state names whether Ollama runs at the configured loopback
+/// address and every model it has pulled, a model under 4B marked too small
+/// for the suggestion. Only that address is asked, and only to read.
+#[test]
+fn the_engine_state_names_ollama_s_presence_and_its_models() {
+    use fixture_ollama::{Behaviour, FixtureOllama, closed_port, tags};
+
+    let ollama = FixtureOllama::start(vec![
+        (
+            "/api/version",
+            Behaviour::Json(200, serde_json::json!({ "version": "0.12.6" })),
+        ),
+        (
+            "/api/tags",
+            Behaviour::Json(
+                200,
+                tags(&[
+                    ("qwen3:1.7b", "1.7B", "1111"),
+                    ("gemma3:4b", "4B", "2222"),
+                    ("gemma3:26b", "26B", "3333"),
+                ]),
+            ),
+        ),
+    ]);
+    let sandbox = Sandbox::new("ollama-presence");
+    let _daemon = sandbox.start_tuned(
+        Arc::new(SameUser),
+        Tuning {
+            detect_ollama: Some(true),
+            ..Tuning::default()
+        },
+    );
+    let mut client = sandbox.client();
+    let state = client
+        .change_engine(EngineChange {
+            ollama_address: Some(ollama.address().to_string()),
+            ..EngineChange::default()
+        })
+        .expect("a loopback address is taken");
+    let Some(OllamaPresence::Running { version, models }) = state.ollama else {
+        panic!("Ollama is running: {:?}", state.ollama);
+    };
+    assert_eq!(version, "0.12.6");
+    let seen: Vec<(&str, bool)> = models
+        .iter()
+        .map(|model| (model.name.as_str(), model.large_enough))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("qwen3:1.7b", false),
+            ("gemma3:4b", true),
+            ("gemma3:26b", true)
+        ]
+    );
+    let read = client.engine().expect("the engine state");
+    assert_eq!(
+        read.ollama,
+        Some(OllamaPresence::Running { version, models })
+    );
+    let paths: Vec<String> = ollama
+        .all_received()
+        .into_iter()
+        .map(|request| {
+            assert_eq!(request.method, "GET");
+            request.path
+        })
+        .collect();
+    assert_eq!(
+        paths,
+        ["/api/version", "/api/tags", "/api/version", "/api/tags"]
+    );
+    assert_eq!(ollama.connections(), 4);
+
+    let state = client
+        .change_engine(EngineChange {
+            ollama_address: Some(closed_port().to_string()),
+            ..EngineChange::default()
+        })
+        .expect("a loopback address is taken");
+    assert_eq!(state.ollama, Some(OllamaPresence::Absent));
 }
 
 /// A non-loopback address, or a host name that is not `localhost`, is

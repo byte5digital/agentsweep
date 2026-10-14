@@ -1863,6 +1863,7 @@ mod tests {
                     caps: agentsweep_core::settings::CloudCaps::default(),
                     claude_key_ending: None,
                     recorded: 0,
+                    ollama: None,
                 },
             }),
         }));

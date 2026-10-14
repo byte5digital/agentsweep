@@ -8,6 +8,7 @@
 
 use serde_json::{Map, Value};
 
+use agentsweep_core::ollama::{OllamaModel, OllamaPresence};
 use agentsweep_core::settings::{
     CLAUDE_MODEL, CLOUD_CENTS_PER_MONTH, CLOUD_ITEMS_PER_DAY, CLOUD_ITEMS_PER_SCAN, CloudCaps,
     JUDGEMENT_ENGINE, JudgementEngine, OLLAMA_ADDRESS, OLLAMA_MODEL,
@@ -19,6 +20,8 @@ const CLAUDE_KEY_ENDING: &str = "claude_key_ending";
 const CLAUDE_MODEL_IN_USE: &str = "claude_model_in_use";
 /// The field that says how many Event Log events a request appended.
 const RECORDED: &str = "recorded";
+/// The field Ollama's presence and its models are named under.
+const OLLAMA: &str = "ollama";
 
 /// The choices one `engine` request moves. A field left out stays as it is;
 /// a request that moves nothing reads the engine state.
@@ -123,6 +126,10 @@ pub struct EngineState {
     /// How many Event Log events the request appended: zero for a read, one
     /// for each engine change it made.
     pub recorded: u32,
+    /// Whether Ollama runs at the address above and the models it has
+    /// already pulled, absent when the daemon did not ask: only the answer to
+    /// an `engine` request asks.
+    pub ollama: Option<OllamaPresence>,
 }
 
 impl EngineState {
@@ -151,6 +158,9 @@ impl EngineState {
             },
         );
         map.insert(RECORDED.to_string(), Value::from(self.recorded));
+        if let Some(presence) = &self.ollama {
+            map.insert(OLLAMA.to_string(), presence_value(presence));
+        }
         Value::Object(map)
     }
 
@@ -173,8 +183,58 @@ impl EngineState {
                 ending => Some(ending.as_str()?.to_string()),
             },
             recorded: u32::try_from(value.get(RECORDED)?.as_u64()?).ok()?,
+            ollama: match value.get(OLLAMA) {
+                None | Some(Value::Null) => None,
+                Some(presence) => Some(read_presence(presence)?),
+            },
         })
     }
+}
+
+/// Ollama's presence as the wire carries it: `running` false, or `running`
+/// true with the version and every model pulled.
+fn presence_value(presence: &OllamaPresence) -> Value {
+    match presence {
+        OllamaPresence::Absent => serde_json::json!({ "running": false }),
+        OllamaPresence::Running { version, models } => serde_json::json!({
+            "running": true,
+            "version": version,
+            "models": models
+                .iter()
+                .map(|model| serde_json::json!({
+                    "name": model.name,
+                    "digest": model.digest,
+                    "parameter_size": model.parameter_size,
+                    "large_enough": model.large_enough,
+                }))
+                .collect::<Vec<Value>>(),
+        }),
+    }
+}
+
+/// Reads back what [`presence_value`] wrote.
+fn read_presence(value: &Value) -> Option<OllamaPresence> {
+    if !value.get("running")?.as_bool()? {
+        return Some(OllamaPresence::Absent);
+    }
+    let text = |value: &Value, key: &str| Some(value.get(key)?.as_str()?.to_string());
+    let models = value
+        .get("models")?
+        .as_array()?
+        .iter()
+        .map(|model| {
+            Some(OllamaModel {
+                name: text(model, "name")?,
+                digest: text(model, "digest")?,
+                parameter_size: text(model, "parameter_size")?,
+                large_enough: model.get("large_enough")?.as_bool()?,
+            })
+        })
+        .collect::<Option<Vec<OllamaModel>>>()?;
+    Some(OllamaPresence::Running {
+        version: text(value, "version")?,
+        models,
+    })
 }
 
 #[cfg(test)]
@@ -226,6 +286,7 @@ mod tests {
             caps: CloudCaps::default(),
             claude_key_ending: Some("4f2a".to_string()),
             recorded: 1,
+            ollama: None,
         };
         let value = state.to_value();
         assert_eq!(EngineState::from_value(&value), Some(state));
@@ -234,5 +295,39 @@ mod tests {
             ..EngineState::from_value(&value).expect("a state")
         };
         assert_eq!(EngineState::from_value(&none.to_value()), Some(none));
+    }
+
+    #[test]
+    fn ollama_s_presence_and_models_round_trip() {
+        let mut state = EngineState {
+            engine: JudgementEngine::Off,
+            ollama_address: "127.0.0.1:11434".to_string(),
+            ollama_model: String::new(),
+            claude_model: String::new(),
+            claude_model_in_use: "claude-sonnet-5".to_string(),
+            caps: CloudCaps::default(),
+            claude_key_ending: None,
+            recorded: 0,
+            ollama: Some(OllamaPresence::Absent),
+        };
+        assert_eq!(
+            EngineState::from_value(&state.to_value()),
+            Some(state.clone())
+        );
+        state.ollama = Some(OllamaPresence::Running {
+            version: "0.12.6".to_string(),
+            models: vec![OllamaModel {
+                name: "qwen3:1.7b".to_string(),
+                digest: "1111".to_string(),
+                parameter_size: "1.7B".to_string(),
+                large_enough: false,
+            }],
+        });
+        assert_eq!(
+            EngineState::from_value(&state.to_value()),
+            Some(state.clone())
+        );
+        let value = state.to_value();
+        assert_eq!(value["ollama"]["models"][0]["large_enough"], false);
     }
 }

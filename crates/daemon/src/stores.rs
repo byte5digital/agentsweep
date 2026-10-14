@@ -36,6 +36,27 @@ pub fn open_the_baseline(
     BaselineWriter::open(&Baseline::in_data_directory(directory), keys)
 }
 
+/// Verifies both chains, then opens both for appending, answering with what
+/// verification found on each.
+///
+/// Both chains share the one key. Opening one after the key went missing
+/// generates the new key, and the other, verified only then, would read its
+/// old records against the new key as tampered. Verifying both first keeps a
+/// missing key "protection state was reset" on both chains (spec section
+/// 5.5): each starts again, pointing at its old head.
+pub fn open_both_chains(
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+) -> Result<(ChainState, ChainState), ChainError> {
+    let log = EventLog::in_data_directory(directory);
+    let baseline = Baseline::in_data_directory(directory);
+    let found_events = log.chain().verify(keys)?;
+    let found_baseline = baseline.chain().verify(keys)?;
+    let (_, events) = EventLogWriter::open_verified(&log, found_events, keys)?;
+    let (_, baseline) = BaselineWriter::open_verified(&baseline, found_baseline, keys)?;
+    Ok((events, baseline))
+}
+
 /// And for the Verdict cache, which is not a chain and so has nothing to
 /// verify first: a record that does not verify later is a cache miss.
 ///
@@ -136,6 +157,58 @@ mod tests {
             .read(&keys)
             .expect("a readable Verdict cache");
         assert!(view.is_empty());
+    }
+
+    /// A key that went missing is a reset on both chains, never a reset on
+    /// the first and tampering on the second.
+    #[test]
+    fn a_missing_key_restarts_both_chains_rather_than_breaking_the_second() {
+        use agentsweep_core::baseline::{AcceptedBy, BaselineRecord};
+        use agentsweep_core::envelope::Timestamp;
+        use agentsweep_core::item::{Activation, Item, Kind, Provenance, Scope};
+        use agentsweep_core::keychain::KeySource as _;
+
+        let temporary = tempfile::TempDir::new().expect("a temporary directory");
+        let directory = DataDirectory::at(temporary.path());
+        let keys = MemoryKeySource::empty();
+        let item = Item::file(
+            "claude-code",
+            Scope::User,
+            Kind::InstructionFile,
+            "~/.claude/CLAUDE.md",
+            temporary.path().join("CLAUDE.md"),
+            Provenance::Manual,
+            Activation::Active,
+            b"# demo\n".to_vec(),
+        );
+        {
+            let (mut events, _) = open_the_event_log(&directory, &keys).expect("an Event Log");
+            events
+                .append(&Event::new(Action::GateRegistered, Actor::Auto))
+                .expect("an event");
+            let (mut baseline, _) = open_the_baseline(&directory, &keys).expect("a Baseline");
+            baseline
+                .accept(&BaselineRecord::accepting(
+                    &item,
+                    Timestamp::now(),
+                    AcceptedBy::Bootstrap,
+                ))
+                .expect("an accepted hash");
+        }
+        keys.forget().expect("the key goes away");
+
+        let (events, baseline) = open_both_chains(&directory, &keys).expect("both chains");
+        assert_eq!(events, ChainState::KeyMissing);
+        assert_eq!(baseline, ChainState::KeyMissing);
+        let view = Baseline::in_data_directory(&directory)
+            .read(&keys)
+            .expect("a readable Baseline");
+        assert_eq!(view.state, ChainState::Intact);
+        assert_eq!(view.restarts, 1);
+        assert!(
+            view.record(&item.id).is_some(),
+            "the old record carries over"
+        );
     }
 
     #[test]

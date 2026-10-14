@@ -460,7 +460,10 @@ impl Daemon {
             | Request::Engine { .. }
             | Request::SetClaudeKey { .. }
             | Request::RemoveClaudeKey
-            | Request::Settings { .. } => Err(RequestError::unknown(request.as_str())),
+            | Request::Settings { .. }
+            | Request::Records { .. }
+            | Request::AcknowledgeKeyMissing
+            | Request::AcknowledgeChainBroken => Err(RequestError::unknown(request.as_str())),
         }
     }
 

@@ -30,6 +30,7 @@ use agentsweep_core::eventlog::{EventLog, PackChange, PackRules, RulePackRecord}
 use agentsweep_core::finding::{Finding, FindingId, FindingState};
 use agentsweep_core::gate_facts::GateRecord;
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
+use agentsweep_core::integrity::ResetUnanswered;
 use agentsweep_core::item::Scope;
 use agentsweep_core::keychain::{ClaudeKeyStore, KeySource, MemoryKeySource};
 use agentsweep_core::packs::{LoadedPack, PackOrigin, PackStore, Verdict, judge};
@@ -52,7 +53,7 @@ use crate::full_scan::{FullScan, Progress, ScanRun};
 use crate::machine::Machine;
 use crate::options::{KeySourceChoice, Options};
 use crate::rule_feed::{self, Endpoints, FeedClient, FeedTuning, Fetched, Validators};
-use crate::stores::{open_the_baseline, open_the_event_log};
+use crate::stores::{open_both_chains, open_the_event_log};
 use crate::watcher::{self, Batch, Decision, Timings, Watch};
 
 /// How the daemon is timed, so a test runs a day of Protection in a second.
@@ -179,6 +180,10 @@ pub struct Daemon {
     pub(crate) claude_key: Box<dyn ClaudeKeyStore + Send + Sync>,
     /// Every state a client is shown, by the precedence of spec section 6.6.
     pub(crate) health: Mutex<Health>,
+    /// Which chains started again under a new key without the user having
+    /// answered "Start a fresh record" since. Read off the chains at start,
+    /// set by a Scan that finds a key missing, cleared by the answer.
+    pub(crate) reset: Mutex<ResetUnanswered>,
     /// Held by whatever writes the Event Log or the Baseline: a Scan from
     /// start to end, and one action at a time. Each opens its own writer, and
     /// a chain has one head, so two writers at once would fork it.
@@ -291,8 +296,17 @@ impl Daemon {
         // Opening both chains is what turns a key that went missing into one
         // chain restart rather than into a restart per write, and it is what
         // says whether the records were tampered with.
-        let (_, events) = open_the_event_log(&directory, &*keys)?;
-        let (_, baseline) = open_the_baseline(&directory, &*keys)?;
+        let (events, baseline) = open_both_chains(&directory, &*keys)?;
+        // A chain that started again under a new key stays "protection state
+        // was reset" until the user answers, across restarts of the daemon.
+        let reset = ResetUnanswered::of(
+            &EventLog::in_data_directory(&directory)
+                .chain()
+                .verify(&*keys)?,
+            &agentsweep_core::baseline::Baseline::in_data_directory(&directory)
+                .chain()
+                .verify(&*keys)?,
+        );
 
         let file = StateFile::in_data_directory(&directory);
         let (mut state, state_file) = match file.read(&*keys) {
@@ -354,8 +368,8 @@ impl Daemon {
 
         let mut health = Health {
             protection: Protection::On,
-            events,
-            baseline,
+            events: crate::integrity::shown(&events, reset.events),
+            baseline: crate::integrity::shown(&baseline, reset.baseline),
             projects_need_permission: 0,
             state_file,
             settings_unreadable,
@@ -386,6 +400,7 @@ impl Daemon {
             settings: Mutex::new(settings),
             claude_key: crate::engine::claude_key_store(options.key_source),
             health: Mutex::new(health),
+            reset: Mutex::new(reset),
             writing: Mutex::new(()),
             raised: Mutex::new(Vec::new()),
             queue: Mutex::new(Queue::default()),
@@ -646,6 +661,14 @@ impl Daemon {
     /// what stands about the rest.
     fn took(self: &Arc<Daemon>, run: ScanRun) {
         let whole = run.summary.kind == ScanKind::Full;
+        // A key that went missing while the daemon ran restarted the chain
+        // this Scan opened, and that restart waits for an answer too.
+        let reset = {
+            let mut reset = self.reset.lock().expect("the reset is not poisoned");
+            reset.events |= run.events == ChainState::KeyMissing;
+            reset.baseline |= run.baseline == ChainState::KeyMissing;
+            *reset
+        };
         let mut changed: Vec<(FindingId, String, Option<Box<RecordedFinding>>)> = Vec::new();
         {
             let mut state = self.state.lock().expect("the state is not poisoned");
@@ -720,8 +743,8 @@ impl Daemon {
             }
 
             let mut health = self.health.lock().expect("the health is not poisoned");
-            health.events = run.events.clone();
-            health.baseline = run.baseline.clone();
+            health.events = crate::integrity::shown(&run.events, reset.events);
+            health.baseline = crate::integrity::shown(&run.baseline, reset.baseline);
             health.last_full_scan = state.last_full_scan;
             // Only a Full Scan knows how many Items there are; a Change Scan
             // counted the handful it was told about.
@@ -842,6 +865,11 @@ impl Daemon {
             return;
         }
         if run.baseline != ChainState::Intact {
+            return;
+        }
+        // A compaction writes the Baseline afresh, restart records and all,
+        // so it waits until a reset of the protection state is answered.
+        if self.reset.lock().expect("the reset is not poisoned").any() {
             return;
         }
         let live: BTreeSet<String> = run
@@ -1082,6 +1110,9 @@ impl Daemon {
             }
             Request::SetClaudeKey { key } => self.set_claude_key(key).map(|state| state.to_value()),
             Request::RemoveClaudeKey => self.remove_claude_key().map(|state| state.to_value()),
+            Request::Records { chain, from } => self.records(*chain, *from),
+            Request::AcknowledgeKeyMissing => self.acknowledge_key_missing(),
+            Request::AcknowledgeChainBroken => self.acknowledge_chain_broken(),
             // Everything else acts, and is carried out where acting lives.
             _ => self.act(request),
         }

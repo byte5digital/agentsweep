@@ -1,15 +1,28 @@
 [package]
 name = "agentsweep-core"
 description = "The AgentSweep core: the Item model, the Surface Adapter contract, Scans, Findings and the stores."
-# The core is consumed only through the workspace; the CLI is the one crate that
-# reaches crates.io.
-publish = false
+# Published to crates.io before the adapters and the command line interface,
+# which build on it (spec section 9.3, item 17).
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+# What the package carries. `rules` and `pack.json` beside this manifest are
+# links to the repository's own `rules/` tree and pack statement, so the
+# packaged core embeds the same bundled Rule Pack the app bundle embeds; only
+# the rule sources travel, never their Fixtures. The secret halves under
+# `development-keys/` stay out on purpose: the `development-keys` feature
+# builds inside the repository alone.
+include = [
+    "Cargo.toml",
+    "build.rs",
+    "src/**/*.rs",
+    "tests/*.rs",
+    "rules/*/rule.yar",
+    "pack.json",
+]
 
 [dependencies]
 getrandom = "0.4.3"
@@ -49,7 +62,9 @@ security-framework = { version = "3.7.0", default-features = false, optional = t
 daemon = ["dep:security-framework"]
 # Signs with the development key pairs of the Rule Feed. For tests alone: the
 # real key pairs do not exist yet (spec section 9.8), and a shipped binary
-# never signs anything.
+# never signs anything. It builds only inside the repository: the published
+# core leaves the secret halves out, so turning it on for the crate from
+# crates.io fails to compile.
 development-keys = ["dep:minisign"]
 
 [dev-dependencies]

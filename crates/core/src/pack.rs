@@ -42,7 +42,11 @@ pub const STATEMENT_FILE: &str = "pack.json";
 /// Embedding it here is what puts the thresholds in the binary. Nothing in the
 /// core reads a threshold from code: the Heuristic tier takes its [`Bands`]
 /// from a [`Manifest`], and a fetched pack brings its own.
-pub const BUNDLED_STATEMENT: &str = include_str!("../../../pack.json");
+///
+/// It is read through the `pack.json` link beside the crate's manifest, which
+/// points at the repository's statement and is a copy of it inside the
+/// packaged crate.
+pub const BUNDLED_STATEMENT: &str = include_str!("../pack.json");
 
 /// The one file name a pack never carries: macOS writes it into any directory
 /// the Finder has looked at, and it is not pack content.

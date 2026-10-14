@@ -236,6 +236,10 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
 /// turns on: a shipped binary verifies and never signs. The secret halves are
 /// named as development keys, are unencrypted on purpose, and protect nothing
 /// real; nothing but the development [`PINNED_KEYS`] trusts them.
+///
+/// The feature builds inside the repository alone: the core published to
+/// crates.io leaves the secret halves out of its package, so turning the
+/// feature on for that crate does not compile.
 #[cfg(feature = "development-keys")]
 pub mod development {
     use super::{KeyRole, PINNED_KEYS, PinnedKey};

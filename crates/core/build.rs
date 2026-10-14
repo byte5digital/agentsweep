@@ -1,7 +1,10 @@
 //! Embeds the bundled Rule Pack in the binary.
 //!
 //! The bundled pack is the `rules/` tree of this repository, embedded at build
-//! time (spec section 4.2, "Packs"). The script emits one `include_str!` per
+//! time (spec section 4.2, "Packs"). It is read through the `rules` link beside
+//! this crate's manifest, which points at that tree inside the repository and
+//! is a copy of its rule sources inside the packaged crate, so both builds
+//! embed the same bytes. The script emits one `include_str!` per
 //! rule so the sources travel inside the binary and no path is read at run
 //! time. A fetched pack replaces the bundled one wholesale later; that is the
 //! Rule Feed's work, not this script's.
@@ -13,8 +16,6 @@ use std::path::{Path, PathBuf};
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("a manifest dir"));
     let rules_dir = manifest_dir
-        .join("..")
-        .join("..")
         .join("rules")
         .canonicalize()
         .expect("the bundled rules tree");

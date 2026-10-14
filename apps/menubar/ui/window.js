@@ -1,6 +1,7 @@
 // The Findings window. It renders the frame the app hands over (the sidebar
-// with its counts, one pane per entry, the open Findings in the two Finding
-// panes as a list beside the selected Finding) and the Folder Scan, and
+// with its counts, one pane per entry, the Overview, the open Findings in the
+// two Finding panes as a list beside the selected Finding) and the Folder
+// Scan, and
 // invokes the app's commands; every decision about what is listed, counted
 // and offered was made by the daemon and the app. Which pane and which
 // Finding are selected is the window's own. Everything is written with
@@ -323,14 +324,50 @@ function renderFindingPane(id, cards, loaded) {
   node.querySelector(".detail").replaceChildren(...(selected ? [renderFinding(selected)] : []));
 }
 
+// A moment in local time, as the popover writes it.
+function when(text) {
+  const moment = new Date(text);
+  if (Number.isNaN(moment.getTime())) {
+    return text;
+  }
+  return moment.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+// What "Scan now" answered, shown until the stream says more.
+let scanAnswer = "";
+
+// The Overview pane (spec section 8.1). With Protection off it shows the
+// sentence alone and offers neither Scan action (spec section 6.2).
+function renderOverview(overview) {
+  $("overview-sentence").textContent = overview.sentence;
+  $("overview-body").hidden = overview.off;
+  $("overview-scan").hidden = !overview.actions;
+  const agents = overview.agents.map((agent) => {
+    const item = el("li", "", agent.line);
+    item.dataset.agent = agent.agent;
+    item.dataset.installed = String(agent.installed);
+    return item;
+  });
+  $("overview-agents").replaceChildren(...agents);
+  $("overview-last-check").textContent = overview.lastCheck
+    ? `Last check: ${when(overview.lastCheck)}`
+    : "Nothing checked yet.";
+  $("overview-rules").textContent = overview.rulesUpdated ?? "";
+  $("overview-rules").hidden = overview.rulesUpdated === null;
+  if (overview.scan.running) {
+    scanAnswer = "";
+  }
+  $("scan-line").textContent = overview.scan.running ? overview.scan.progress : scanAnswer;
+  $("overview-summary").textContent = overview.summary ?? "";
+  $("overview-summary").hidden = overview.summary === null;
+}
+
 function render(list) {
   view = list;
   takePosture(list.posture);
   $("off").hidden = list.off === null;
   $("off").textContent = list.off === null ? "" : `Protection is off: ${list.off}.`;
-  // With Protection off the window offers nothing (spec section 6.2).
-  $("scan").hidden = list.off !== null;
-  $("scan-line").textContent = list.scan.line;
+  renderOverview(list.overview);
   actionsWait = list.actionsWait;
   $("actions-wait").hidden = actionsWait === null;
   $("actions-wait").textContent = actionsWait === null ? "" : actionsWait;
@@ -366,9 +403,12 @@ function renderFolder(view) {
   $("folder-cards").replaceChildren(...view.findings.map(renderCard));
 }
 
+// The same request the popover's Scan now sends; the progress and the last
+// Scan follow from the stream.
 $("scan-now").addEventListener("click", async () => {
   try {
-    $("scan-line").textContent = await invoke("scan_now");
+    scanAnswer = await invoke("scan_now");
+    $("scan-line").textContent = scanAnswer;
   } catch (why) {
     showFailure(why);
   }

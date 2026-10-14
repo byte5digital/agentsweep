@@ -17,11 +17,6 @@
       <div class="content">
         <header>
           <p class="off" id="off" hidden></p>
-          <div class="scan" id="scan">
-            <button type="button" id="scan-now">Scan now</button>
-            <button type="button" id="scan-folder">Scan a folder</button>
-            <p class="muted" id="scan-line"></p>
-          </div>
           <p class="wait" id="actions-wait" hidden></p>
         </header>
 
@@ -46,11 +41,35 @@
           <div id="folder-cards"></div>
         </section>
 
-        <!-- One pane per sidebar entry. Only the two Finding panes have
-             content yet; each later screen fills its own. -->
+        <!-- One pane per sidebar entry. Overview and the two Finding panes
+             have content; each later screen fills its own. -->
         <main id="panes">
           <section class="pane" data-pane="overview" hidden>
             <h2 class="pane-title"></h2>
+            <!-- The integrity and Protection banners take this place
+                 (spec section 8.6). -->
+            <div id="overview-banner" hidden></div>
+            <p class="sentence" id="overview-sentence"></p>
+            <div id="overview-body">
+              <ul class="agents" id="overview-agents"></ul>
+              <!-- "N projects not checked" with Check now, for projects that
+                   Need Permission (spec section 8.1). -->
+              <div id="overview-permission" hidden></div>
+              <!-- "Gate off in this project", one line per affected project
+                   (spec section 8.1). -->
+              <div id="overview-gate" hidden></div>
+              <p class="muted" id="overview-last-check"></p>
+              <p class="muted" id="overview-rules"></p>
+              <div class="scan" id="overview-scan">
+                <button type="button" id="scan-now">Scan now</button>
+                <button type="button" id="scan-folder">Scan a folder</button>
+                <p class="muted" id="scan-line"></p>
+              </div>
+              <p class="id summary" id="overview-summary" hidden></p>
+              <!-- "AI check: 3 of 12" while the queue runs, in the Developer
+                   Posture (spec section 6.4). -->
+              <p class="muted" id="overview-ai-check" hidden></p>
+            </div>
           </section>
           <section class="pane" data-pane="threats" hidden>
             <h2 class="pane-title"></h2>

@@ -209,7 +209,7 @@ Then run the "Before" commands again: every one must report nothing. Login Items
 
 Every release draft runs the release checklist, section 9.3 of the specification, in full; the checks above are the part of it that needs a hand install. The lines of that checklist that depend on how this repository builds, so they are easy to miss:
 
-- `codesign -d -r-` on `Contents/MacOS/agentsweepd` shows the identifier `de.byte5.agentsweep.daemon`. Tauri signs sidecars with an identifier derived from the file name, so the release pipeline re-signs the daemon with `-i de.byte5.agentsweep.daemon` after Tauri has signed it, and then signs the bundle again.
+- `codesign -d -r-` on `Contents/MacOS/agentsweepd` shows the identifier `de.byte5.agentsweep.daemon`. Tauri signs sidecars without naming an identifier, so codesign takes it from the Info.plist the daemon binary embeds; nothing re-signs after Tauri, which would leave the notarization, the DMG and the updater archive stale. CI checks the identifier in each architecture of the ad hoc bundle.
 - Every Mach-O carries `Timestamp=`, and Dock and Cmd-Tab appear only while the window is open (Tauri issue 15005).
 - `TEAM_ID` in the daemon's peer check holds byte5's Team ID. While it is empty a release daemon admits nobody, which is why the checks above use debug sidecars.
 - The daemon and CLI sidecars are universal: `lipo -archs` on each shows arm64 and x86_64.

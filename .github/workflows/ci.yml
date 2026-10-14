@@ -121,6 +121,19 @@ jobs:
           test "$(plutil -extract LSUIElement raw "$app/Contents/Info.plist")" = "true"
           codesign --verify --deep --strict "$app"
 
+      # Release checklist item 3: the daemon's signing identifier is frozen,
+      # because the Keychain key is bound to it. The daemon embeds an Info.plist
+      # naming it, so Tauri's own signing yields it in each architecture and
+      # nothing re-signs after Tauri.
+      - name: Check the daemon's frozen signing identifier
+        run: |
+          daemon=target/universal-apple-darwin/release/bundle/macos/AgentSweep.app/Contents/MacOS/agentsweepd
+          for arch in arm64 x86_64; do
+            identifier="$(codesign -dvv --arch "$arch" "$daemon" 2>&1 | sed -n 's/^Identifier=//p')"
+            echo "agentsweepd ($arch): $identifier"
+            test "$identifier" = "de.byte5.agentsweep.daemon"
+          done
+
       # Release checklist item 16, and the dependency list cargo auditable
       # embeds, checked in each architecture of each sidecar.
       - name: Check that every executable is universal and every sidecar auditable

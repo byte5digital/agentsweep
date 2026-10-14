@@ -189,6 +189,35 @@ $judge < judge-request.json
 
 Seams in the suite: the helper's own Swift tests, run with `apps/apple-judge/test.sh` (the protocol against a fake model, the schema subset, the error names, and on macOS 26 the mapping of every `GenerationError` case), and `launch_agent::tests` in the app (the bundle carries the helper as its third external binary).
 
+## 9. A project in Documents needs permission, and Check now asks for it
+
+This check needs a hand install and the real `~/Documents`, because only the real folder raises the real system alert; the suite stands a temporary home's `Documents` in for it and never raises one. It is release checklist item 5 of spec section 9.3, and it tests research section 2 of the macOS permissions fact base: that the alert names AgentSweep and that the grant to the app covers the daemon. Run it once per macOS major.
+
+Before installing, make a project there and have Claude Code name it in its registry, by opening Claude Code in it once and accepting the trust dialog:
+
+```sh
+mkdir -p ~/Documents/agentsweep-permission-check
+printf '# check\n\nRun the tests before opening a change.\n' > ~/Documents/agentsweep-permission-check/CLAUDE.md
+tccutil reset SystemPolicyDocumentsFolder de.byte5.agentsweep   # forget any earlier Documents answer for AgentSweep alone
+```
+
+Then install the bundle as in section 1 and wait for the first Full Scan to finish.
+
+- [ ] No system alert appears during the Full Scan at login. The popover and `agentsweep status` read "1 project needs permission.", the menu bar never shows "All clear" while it stands, and the Overview lists the project as not checked with **Check now**.
+- [ ] **Check now** raises one alert, "AgentSweep" would like to access files in your Documents folder, with the Documents usage string from the app's Info.plist. The popover and the status still answer while the alert is up.
+- [ ] After **Allow**, the project reads checked within a Scan, Health drops the line, and Privacy & Security, Files and Folders lists AgentSweep (not `agentsweepd`) with Documents switched on: the grant to the app covers the daemon.
+- [ ] `kill -9 $(pgrep -x agentsweepd)`: the daemon that KeepAlive starts again reads the project at its first Full Scan without an alert and without a click (the class is remembered in the state file).
+- [ ] Switch Documents off for AgentSweep in Files and Folders, then **Scan now**: the project reads not checked again and no Drift Finding is raised for its `CLAUDE.md`.
+
+The grant given later in System Settings instead of in the alert. The research marks as unverified whether a running daemon sees such a grant, since denials may be cached per process; nothing is built for it, so this check records what happens:
+
+- [ ] `tccutil reset SystemPolicyDocumentsFolder de.byte5.agentsweep`, restart the daemon as above, press **Check now** and answer **Don't Allow**. The project stays not checked, and a second **Check now** raises no second alert.
+- [ ] Switch Documents on for AgentSweep in Files and Folders and press **Check now** again. Note whether the project reads checked. If it does not, the denial is cached in the running daemon: `launchctl kickstart -k gui/$(id -u)/de.byte5.agentsweep.daemon`, press **Check now** once more, and note that it now reads checked. Record which of the two happened, with the macOS version, under Record of runs.
+
+Clean up with the section below, and also remove `~/Documents/agentsweep-permission-check`, its entry in `~/.claude.json` (through Claude Code or by hand), and AgentSweep's Files and Folders entry with the `tccutil reset` line above.
+
+Seams in the suite: `permission::tests` in the daemon (the classifier for every class, including iCloud Drive, a File Provider under `~/Library/CloudStorage`, a volume under `/Volumes` and the unprotected `~/Developer`; a class never read is not touched; `EPERM` on a class read before is Needs Permission again; the classes a Baseline proves readable) and the daemon's `permission` integration tests (nothing opened in a stand-in Documents project, Health and the all-clear rung, Check now reading once and remembering across a restart and a rebuilt state file, a denial without Drift, a status answered while the first read is held).
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.

@@ -40,7 +40,9 @@ mkdir -p "$unpacked/.cargo"
 echo "[patch.crates-io]" > "$unpacked/.cargo/config.toml"
 for crate in $crates; do
   tar -xzf "$target_dir/package/$crate-$version.crate" -C "$unpacked"
-  echo "$crate = { path = \"$unpacked/$crate-$version\" }" >> "$unpacked/.cargo/config.toml"
+  if [ "$crate" != agentsweep ]; then
+    echo "$crate = { path = \"$unpacked/$crate-$version\" }" >> "$unpacked/.cargo/config.toml"
+  fi
 done
 
 # The unpacked package is a workspace of its own, so it builds into a target

@@ -24,6 +24,10 @@ pub const DAEMON_BINARY: &str = "agentsweepd";
 /// The command line interface's binary name, the second sidecar.
 pub const CLI_BINARY: &str = "agentsweep";
 
+/// The Apple judgement helper's binary name, the third sidecar: the only way
+/// to Apple's on-device model (spec section 4.4), found beside the daemon.
+pub const APPLE_JUDGE_BINARY: &str = "agentsweep-apple-judge";
+
 /// The daemon relative to the bundle: Tauri puts every sidecar in
 /// `Contents/MacOS`, beside the app's own executable.
 pub fn bundle_program() -> String {
@@ -123,7 +127,8 @@ mod tests {
             sidecars,
             vec![
                 format!("binaries/{DAEMON_BINARY}"),
-                format!("binaries/{CLI_BINARY}")
+                format!("binaries/{CLI_BINARY}"),
+                format!("binaries/{APPLE_JUDGE_BINARY}")
             ]
         );
     }
@@ -145,7 +150,7 @@ mod tests {
         let main = config["mainBinaryName"]
             .as_str()
             .expect("a main binary name");
-        for sidecar in [DAEMON_BINARY, CLI_BINARY] {
+        for sidecar in [DAEMON_BINARY, CLI_BINARY, APPLE_JUDGE_BINARY] {
             assert!(!main.eq_ignore_ascii_case(sidecar), "{main}");
         }
     }

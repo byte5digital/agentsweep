@@ -88,3 +88,38 @@ for binary in agentsweepd agentsweep; do
   fi
   echo "sidecar: binaries/$binary-$name ($profile)"
 done
+
+# The Apple judgement helper (spec section 4.4) is a Swift package, built with
+# swiftc from the Command Line Tools for the same triples and joined the same
+# way. It needs an SDK with Foundation Models (macOS 26 or later); its minimum
+# stays macOS 14, where it answers that the model is unavailable.
+apple_judge="agentsweep-apple-judge"
+build_apple_judge() {
+  case "$1" in
+    aarch64-apple-darwin) swift_triple="arm64-apple-macosx14.0" ;;
+    x86_64-apple-darwin) swift_triple="x86_64-apple-macosx14.0" ;;
+    *)
+      echo "build-sidecars.sh: no Swift triple for $1" >&2
+      exit 2
+      ;;
+  esac
+  swift build -c "$profile" --package-path "$root/apps/apple-judge" \
+    --scratch-path "$target_dir/apple-judge" --triple "$swift_triple" \
+    --product "$apple_judge"
+  swift_bin="$(swift build -c "$profile" --package-path "$root/apps/apple-judge" \
+    --scratch-path "$target_dir/apple-judge" --triple "$swift_triple" --show-bin-path)"
+  cp "$swift_bin/$apple_judge" "$here/binaries/$apple_judge-$1"
+  echo "sidecar: binaries/$apple_judge-$1 ($profile)"
+}
+if [ "$name" = "universal-apple-darwin" ]; then
+  for triple in $triples; do
+    build_apple_judge "$triple"
+  done
+  rm -f "$here/binaries/$apple_judge-$name"
+  lipo -create -output "$here/binaries/$apple_judge-$name" \
+    "$here/binaries/$apple_judge-aarch64-apple-darwin" \
+    "$here/binaries/$apple_judge-x86_64-apple-darwin"
+  echo "sidecar: binaries/$apple_judge-$name ($profile)"
+else
+  build_apple_judge "$name"
+fi

@@ -56,14 +56,23 @@ jobs:
         run: cargo test --workspace --locked
 
       # The command line interface is two builds with one name (ADR 0008). The
-      # workspace builds the in-bundle one; the crates.io one, which runs a
-      # Folder Scan and nothing else and links no IPC code, is built, linted
-      # and tested on its own features here.
-      - name: Build, lint and test the crates.io build of the command line interface
+      # workspace builds the crates.io one, its default features, which runs a
+      # Folder Scan and nothing else and links no IPC code; the in-bundle one,
+      # feature `bundle`, is built, linted and tested on its own features here.
+      # Its test suite also runs the crates.io build beside it and asserts both
+      # print the same bytes for a Folder Scan.
+      - name: Build, lint and test the in-bundle build of the command line interface
         run: |
-          cargo build -p agentsweep --no-default-features --locked
-          cargo clippy -p agentsweep --no-default-features --all-targets --locked -- -D warnings
-          cargo test -p agentsweep --no-default-features --locked
+          cargo build -p agentsweep --features bundle --locked
+          cargo clippy -p agentsweep --features bundle --all-targets --locked -- -D warnings
+          cargo test -p agentsweep --features bundle --locked
+
+      # The crates that go to crates.io (the core, the three adapters, the IPC
+      # crate and the command line interface) are packaged in publishing order,
+      # each tarball is built on its own, and the command line interface is
+      # tested from its package. Nothing is uploaded.
+      - name: Package the publishable crates and test the command line interface from its package
+        run: .github/scripts/package-check.sh
 
       # cargo-auditable and cargo-deny are built from crates.io with the pinned
       # toolchain rather than pulled as prebuilt binaries by a third party

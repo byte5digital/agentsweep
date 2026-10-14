@@ -2,17 +2,18 @@
 name = "agentsweep"
 description = "Scans the local configuration surfaces of Claude Code and Codex and quarantines what a deterministic rule proves bad."
 # The CLI is the crate that goes to crates.io at the first tagged release, as an
-# on-demand scanner. It stays publishable on purpose.
+# on-demand scanner, after the core, the adapters and the IPC crate it names.
 #
 # One binary name, two builds (ADR 0008):
-# - The in-bundle build, feature `bundle`, on by default. It is what the
-#   AgentSweep app ships in its bundle: a client of the daemon (`status`, the
-#   action commands, `rule-feed` and a bare `scan`, which asks the daemon for a
-#   Full Scan), and it runs `scan <dir>` in-process as well.
-# - The crates.io build, `--no-default-features`. It runs `scan <dir>` in-process
-#   and nothing else. It has no code path to the daemon at all: the IPC crate
-#   is not even linked, because the daemon answers only the signed tools of its
-#   own bundle and a `cargo install`ed binary is not one of them.
+# - The crates.io build, the default features. It is what `cargo install
+#   agentsweep` gives: it runs `scan <dir>` in-process and nothing else. It has
+#   no code path to the daemon at all: the IPC crate is not even linked,
+#   because the daemon answers only the signed tools of its own bundle and a
+#   `cargo install`ed binary is not one of them.
+# - The in-bundle build, feature `bundle`, which the app's build turns on. It
+#   is what the AgentSweep app ships in its bundle: a client of the daemon
+#   (`status`, the action commands, `rule-feed` and a bare `scan`, which asks
+#   the daemon for a Full Scan), and it runs `scan <dir>` in-process as well.
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -25,7 +26,7 @@ name = "agentsweep"
 path = "src/main.rs"
 
 [features]
-default = ["bundle"]
+default = []
 # The in-bundle build: the daemon client. Everything that reaches the daemon is
 # behind it, and so is the IPC crate.
 bundle = ["dep:agentsweep-ipc"]

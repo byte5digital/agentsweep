@@ -2,8 +2,12 @@
 //!
 //! One binary name, two tools (ADR 0008). The in-bundle build, feature
 //! `bundle`, is a client of the daemon and runs `scan <dir>` in-process; the
-//! crates.io build, `--no-default-features`, runs `scan <dir>` and nothing
-//! else. These tests run the binaries themselves.
+//! crates.io build, the default features, runs `scan <dir>` and nothing else.
+//! These tests run the binaries themselves.
+//!
+//! The suite runs in the repository and from the packaged crate alike, so it
+//! asks Cargo about the package it was compiled from rather than about a
+//! workspace around it.
 //!
 //! The build the suite was compiled as is the binary Cargo hands the test. The
 //! other one, and the daemon a bare `scan` talks to, are built by the test into
@@ -31,21 +35,15 @@ fn this_build() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_agentsweep"))
 }
 
-/// The workspace this crate belongs to.
-fn workspace() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("the workspace root")
-}
-
-/// Runs Cargo on the workspace, offline and from the lock file, so a test
-/// never reaches the network and never resolves anew.
+/// Runs Cargo from this package's own directory, offline and from the lock
+/// file, so a test never reaches the network and never resolves anew. In the
+/// repository Cargo finds the workspace from there; in the packaged crate the
+/// package is its own workspace.
 fn cargo(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO"))
         .args(arguments)
         .args(["--locked", "--offline"])
-        .current_dir(workspace())
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("Cargo runs")
@@ -74,23 +72,12 @@ fn built(arguments: &[&str], binary: &str) -> PathBuf {
     target.join("debug").join(binary)
 }
 
-/// The crates.io build: the CLI with no default feature.
+/// The crates.io build: the CLI with its default features.
 #[cfg(feature = "bundle")]
 fn crates_io_build() -> PathBuf {
     static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     BUILT
-        .get_or_init(|| {
-            built(
-                &[
-                    "-p",
-                    "agentsweep",
-                    "--no-default-features",
-                    "--bin",
-                    "agentsweep",
-                ],
-                "agentsweep",
-            )
-        })
+        .get_or_init(|| built(&["-p", "agentsweep", "--bin", "agentsweep"], "agentsweep"))
         .clone()
 }
 
@@ -259,13 +246,13 @@ fn the_crates_io_build_has_no_ipc_crate_in_its_dependency_graph() {
         text(&output.stdout)
     };
 
-    let crates_io = tree(&["--no-default-features"]);
+    let crates_io = tree(&[]);
     assert!(crates_io.contains("agentsweep-core"), "{crates_io}");
     assert!(!crates_io.contains("agentsweep-ipc"), "{crates_io}");
     assert!(!crates_io.contains("interprocess"), "{crates_io}");
     assert!(!crates_io.contains("agentsweep-daemon"), "{crates_io}");
 
-    let bundle = tree(&[]);
+    let bundle = tree(&["--features", "bundle"]);
     assert!(bundle.contains("agentsweep-ipc"), "{bundle}");
     assert!(!bundle.contains("agentsweep-daemon"), "{bundle}");
 }

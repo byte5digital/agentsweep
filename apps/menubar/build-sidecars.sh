@@ -67,8 +67,11 @@ for triple in $triples; do
   set -- "$@" --target "$triple"
 done
 
+# The command line interface's default features are the crates.io build; the
+# bundle carries the in-bundle build, so its feature is asked for here (ADR
+# 0008).
 cargo "$@" --locked --manifest-path "$root/Cargo.toml" \
-  -p agentsweep-daemon -p agentsweep
+  -p agentsweep-daemon -p agentsweep --features agentsweep/bundle
 
 mkdir -p "$here/binaries"
 for binary in agentsweepd agentsweep; do

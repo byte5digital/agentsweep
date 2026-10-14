@@ -2,14 +2,15 @@
 //!
 //! One name, two tools (ADR 0008), chosen when the binary is built.
 //!
-//! The in-bundle build, feature `bundle`, is the one the AgentSweep app ships.
+//! The in-bundle build, feature `bundle`, is the one the AgentSweep app ships;
+//! the app's build turns the feature on.
 //! It is a client of the daemon: `status`, which reaches the daemon and does
 //! nothing else; the action commands, each of which is one request to the
 //! daemon, the only process that quarantines, restores or trusts anything;
 //! `rule-feed`; and a bare `scan`, which asks the daemon for a Full Scan and
 //! follows it to the end. It runs `scan <dir>` in-process as well.
 //!
-//! The crates.io build, `--no-default-features`, is an on-demand scanner:
+//! The crates.io build, the default features, is an on-demand scanner:
 //! `scan <dir>` and nothing else. It has no code path to the daemon, because
 //! the daemon answers only the signed tools of its own bundle, so it cannot
 //! show status and its help text says so.

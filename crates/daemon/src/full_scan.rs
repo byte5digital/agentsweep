@@ -228,7 +228,6 @@ impl FullScan<'_> {
         let began = std::time::Instant::now();
 
         let inventory = pool(self.machine, &self.access);
-        let inventory = pool(self.machine);
         // The registration check runs after detection and before the
         // enumeration, so a mending write is already in the Event Log when
         // the pass rebuilds its known actions: the fresh entries read

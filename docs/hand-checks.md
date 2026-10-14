@@ -217,7 +217,7 @@ The grant given later in System Settings instead of in the alert. The research m
 Clean up with the section below, and also remove `~/Documents/agentsweep-permission-check`, its entry in `~/.claude.json` (through Claude Code or by hand), and AgentSweep's Files and Folders entry with the `tccutil reset` line above.
 
 Seams in the suite: `permission::tests` in the daemon (the classifier for every class, including iCloud Drive, a File Provider under `~/Library/CloudStorage`, a volume under `/Volumes` and the unprotected `~/Developer`; a class never read is not touched; `EPERM` on a class read before is Needs Permission again; the classes a Baseline proves readable) and the daemon's `permission` integration tests (nothing opened in a stand-in Documents project, Health and the all-clear rung, Check now reading once and remembering across a restart and a rebuilt state file, a denial without Drift, a status answered while the first read is held).
-## 9. Ollama judges an Item on its loopback address
+## 10. Ollama judges an Item on its loopback address
 
 This check needs no hand install and nothing of AgentSweep runs: an ignored test of the core asks a real Ollama on this Mac for one judgement of a defanged Fixture, an instruction file that pipes a download from a `.invalid` host into `sh`. It needs Ollama already running at the default address, 127.0.0.1 port 11434, with a model of 4B or more already pulled by the person running the check. AgentSweep never pulls a model and never starts Ollama, and the test does not either. The suite covers everything else against a fixture server on a loopback port of its own (the core's `ollama` and `ollama_environment` tests and the daemon's engine tests), because no automated test may reach a real Ollama.
 
@@ -234,7 +234,7 @@ Name a model `ollama list` shows. The variable only tells the test which model t
 - [ ] The prompt evaluation count is printed as a number and stays under 8192; note it beside the request bytes, so the eval report can check the estimate of three bytes a token.
 - [ ] `ollama ps` shows the model loaded with about five minutes until it is unloaded.
 
-## 10. The Claude API answers one live request
+## 11. The Claude API answers one live request
 
 This check spends a few cents of the owner's own Claude API credit, so it is never part of the automated suite, which talks only to a stand-in on 127.0.0.1 with a synthetic key. It needs no hand install and nothing of AgentSweep runs: one ignored test of the core sends one Judgement Request for a defanged Fixture (an instruction file that pipes a download from a `.invalid` host into `sh`) to the real API and prints the Verdict after every check and the usage the API reported. The test reads the key from a Keychain item of its own, never from the daemon's, and never from the environment.
 

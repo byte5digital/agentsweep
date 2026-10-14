@@ -107,8 +107,13 @@ impl Sandbox {
     fn full_scan_with(&self, command: Option<&GateCommand>) -> ScanRun {
         static PACK: OnceLock<LoadedPack> = OnceLock::new();
         let pack = PACK.get_or_init(|| LoadedPack::bundled().expect("the bundled pack"));
+        let readable = std::collections::BTreeSet::new();
         FullScan {
             machine: &self.machine(),
+            access: agentsweep_daemon::permission::Access {
+                readable: &readable,
+                folders: &agentsweep_daemon::permission::Disk,
+            },
             directory: &self.data(),
             keys: &self.keys,
             pack: &pack.rules,

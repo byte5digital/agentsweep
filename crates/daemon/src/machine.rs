@@ -11,6 +11,7 @@
 //! path is read unless a `system` directory sits beside the home, the way a
 //! conformance fixture lays one out.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use agentsweep_adapter_claude_code::ClaudeCode;
@@ -31,6 +32,7 @@ pub struct Machine {
     home: PathBuf,
     system_root: Option<PathBuf>,
     search_path: Vec<PathBuf>,
+    config_dirs: BTreeMap<String, PathBuf>,
 }
 
 impl Machine {
@@ -43,7 +45,16 @@ impl Machine {
             search_path: std::env::var("PATH")
                 .map(|path| path.split(':').map(PathBuf::from).collect())
                 .unwrap_or_default(),
+            config_dirs: BTreeMap::new(),
         }
+    }
+
+    /// The same machine with the config-dir override per Agent the settings
+    /// file holds, which every Host built from it carries (spec section 3.1).
+    /// It replaces any override the machine held before.
+    pub fn with_config_dirs(mut self, config_dirs: BTreeMap<String, PathBuf>) -> Machine {
+        self.config_dirs = config_dirs;
+        self
     }
 
     /// A home the developer named, read as a machine of its own.
@@ -59,6 +70,7 @@ impl Machine {
             home,
             system_root,
             search_path: Vec::new(),
+            config_dirs: BTreeMap::new(),
         }
     }
 
@@ -73,10 +85,14 @@ impl Machine {
         self.host(Vec::new())
     }
 
-    /// The Host an adapter is handed to enumerate: the home and every pooled
-    /// project root.
+    /// The Host an adapter is handed to enumerate: the home, every pooled
+    /// project root and the config-dir override per Agent.
     pub fn host(&self, roots: Vec<PathBuf>) -> Host {
-        let host = Host::new(self.home.clone(), roots).with_search_path(self.search_path.clone());
+        let mut host =
+            Host::new(self.home.clone(), roots).with_search_path(self.search_path.clone());
+        for (agent, dir) in &self.config_dirs {
+            host = host.with_config_dir(agent, dir.clone());
+        }
         match &self.system_root {
             Some(system) => host.with_system_root(system.clone()),
             None => host,
@@ -133,6 +149,22 @@ mod tests {
 
         let machine = Machine::named(home);
         assert_eq!(machine.inventory().system_root(), Some(system.as_path()));
+    }
+
+    /// The override per Agent reaches every Host the machine builds, the one
+    /// that looks for Agents and the one that enumerates.
+    #[test]
+    fn the_config_dir_override_reaches_every_host() {
+        let machine = Machine::named(PathBuf::from("/nowhere/home")).with_config_dirs(
+            BTreeMap::from([("codex".to_string(), PathBuf::from("/nowhere/codex-work"))]),
+        );
+        for host in [machine.inventory(), machine.host(Vec::new())] {
+            assert_eq!(
+                host.config_dir("codex"),
+                Some(Path::new("/nowhere/codex-work"))
+            );
+            assert_eq!(host.config_dir("claude-code"), None);
+        }
     }
 
     #[test]

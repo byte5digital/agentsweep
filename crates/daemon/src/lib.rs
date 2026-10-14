@@ -60,6 +60,7 @@ pub mod peer_check;
 pub mod rule_feed;
 pub mod service;
 pub mod sessions;
+pub mod settings;
 pub mod stores;
 pub mod watcher;
 

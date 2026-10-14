@@ -227,6 +227,7 @@ impl Daemon {
             Some(kind) => self.record(&engine_event(kind, &before, &after)),
             None => 0,
         };
+        self.tell_settings();
         Ok(self.engine_state_of(&after, recorded))
     }
 
@@ -241,6 +242,7 @@ impl Daemon {
         self.claude_key.store(key).map_err(keychain_unavailable)?;
         say!("a Claude API key was handed over and kept in the login Keychain");
         let recorded = self.record(&key_event(EngineChangeKind::KeyAdded));
+        self.tell_settings();
         Ok(self.engine_state_of(&self.judgement(), recorded))
     }
 
@@ -264,6 +266,9 @@ impl Daemon {
             };
             self.write_judgement(&after)?;
             recorded += self.record(&engine_event(EngineChangeKind::Disabled, &before, &after));
+        }
+        if held || before.engine == JudgementEngine::Claude {
+            self.tell_settings();
         }
         Ok(self.engine_state_of(&self.judgement(), recorded))
     }

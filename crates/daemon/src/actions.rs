@@ -586,7 +586,7 @@ impl Daemon {
         content_hash: &str,
     ) -> Result<Item, RequestError> {
         let acting = Acting {
-            machine: &self.machine,
+            machine: &self.machine_in_force(),
             roots,
         };
         let item = acting
@@ -624,7 +624,7 @@ impl Daemon {
         let item = self.locate(&roots, &finding.item_id, &finding.content_hash)?;
         let adapter = adapter_for(&item.agent).ok_or_else(|| unknown(target))?;
         let acting = Acting {
-            machine: &self.machine,
+            machine: &self.machine_in_force(),
             roots: &roots,
         };
         let sessions = acting.sessions();
@@ -704,7 +704,7 @@ impl Daemon {
         let item = self.locate(&roots, &finding.item_id, &finding.content_hash)?;
         let adapter = adapter_for(&item.agent).ok_or_else(|| unknown(target))?;
         let acting = Acting {
-            machine: &self.machine,
+            machine: &self.machine_in_force(),
             roots: &roots,
         };
         let sessions = acting.sessions();
@@ -763,7 +763,7 @@ impl Daemon {
         let adapter = adapter_for(agent).ok_or_else(|| unknown(target))?;
         let roots = self.roots_for(&entry.item_id);
         let acting = Acting {
-            machine: &self.machine,
+            machine: &self.machine_in_force(),
             roots: &roots,
         };
         let sessions = acting.sessions();
@@ -878,7 +878,7 @@ impl Daemon {
         let roots = self.roots_for(&entry.item_id);
         let fixed = self.locate(&roots, &entry.item_id, &finding.fixed_version)?;
         let acting = Acting {
-            machine: &self.machine,
+            machine: &self.machine_in_force(),
             roots: &roots,
         };
         let sessions = acting.sessions();

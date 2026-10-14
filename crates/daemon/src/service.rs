@@ -586,7 +586,7 @@ impl Daemon {
                     _ => self.tuning.workers,
                 };
                 let run = FullScan {
-                    machine: &self.machine,
+                    machine: &self.machine_in_force(),
                     directory: &self.directory,
                     keys: &*self.keys,
                     pack: &pack.rules,
@@ -607,7 +607,7 @@ impl Daemon {
                 let at = Timestamp::now();
                 let pooled = self.pooled_roots();
                 let run = ChangeScan {
-                    machine: &self.machine,
+                    machine: &self.machine_in_force(),
                     directory: &self.directory,
                     keys: &*self.keys,
                     pack: &pack.rules,
@@ -1077,6 +1077,9 @@ impl Daemon {
                 crate::folder_scan::folder_scan(&pack, path).map(|result| result.to_value())
             }
             Request::Engine { change } => self.change_engine(change).map(|state| state.to_value()),
+            Request::Settings { change } => {
+                self.change_settings(change).map(|state| state.to_value())
+            }
             Request::SetClaudeKey { key } => self.set_claude_key(key).map(|state| state.to_value()),
             Request::RemoveClaudeKey => self.remove_claude_key().map(|state| state.to_value()),
             // Everything else acts, and is carried out where acting lives.
@@ -1288,8 +1291,17 @@ impl Daemon {
     ///
     /// The toggle is written to the settings file, which a rebuilt state file
     /// leaves alone. A settings file that could not be read is written over
-    /// here and only here: the user has just made the choice it holds.
+    /// here, as by any choice the user makes: the user has just made the
+    /// choice it holds. Every subscriber is told the choices as they stand.
     pub fn set_rule_feed(self: &Arc<Daemon>, enabled: bool) -> bool {
+        let enabled = self.switch_rule_feed(enabled);
+        self.tell_settings();
+        enabled
+    }
+
+    /// Moves the Rule Feed toggle, as [`Daemon::set_rule_feed`] describes,
+    /// without telling subscribers about the choices: the caller does, once.
+    pub(crate) fn switch_rule_feed(self: &Arc<Daemon>, enabled: bool) -> bool {
         let _switching = self.switching.lock().expect("the switch is not poisoned");
         let written = {
             let mut settings = self.settings.lock().expect("the settings are not poisoned");

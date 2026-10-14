@@ -234,6 +234,25 @@ Name a model `ollama list` shows. The variable only tells the test which model t
 - [ ] The prompt evaluation count is printed as a number and stays under 8192; note it beside the request bytes, so the eval report can check the estimate of three bytes a token.
 - [ ] `ollama ps` shows the model loaded with about five minutes until it is unloaded.
 
+## 10. The Claude API answers one live request
+
+This check spends a few cents of the owner's own Claude API credit, so it is never part of the automated suite, which talks only to a stand-in on 127.0.0.1 with a synthetic key. It needs no hand install and nothing of AgentSweep runs: one ignored test of the core sends one Judgement Request for a defanged Fixture (an instruction file that pipes a download from a `.invalid` host into `sh`) to the real API and prints the Verdict after every check and the usage the API reported. The test reads the key from a Keychain item of its own, never from the daemon's, and never from the environment.
+
+```sh
+security add-generic-password -s de.byte5.agentsweep.daemon.test -a claude-api-key-test -w
+cargo test -p agentsweep-core --features daemon --lib -- --ignored --nocapture a_live_call
+security delete-generic-password -s de.byte5.agentsweep.daemon.test -a claude-api-key-test
+```
+
+The first command asks for the key at a prompt, so it stays out of the shell history. macOS may ask once whether the test binary may read the item; allow it for this run only.
+
+- [ ] The test passes: the Verdict is malicious with the `curl ... | sh` line as its evidence, or unsure; never no Verdict.
+- [ ] The usage shows input tokens of a few thousand and output tokens below the bound of 4096.
+- [ ] The Console's usage page for the key shows exactly one request, on `claude-sonnet-5`.
+- [ ] After the last command, `security find-generic-password -s de.byte5.agentsweep.daemon.test` finds nothing.
+
+Seams in the suite: `claude_engine::tests` in the core (the exact request body and headers, every failure as no Verdict, the one retry after a `429`, usage on every answer, the key in no error and no debug output, and the compile-time boundary that keeps the engine out of both builds of the CLI).
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.

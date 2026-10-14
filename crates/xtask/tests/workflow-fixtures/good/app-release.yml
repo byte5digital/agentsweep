@@ -1,0 +1,21 @@
+name: App release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  draft:
+    runs-on: macos-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: cargo build --workspace --locked --release
+      - name: Build, sign and draft
+        uses: tauri-apps/tauri-action@0123456789abcdef0123456789abcdef01234567 # v1.0.0
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        with:
+          releaseDraft: true

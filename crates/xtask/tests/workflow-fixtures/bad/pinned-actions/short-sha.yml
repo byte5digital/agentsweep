@@ -1,0 +1,11 @@
+# expect: test 11
+name: Fixture
+
+on:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@3d3c42e # v7.0.1

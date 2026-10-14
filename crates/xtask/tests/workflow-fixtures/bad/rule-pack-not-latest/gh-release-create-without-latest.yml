@@ -1,0 +1,19 @@
+# expect: publish 18
+name: Fixture
+
+on:
+  push:
+    tags:
+      - 'rules-v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            manifest.json pack.tar

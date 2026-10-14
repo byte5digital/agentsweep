@@ -1,0 +1,9 @@
+# expect: call 9
+name: Fixture
+
+on:
+  pull_request:
+
+jobs:
+  call:
+    uses: example/workflows/checks.yml@v1

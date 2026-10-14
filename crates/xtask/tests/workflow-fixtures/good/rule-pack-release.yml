@@ -1,0 +1,36 @@
+name: Rule Pack release
+
+on:
+  push:
+    tags:
+      - "rules-v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment:
+      name: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: cargo run -p agentsweep-xtask --locked -- pack
+      - name: Sign the manifest
+        env:
+          RULE_PACK_KEY: ${{ secrets.RULE_PACK_ACTIVE_KEY }}
+        run: ./sign.sh
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Rule Pack $GITHUB_REF_NAME" \
+            --latest=false \
+            manifest.json pack.tar
+      - name: Or create it through an Action
+        uses: softprops/action-gh-release@89abcdef0123456789abcdef0123456789abcdef # v2.3.2
+        with:
+          make_latest: false
+          files: pack.tar
+      - name: Or through the API
+        run: gh api --method POST repos/example/agentsweep/releases -f tag_name="$GITHUB_REF_NAME" -f make_latest=false

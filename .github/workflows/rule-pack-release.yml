@@ -38,12 +38,18 @@ jobs:
       id-token: write
       attestations: write
     env:
-      RELEASE_DIR: ${{ runner.temp }}/rule-pack-release
-      INDEX_DIR: ${{ runner.temp }}/rule-pack-index
       XTASK: target/debug/agentsweep-xtask
     steps:
       - name: Check out the tagged commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The runner context is not available to a job's env, so the two working
+      # directories are named here, under the runner's temporary directory,
+      # for every later step.
+      - name: Name the working directories
+        run: |
+          echo "RELEASE_DIR=${RUNNER_TEMP}/rule-pack-release" >> "${GITHUB_ENV}"
+          echo "INDEX_DIR=${RUNNER_TEMP}/rule-pack-index" >> "${GITHUB_ENV}"
 
       - name: Install the pinned toolchain
         run: .github/scripts/install-toolchain.sh

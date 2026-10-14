@@ -15,8 +15,9 @@ use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::quarantine::Conflict;
 
 use crate::engine::{EngineChange, EngineState};
-use crate::settings::{SettingsChange, SettingsState};
+use crate::gate::{GateRequest, GateVerdict};
 use crate::integrity::{ChainRecords, IntegrityAnswer};
+use crate::settings::{SettingsChange, SettingsState};
 
 use crate::protocol::{
     ActionReport, FolderScanResult, Hello, Message, Refusal, Request, RequestError,
@@ -327,6 +328,16 @@ impl Client {
         self.ask(Request::Subscribe)?;
         Ok(Subscription {
             connection: self.connection,
+        })
+    }
+
+    /// Whether the Gate refuses this turn or tool call. The daemon answers
+    /// from the state it keeps and never scans on this path (spec section
+    /// 7.3); the deadline a hook needs is the caller's to set on the socket.
+    pub fn gate(&mut self, request: GateRequest) -> Result<GateVerdict, ClientError> {
+        let answer = self.ask(Request::Gate(request))?;
+        GateVerdict::from_value(&answer).ok_or_else(|| {
+            ClientError::Unexpected("the Gate verdict could not be read".to_string())
         })
     }
 

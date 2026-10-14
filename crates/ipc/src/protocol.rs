@@ -7,9 +7,9 @@
 //! left to whatever a caller can spell (ADR 0008). Every action addresses a
 //! Finding, an Item or a Receipt by its id, which the daemon resolves against
 //! what it knows; an id it does not know is a clean refusal. The only requests
-//! that take a path are revealing a Receipt and the Folder Scan:
-//! [`Request::takes_a_path`] says so, and a message that carries a path on any
-//! other request is not a message at all. The one other path on the wire is
+//! that take a path are revealing a Receipt, the Folder Scan and the Gate's
+//! `gate`: [`Request::takes_a_path`] says so, and a message that carries a
+//! path on any other request is not a message at all. The one other path on the wire is
 //! the config-dir override per Agent of the `settings` request, a directory
 //! the user named, which travels under its own field.
 //!
@@ -34,6 +34,7 @@ use agentsweep_core::quarantine::Conflict;
 use agentsweep_core::state::{IgnoredPack, RecordedFinding, ScanSummary, Trigger};
 
 pub use crate::engine::{EngineChange, EngineState};
+pub use crate::gate::{GateEvent, GateReason, GateRequest, GateTool, GateVerdict, McpServerRef};
 pub use crate::settings::{SettingsChange, SettingsState};
 
 /// Which peer is speaking. The daemon answers both the same way in this
@@ -297,11 +298,16 @@ pub enum Request {
     /// on the Event Log. Answers with an
     /// [`crate::integrity::IntegrityAnswer`].
     AcknowledgeChainBroken,
+    /// Whether the Gate refuses a turn or a tool call, answered from the
+    /// state the daemon keeps and never by scanning (spec section 7.3). The
+    /// third and last request of this list that takes a path (ADR 0008).
+    /// Answers with a [`GateVerdict`].
+    Gate(GateRequest),
 }
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 20] = [
+    pub const NAMES: [&'static str; 21] = [
         "status",
         "scan-now",
         "subscribe",
@@ -322,6 +328,7 @@ impl Request {
         "records",
         "acknowledge-key-missing",
         "acknowledge-chain-broken",
+        "gate",
     ];
 
     /// The spelling a request carries.
@@ -347,16 +354,22 @@ impl Request {
             Request::Records { .. } => "records",
             Request::AcknowledgeKeyMissing => "acknowledge-key-missing",
             Request::AcknowledgeChainBroken => "acknowledge-chain-broken",
+            Request::Gate(_) => "gate",
         }
     }
 
-    /// True for the requests that may carry a `path` field: revealing a
-    /// Receipt and the Folder Scan. Every other one addresses ids only (ADR
+    /// True for the requests that may carry a path: revealing a Receipt, the
+    /// Folder Scan and the Gate. Every other one addresses ids only (ADR
     /// 0008), but for the config-dir override of the `settings` request,
     /// which travels under its own field, never as a `path`.
     pub fn takes_a_path(name: &str) -> bool {
-        matches!(name, "reveal-receipt" | "folder-scan")
+        matches!(name, "reveal-receipt" | "folder-scan" | "gate")
     }
+
+    /// The fields a path travels in: a Folder Scan's or a Receipt's `path`,
+    /// and the Gate's `cwd` and the path tokens inside its `tool`. A request
+    /// that takes no path carries none of them.
+    pub const PATH_FIELDS: [&'static str; 3] = ["path", "cwd", "tool"];
 
     /// The id the request addresses, where it addresses one.
     pub fn target(&self) -> Option<&str> {
@@ -401,6 +414,7 @@ impl Request {
                 map.insert("chain".to_string(), Value::from(chain.as_str()));
                 map.insert("from".to_string(), Value::from(*from));
             }
+            Request::Gate(gate) => gate.write_into(map),
             _ => {}
         }
     }
@@ -411,7 +425,11 @@ impl Request {
     fn read_from(value: &Value) -> Option<Request> {
         let text = |field: &str| value.get(field).and_then(Value::as_str);
         let name = text("request")?;
-        if value.get("path").is_some() && !Request::takes_a_path(name) {
+        if !Request::takes_a_path(name)
+            && Request::PATH_FIELDS
+                .iter()
+                .any(|field| value.get(field).is_some())
+        {
             return None;
         }
         let target = || text("target").map(str::to_string);
@@ -466,6 +484,7 @@ impl Request {
             },
             "acknowledge-key-missing" => Request::AcknowledgeKeyMissing,
             "acknowledge-chain-broken" => Request::AcknowledgeChainBroken,
+            "gate" => Request::Gate(GateRequest::read_from(value)?),
             _ => return None,
         })
     }
@@ -1950,7 +1969,33 @@ mod tests {
             },
             Request::AcknowledgeKeyMissing,
             Request::AcknowledgeChainBroken,
+            Request::Gate(a_gate_request()),
+            Request::Gate(GateRequest {
+                agent: "codex".to_string(),
+                event: GateEvent::UserPromptSubmit,
+                cwd: "/Users/someone/src/demo".to_string(),
+                tool: None,
+            }),
         ]
+    }
+
+    /// A `gate` request with every Item-naming field filled in.
+    fn a_gate_request() -> GateRequest {
+        GateRequest {
+            agent: "claude-code".to_string(),
+            event: GateEvent::PreToolUse,
+            cwd: "/Users/someone/src/demo".to_string(),
+            tool: Some(GateTool {
+                name: Some("Bash".to_string()),
+                skill: Some("notes:jot".to_string()),
+                mcp_server: Some(McpServerRef {
+                    name: "tracker".to_string(),
+                    source: Some("user".to_string()),
+                }),
+                skills: vec!["demo".to_string()],
+                paths: vec!["./scripts/run.sh".to_string(), "~/bin/x".to_string()],
+            }),
+        }
     }
 
     /// A defanged stand-in: the shape of a key, never a real one.
@@ -1979,30 +2024,43 @@ mod tests {
         assert_eq!(Message::from_value(&implausible), None);
     }
 
-    /// ADR 0008: no request takes a path except revealing a Receipt and the
-    /// Folder Scan. A path on any other request makes the message one the
-    /// daemon does not understand, so it is never read and never ignored
-    /// silently.
+    /// ADR 0008: no request takes a path except revealing a Receipt, the
+    /// Folder Scan and the Gate. A path on any other request, in any of the
+    /// fields a path travels in, makes the message one the daemon does not
+    /// understand, so it is never read and never ignored silently.
     #[test]
-    fn no_request_but_reveal_receipt_and_the_folder_scan_accepts_a_path() {
+    fn no_request_but_reveal_receipt_the_folder_scan_and_the_gate_accepts_a_path() {
         let taking: Vec<&str> = Request::NAMES
             .into_iter()
             .filter(|name| Request::takes_a_path(name))
             .collect();
-        assert_eq!(taking, vec!["reveal-receipt", "folder-scan"]);
+        assert_eq!(taking, vec!["reveal-receipt", "folder-scan", "gate"]);
 
         for name in Request::NAMES {
-            let value = serde_json::json!({
-                "type": "request",
-                "id": "1",
-                "request": name,
-                "target": "claude-code/user/skill/x",
-                "path": "/etc",
-            });
-            let read = Message::from_value(&value);
-            match Request::takes_a_path(name) {
-                true => assert!(read.is_some(), "{name}"),
-                false => assert_eq!(read, None, "{name} took a path"),
+            for field in Request::PATH_FIELDS {
+                let mut value = serde_json::json!({
+                    "type": "request",
+                    "id": "1",
+                    "request": name,
+                    "target": "claude-code/user/skill/x",
+                    "agent": "claude-code",
+                    "event": "UserPromptSubmit",
+                });
+                value[field] = match field {
+                    "tool" => serde_json::json!({"paths": ["/etc/passwd"]}),
+                    _ => Value::from("/etc"),
+                };
+                // What each request that takes a path needs beside it.
+                match name {
+                    "gate" => value["cwd"] = Value::from("/etc"),
+                    "folder-scan" => value["path"] = Value::from("/etc"),
+                    _ => {}
+                }
+                let read = Message::from_value(&value);
+                match Request::takes_a_path(name) {
+                    true => assert!(read.is_some(), "{name} with {field}"),
+                    false => assert_eq!(read, None, "{name} took a path in {field}"),
+                }
             }
         }
         // Every request that addresses something addresses an id, and a
@@ -2295,5 +2353,54 @@ mod tests {
     fn a_request_outside_the_vocabulary_is_not_a_message() {
         let value = serde_json::json!({"type": "request", "id": "1", "request": "read-file"});
         assert_eq!(Message::from_value(&value), None);
+    }
+
+    /// A `gate` request round trips with every field, and one that names an
+    /// Agent or an event there is not, or lacks its `cwd`, is not a message.
+    #[test]
+    fn a_gate_request_round_trips_and_a_malformed_one_is_not_read() {
+        let message = Message::Request {
+            id: "7".to_string(),
+            request: Request::Gate(a_gate_request()),
+        };
+        let wire = message.to_value();
+        assert_eq!(wire["cwd"], "/Users/someone/src/demo");
+        assert_eq!(wire["tool"]["mcp_server"]["source"], "user");
+        assert_eq!(Message::from_value(&wire), Some(message));
+
+        let good = serde_json::json!({
+            "type": "request", "id": "1", "request": "gate",
+            "agent": "codex", "event": "PreToolUse", "cwd": "/w",
+            "tool": {"mcp_server": {"name": "tracker"}},
+        });
+        let Some(Message::Request {
+            request: Request::Gate(read),
+            ..
+        }) = Message::from_value(&good)
+        else {
+            panic!("a gate request");
+        };
+        let server = read.tool.expect("a tool").mcp_server.expect("a server");
+        assert_eq!(server.name, "tracker");
+        assert_eq!(
+            server.source, None,
+            "the name alone when no source is given"
+        );
+
+        for (field, wrong) in [
+            ("agent", Value::from("cursor")),
+            ("event", Value::from("SessionStart")),
+            ("cwd", Value::Null),
+            ("tool", serde_json::json!({"paths": "not-a-list"})),
+        ] {
+            let mut bad = good.clone();
+            match wrong {
+                Value::Null => {
+                    bad.as_object_mut().expect("an object").remove(field);
+                }
+                wrong => bad[field] = wrong,
+            }
+            assert_eq!(Message::from_value(&bad), None, "{field}");
+        }
     }
 }

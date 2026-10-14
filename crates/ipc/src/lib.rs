@@ -18,6 +18,7 @@
 pub mod client;
 pub mod engine;
 pub mod frame;
+pub mod gate;
 pub mod integrity;
 pub mod peer;
 pub mod protocol;
@@ -30,9 +31,10 @@ pub use integrity::{ChainRecords, IntegrityAnswer, RECORDS_PAGE, RecordLine};
 pub use peer::{Nobody, Peer, PeerCheck, SameUser};
 pub use protocol::{
     ActionReport, AgentSessions, DO_NOT_OPEN_YET, EngineChange, EngineState, FolderFinding,
-    FolderScanResult, Hello, Message, NOTHING_RECORDED, Offer, RESTART_AGENTSWEEP, Refusal,
-    Request, RequestError, RevealedReceipt, Role, SAFE_TO_OPEN, Sessions, SettingsChange,
-    SettingsState, StateEvent, Status, check_version, offers, welcome,
+    FolderScanResult, GateEvent, GateReason, GateRequest, GateTool, GateVerdict, Hello,
+    McpServerRef, Message, NOTHING_RECORDED, Offer, RESTART_AGENTSWEEP, Refusal, Request,
+    RequestError, RevealedReceipt, Role, SAFE_TO_OPEN, Sessions, SettingsChange, SettingsState,
+    StateEvent, Status, check_version, offers, welcome,
 };
 pub use socket::{Connection, SOCKET_NAME, SocketListener, connect, default_socket_path};
 

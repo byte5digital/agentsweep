@@ -1006,6 +1006,8 @@ impl Daemon {
             recorded.receipt_id.clear();
             recorded.fixed_version.clear();
             recorded.switched = false;
+            recorded.facts.actor = None;
+            recorded.facts.rule_withdrawn = false;
             gone.push(recorded.id.clone());
             true
         });

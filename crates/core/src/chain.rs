@@ -18,6 +18,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::envelope::{ChainId, Envelope, EnvelopeError, GENESIS, RecordKind};
+use crate::integrity::IntegrityRecord;
 use crate::item::sha256_hex;
 use crate::keychain::{KeyError, KeySource};
 
@@ -119,8 +120,22 @@ pub struct Verification {
     /// What verification found.
     pub state: ChainState,
     /// The last verifiable prefix: every record up to the break, or all of
-    /// them when there is none.
+    /// them when there is none. A break the user answered is not a break here:
+    /// the records before it and the records from the answer on are in, the
+    /// ones between are in [`Verification::set_aside`].
     pub records: Vec<Record>,
+    /// The records between a break the user answered and the answer, readable
+    /// and never verified: the chain cannot vouch for them, so no derived view
+    /// reads them (spec section 8.6, "Scan again, trusting nothing").
+    pub set_aside: Vec<Record>,
+    /// Every record from an unanswered break on, the record at the break
+    /// first, each marked verified when its own MAC verifies under the key in
+    /// hand. What "Show what changed" lists. A line that does not read as a
+    /// record at all is missing here. Empty while the chain is not broken.
+    pub beyond: Vec<Record>,
+    /// The SHA-256 of the line at an unanswered break, which the answer to it
+    /// names. Absent while the chain is not broken.
+    pub broken_line: Option<String>,
     /// The hash of the last line in the file, whatever its state, which is
     /// what a new record links to. [`GENESIS`] for an empty file.
     pub head: String,
@@ -230,46 +245,103 @@ impl Chain {
             .last()
             .map_or_else(|| GENESIS.to_string(), |line| sha256_hex(line));
 
-        // First the links, which need no key: shape, position, and each
-        // record pointing at the one before it.
         let mut records: Vec<Record> = Vec::with_capacity(lines.len());
+        let mut set_aside: Vec<Record> = Vec::new();
+        // The records read past a structural break, kept in case an answer
+        // further on sets them aside.
+        let mut stranded: Vec<Record> = Vec::new();
         let mut structural: Option<(u64, BreakReason)> = None;
         let mut previous = GENESIS.to_string();
         let mut epoch = 0u64;
+        // The earliest sequence an answer may reach back to: never over an
+        // answer before it.
+        let mut floor = 0u64;
 
         for (index, line) in lines.iter().enumerate() {
             let sequence = index as u64;
-            if index + 1 == lines.len() && !terminated {
-                structural = Some((sequence, BreakReason::Truncated));
-                break;
+            let truncated = index + 1 == lines.len() && !terminated;
+            let parsed = match truncated {
+                true => Err(EnvelopeError::Malformed(String::new())),
+                false => Envelope::parse(line),
+            };
+
+            // An answer to a break picks the chain up again from itself.
+            if let Ok(envelope) = &parsed
+                && let Some(reach) = self.answers(
+                    envelope,
+                    &lines,
+                    index,
+                    floor,
+                    epoch,
+                    structural.as_ref().map(|(at, _)| *at),
+                )
+            {
+                let from = records
+                    .iter()
+                    .position(|record| record.envelope.sequence >= reach)
+                    .unwrap_or(records.len());
+                set_aside.extend(records.split_off(from));
+                set_aside.append(&mut stranded);
+                structural = None;
+                previous = sha256_hex(line);
+                epoch = envelope.epoch;
+                floor = sequence;
+                records.push(Record {
+                    envelope: envelope.clone(),
+                    hash: previous.clone(),
+                    verified: false,
+                });
+                continue;
             }
-            let envelope = match Envelope::parse(line) {
+
+            if structural.is_some() {
+                if let Ok(envelope) = parsed {
+                    stranded.push(Record {
+                        envelope,
+                        hash: sha256_hex(line),
+                        verified: false,
+                    });
+                }
+                continue;
+            }
+
+            let envelope = match parsed {
                 Ok(envelope) => envelope,
+                Err(_) if truncated => {
+                    structural = Some((sequence, BreakReason::Truncated));
+                    continue;
+                }
                 Err(EnvelopeError::NotCanonical) => {
                     let detail = "not the form AgentSweep writes".to_string();
                     structural = Some((sequence, BreakReason::Malformed(detail)));
-                    break;
+                    continue;
                 }
                 Err(EnvelopeError::Malformed(detail)) => {
                     structural = Some((sequence, BreakReason::Malformed(detail)));
-                    break;
+                    continue;
                 }
             };
-            if envelope.chain != self.id || envelope.sequence != sequence {
-                structural = Some((sequence, BreakReason::OutOfOrder));
-                break;
-            }
-            if envelope.previous != previous {
-                structural = Some((sequence, BreakReason::LinkBroken));
-                break;
-            }
             let expected_epoch = match envelope.record {
                 RecordKind::ChainRestart if index > 0 => epoch + 1,
                 _ => epoch,
             };
-            if envelope.epoch != expected_epoch {
-                structural = Some((sequence, BreakReason::EpochOutOfOrder));
-                break;
+            let reason = if envelope.chain != self.id || envelope.sequence != sequence {
+                Some(BreakReason::OutOfOrder)
+            } else if envelope.previous != previous {
+                Some(BreakReason::LinkBroken)
+            } else if envelope.epoch != expected_epoch {
+                Some(BreakReason::EpochOutOfOrder)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                structural = Some((sequence, reason));
+                stranded.push(Record {
+                    envelope,
+                    hash: sha256_hex(line),
+                    verified: false,
+                });
+                continue;
             }
             epoch = envelope.epoch;
             previous = sha256_hex(line);
@@ -280,12 +352,10 @@ impl Chain {
             });
         }
 
-        // Then the MACs, which need the key. A record of an earlier key
-        // generation stays readable and unverified.
         let mut state = ChainState::Intact;
         let mut mac_break: Option<(u64, BreakReason)> = None;
         match key {
-            None if records.is_empty() && structural.is_none() => {}
+            None if records.is_empty() && set_aside.is_empty() && structural.is_none() => {}
             None => state = ChainState::KeyMissing,
             Some(key) => {
                 let current = records.last().map_or(0, |record| record.envelope.epoch);
@@ -302,28 +372,91 @@ impl Chain {
             }
         }
 
-        // The earliest failure is the one to report: it is where the chain
-        // stops being trustworthy, and everything before it is the prefix the
-        // Baseline and the derived views may still be read from.
         let earliest = match (structural, mac_break) {
             (Some(one), Some(other)) if other.0 < one.0 => Some(other),
             (Some(one), _) => Some(one),
             (None, other) => other,
         };
+        let mut beyond = Vec::new();
+        let mut broken_line = None;
         if let Some((sequence, reason)) = earliest {
-            records.truncate(sequence as usize);
+            records.retain(|record| record.envelope.sequence < sequence);
+            set_aside.retain(|record| record.envelope.sequence < sequence);
+            for (index, line) in lines.iter().enumerate().skip(sequence as usize) {
+                if index + 1 == lines.len() && !terminated {
+                    continue;
+                }
+                if let Ok(envelope) = Envelope::parse(line) {
+                    let verified = key.is_some_and(|key| envelope.mac_matches(key));
+                    beyond.push(Record {
+                        envelope,
+                        hash: sha256_hex(line),
+                        verified,
+                    });
+                }
+            }
+            broken_line = lines.get(sequence as usize).map(|line| sha256_hex(line));
             state = ChainState::Broken { sequence, reason };
+        }
+        for record in &mut set_aside {
+            record.verified = false;
         }
 
         Verification {
             chain: self.id,
             state,
             records,
+            set_aside,
+            beyond,
+            broken_line,
             head,
             epoch,
             next_sequence: lines.len() as u64,
             terminated,
         }
+    }
+
+    /// The sequence an answer to a break reaches back to, when this record is
+    /// one: an `integrity` record of this chain at its own place, linked to
+    /// the line before it, in the key generation in force there, that names a
+    /// break at or after `floor` and before itself, no later than a structural
+    /// break found on the way, and the line that is there now.
+    ///
+    /// Its MAC is checked with every other record of its generation once the
+    /// whole chain is read, so an answer nobody with the key wrote breaks the
+    /// chain where it stands.
+    fn answers(
+        &self,
+        envelope: &Envelope,
+        lines: &[&[u8]],
+        index: usize,
+        floor: u64,
+        epoch: u64,
+        structural: Option<u64>,
+    ) -> Option<u64> {
+        if envelope.record != RecordKind::Integrity
+            || envelope.chain != self.id
+            || envelope.sequence != index as u64
+            || index == 0
+            || envelope.epoch != epoch
+            || envelope.previous != sha256_hex(lines[index - 1])
+        {
+            return None;
+        }
+        let IntegrityRecord::ChainBroken {
+            chain,
+            sequence,
+            broken,
+        } = IntegrityRecord::from_payload(&envelope.payload)?
+        else {
+            return None;
+        };
+        let reaches = chain == self.id
+            && sequence >= floor
+            && sequence < envelope.sequence
+            && structural.is_none_or(|at| sequence <= at)
+            && sha256_hex(lines[sequence as usize]) == broken;
+        reaches.then_some(sequence)
     }
 }
 
@@ -379,6 +512,22 @@ mod writer {
             keys: &dyn KeySource,
         ) -> Result<(ChainWriter, ChainState), ChainError> {
             let verification = chain.verify(keys)?;
+            ChainWriter::open_verified(chain, verification, keys)
+        }
+
+        /// Opens the chain for appending after a verification made before.
+        ///
+        /// Both chains share the one key, and opening the first after the key
+        /// went missing generates the new one. The second, verified only then,
+        /// would read its old records against the new key as tampered rather
+        /// than as unverifiable. Verifying both before opening either keeps
+        /// "protection state was reset" what it is on both chains (spec
+        /// section 5.5). Nothing may be appended in between.
+        pub fn open_verified(
+            chain: Chain,
+            verification: Verification,
+            keys: &dyn KeySource,
+        ) -> Result<(ChainWriter, ChainState), ChainError> {
             if let Some(parent) = chain.path().parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -1082,5 +1231,164 @@ mod tests {
         let refused = ChainWriter::compact(chain.clone(), &keys, &[]);
         assert!(matches!(refused, Err(ChainError::Refused(_))));
         assert_eq!(std::fs::read(chain.path()).expect("a chain"), before);
+    }
+
+    /// Appends four records and edits the second, which breaks the chain at
+    /// sequence 1 by its MAC and at sequence 2 by its link.
+    fn an_edited_chain(directory: &TempDir, keys: &MemoryKeySource) -> Chain {
+        let chain = chain_in(directory);
+        appended(&chain, keys, &["quarantine", "trust", "restore", "untrust"]);
+        let text = std::fs::read_to_string(chain.path()).expect("a readable chain");
+        let edited = text.replacen(r#""action":"trust""#, r#""action":"trusd""#, 1);
+        assert_ne!(edited, text);
+        std::fs::write(chain.path(), &edited).expect("a writable chain");
+        chain
+    }
+
+    fn answer(verification: &Verification) -> serde_json::Value {
+        let ChainState::Broken { sequence, .. } = verification.state else {
+            panic!("a broken chain: {:?}", verification.state);
+        };
+        IntegrityRecord::ChainBroken {
+            chain: verification.chain,
+            sequence,
+            broken: verification.broken_line.clone().expect("the broken line"),
+        }
+        .to_payload()
+    }
+
+    fn sequences(records: &[Record]) -> Vec<u64> {
+        records
+            .iter()
+            .map(|record| record.envelope.sequence)
+            .collect()
+    }
+
+    #[test]
+    fn a_broken_chain_lists_every_record_from_the_break_with_its_own_mac() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let keys = MemoryKeySource::empty();
+        let chain = an_edited_chain(&directory, &keys);
+
+        let verification = chain.verify(&keys).expect("a readable chain");
+        assert!(matches!(
+            verification.state,
+            ChainState::Broken { sequence: 1, .. }
+        ));
+        assert_eq!(sequences(&verification.records), vec![0]);
+        assert_eq!(sequences(&verification.beyond), vec![1, 2, 3]);
+        let flags: Vec<bool> = verification.beyond.iter().map(|r| r.verified).collect();
+        assert_eq!(flags, vec![false, true, true], "only the edited record");
+        assert!(verification.set_aside.is_empty());
+        let lines = std::fs::read(chain.path()).expect("a readable chain");
+        let second = lines.split(|byte| *byte == b'\n').nth(1).expect("a line");
+        assert_eq!(verification.broken_line, Some(sha256_hex(second)));
+    }
+
+    /// "Scan again, trusting nothing": the answer picks the chain up again, so
+    /// what is written after it counts, and what was written between the break
+    /// and the answer is set aside, readable and never verified.
+    #[test]
+    fn an_answered_break_picks_the_chain_up_again_and_sets_the_records_since_aside() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let keys = MemoryKeySource::empty();
+        let chain = an_edited_chain(&directory, &keys);
+        let broken = chain.verify(&keys).expect("a readable chain");
+
+        let (mut writer, state) = ChainWriter::open(chain.clone(), &keys).expect("an open chain");
+        assert!(state.freezes_automatic_quarantine());
+        writer
+            .append_beside(RecordKind::Integrity, answer(&broken))
+            .expect("the answer");
+        writer
+            .append(json!({ "action": "quarantine" }))
+            .expect("a record after the answer");
+
+        let verification = chain.verify(&keys).expect("a readable chain");
+        assert_eq!(verification.state, ChainState::Intact);
+        assert!(!verification.state.freezes_automatic_quarantine());
+        assert_eq!(sequences(&verification.records), vec![0, 4, 5]);
+        assert!(verification.records.iter().all(|record| record.verified));
+        assert_eq!(sequences(&verification.set_aside), vec![1, 2, 3]);
+        assert!(verification.set_aside.iter().all(|record| !record.verified));
+        assert!(verification.beyond.is_empty());
+        assert_eq!(verification.broken_line, None);
+    }
+
+    #[test]
+    fn an_answer_nobody_with_the_key_wrote_leaves_the_chain_broken() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let keys = MemoryKeySource::empty();
+        let chain = an_edited_chain(&directory, &keys);
+        let broken = chain.verify(&keys).expect("a readable chain");
+
+        let forger = MemoryKeySource::empty();
+        let (mut writer, _) = ChainWriter::open(chain.clone(), &forger).expect("an open chain");
+        writer
+            .append_beside(RecordKind::Integrity, answer(&broken))
+            .expect("a forged answer");
+
+        let verification = chain.verify(&keys).expect("a readable chain");
+        assert!(verification.state.freezes_automatic_quarantine());
+        assert_eq!(sequences(&verification.records), vec![0]);
+
+        // The answer the key in hand writes afterwards still picks it up.
+        let again = chain.verify(&keys).expect("a readable chain");
+        let (mut writer, _) = ChainWriter::open(chain.clone(), &keys).expect("an open chain");
+        writer
+            .append_beside(RecordKind::Integrity, answer(&again))
+            .expect("the answer");
+        let verification = chain.verify(&keys).expect("a readable chain");
+        assert_eq!(verification.state, ChainState::Intact);
+        assert_eq!(sequences(&verification.records), vec![0, 5]);
+    }
+
+    #[test]
+    fn an_answer_to_another_line_than_the_one_there_now_is_no_answer() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let keys = MemoryKeySource::empty();
+        let chain = an_edited_chain(&directory, &keys);
+        let ChainState::Broken { sequence, .. } = chain.verify(&keys).expect("a chain").state
+        else {
+            panic!("a broken chain");
+        };
+
+        let (mut writer, _) = ChainWriter::open(chain.clone(), &keys).expect("an open chain");
+        let stale = IntegrityRecord::ChainBroken {
+            chain: ChainId::Events,
+            sequence,
+            broken: GENESIS.to_string(),
+        };
+        writer
+            .append_beside(RecordKind::Integrity, stale.to_payload())
+            .expect("an answer naming another line");
+        let verification = chain.verify(&keys).expect("a readable chain");
+        assert!(matches!(
+            verification.state,
+            ChainState::Broken { sequence: 1, .. }
+        ));
+    }
+
+    /// A break of the last record is found by its MAC alone; the answer that
+    /// follows it links to it like any record and still sets it aside.
+    #[test]
+    fn an_answer_to_an_edited_last_record_sets_it_aside() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let chain = chain_in(&directory);
+        let keys = MemoryKeySource::empty();
+        appended(&chain, &keys, &["quarantine", "trust"]);
+        let text = std::fs::read_to_string(chain.path()).expect("a readable chain");
+        let edited = text.replacen(r#""action":"trust""#, r#""action":"trusd""#, 1);
+        std::fs::write(chain.path(), &edited).expect("a writable chain");
+        let broken = chain.verify(&keys).expect("a readable chain");
+
+        let (mut writer, _) = ChainWriter::open(chain.clone(), &keys).expect("an open chain");
+        writer
+            .append_beside(RecordKind::Integrity, answer(&broken))
+            .expect("the answer");
+        let verification = chain.verify(&keys).expect("a readable chain");
+        assert_eq!(verification.state, ChainState::Intact);
+        assert_eq!(sequences(&verification.records), vec![0, 2]);
+        assert_eq!(sequences(&verification.set_aside), vec![1]);
     }
 }

@@ -71,6 +71,14 @@ pub enum RecordKind {
     /// Probation. It is not an action on an Item, so it sits beside the
     /// entries rather than among them, and the derived views pass it by.
     RulePack,
+    /// The user's answer to one of the two integrity states, on the Event Log
+    /// (spec sections 5.5 and 8.6): "Start a fresh record" after the key went
+    /// missing, or "Scan again, trusting nothing" after a chain broke. The
+    /// second is also written into the broken chain itself, where it names the
+    /// break and verification picks the chain up again from it. Like a Rule
+    /// Pack change it is not an action on an Item, and the derived views pass
+    /// it by.
+    Integrity,
 }
 
 impl RecordKind {
@@ -80,6 +88,7 @@ impl RecordKind {
             RecordKind::Entry => "entry",
             RecordKind::ChainRestart => "chain-restart",
             RecordKind::RulePack => "rule-pack",
+            RecordKind::Integrity => "integrity",
         }
     }
 
@@ -89,6 +98,7 @@ impl RecordKind {
             "entry" => Some(RecordKind::Entry),
             "chain-restart" => Some(RecordKind::ChainRestart),
             "rule-pack" => Some(RecordKind::RulePack),
+            "integrity" => Some(RecordKind::Integrity),
             _ => None,
         }
     }
@@ -634,6 +644,7 @@ mod tests {
             RecordKind::Entry,
             RecordKind::ChainRestart,
             RecordKind::RulePack,
+            RecordKind::Integrity,
         ] {
             assert_eq!(RecordKind::parse(record.as_str()), Some(record));
         }

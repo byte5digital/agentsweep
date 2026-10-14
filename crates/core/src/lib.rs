@@ -45,6 +45,7 @@ pub mod health;
 pub mod heuristics;
 pub mod hits;
 pub mod host;
+pub mod integrity;
 pub mod item;
 pub mod judgement_request;
 pub mod keychain;

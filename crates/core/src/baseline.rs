@@ -846,6 +846,10 @@ impl Baseline {
                 }
                 continue;
             }
+            // The answer to a break is the chain's own, not an Item's.
+            if record.envelope.record == RecordKind::Integrity {
+                continue;
+            }
             match BaselineEntry::from_payload(&record.envelope.payload) {
                 Some(BaselineEntry::Item(mut held)) => {
                     if key_missing || !record.verified {
@@ -1109,8 +1113,9 @@ mod writer {
 
     use crate::chain::{ChainError, ChainState, ChainWriter, Compacted};
     use crate::coverage::CoverageRecord;
-    use crate::envelope::{Envelope, Timestamp};
+    use crate::envelope::{Envelope, RecordKind, Timestamp};
     use crate::eventlog::{Action, Actor, Event, EventLog, EventLogWriter};
+    use crate::integrity::IntegrityRecord;
     use crate::keychain::KeySource;
     use crate::paths::DataDirectory;
 
@@ -1136,6 +1141,19 @@ mod writer {
             Ok((BaselineWriter { writer }, state))
         }
 
+        /// Opens the Baseline for appending after a verification made before,
+        /// so both chains are verified before a missing key is renewed for
+        /// either (see [`ChainWriter::open_verified`]).
+        pub fn open_verified(
+            baseline: &Baseline,
+            verification: crate::chain::Verification,
+            keys: &dyn KeySource,
+        ) -> Result<(BaselineWriter, ChainState), ChainError> {
+            let (writer, state) =
+                ChainWriter::open_verified(baseline.chain().clone(), verification, keys)?;
+            Ok((BaselineWriter { writer }, state))
+        }
+
         /// Appends one record and flushes it to the disk.
         pub fn append(&mut self, entry: &BaselineEntry) -> Result<Envelope, ChainError> {
             self.writer.append(entry.to_payload())
@@ -1150,6 +1168,17 @@ mod writer {
         /// enumerates a newly registered root or a newly detected Agent.
         pub fn cover(&mut self, record: &CoverageRecord) -> Result<Envelope, ChainError> {
             self.append(&BaselineEntry::Coverage(record.clone()))
+        }
+
+        /// Appends the answer to a broken Baseline, which verification picks
+        /// the chain up again from (spec section 8.6). The Event Log carries
+        /// the same answer, so it is on record where every answer is.
+        pub fn record_integrity(
+            &mut self,
+            answer: &IntegrityRecord,
+        ) -> Result<Envelope, ChainError> {
+            self.writer
+                .append_beside(RecordKind::Integrity, answer.to_payload())
         }
 
         /// The hash a record appended now would link to.

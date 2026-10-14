@@ -26,6 +26,7 @@ use serde_json::{Map, Value};
 use crate::chain::{Chain, ChainError, ChainState};
 use crate::envelope::{ChainId, RecordKind, Timestamp};
 use crate::finding::{FindingId, RuleStatus, Tier};
+use crate::integrity::IntegrityRecord;
 use crate::item::{ItemId, Kind, sha256_hex};
 use crate::keychain::KeySource;
 use crate::packs::PackOrigin;
@@ -880,6 +881,7 @@ impl EventLog {
         let verification = self.chain.verify(keys)?;
         let mut events = Vec::with_capacity(verification.records.len());
         let mut rule_packs = Vec::new();
+        let mut integrity = Vec::new();
         let mut restarts = 0usize;
         let mut unreadable = 0usize;
         for record in &verification.records {
@@ -896,6 +898,18 @@ impl EventLog {
                             recorded_at: record.envelope.recorded_at,
                             verified: record.verified,
                             record: change,
+                        }),
+                        None => unreadable += 1,
+                    }
+                    continue;
+                }
+                RecordKind::Integrity => {
+                    match IntegrityRecord::from_payload(&record.envelope.payload) {
+                        Some(answer) => integrity.push(RecordedIntegrity {
+                            sequence: record.envelope.sequence,
+                            recorded_at: record.envelope.recorded_at,
+                            verified: record.verified,
+                            record: answer,
                         }),
                         None => unreadable += 1,
                     }
@@ -919,10 +933,24 @@ impl EventLog {
             unverified: verification.records.iter().filter(|r| !r.verified).count(),
             events,
             rule_packs,
+            integrity,
             restarts,
             unreadable,
         })
     }
+}
+
+/// One answer to an integrity state as the Event Log holds it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordedIntegrity {
+    /// The record's position in the chain.
+    pub sequence: u64,
+    /// When it was written.
+    pub recorded_at: Timestamp,
+    /// Whether the key in hand verifies it.
+    pub verified: bool,
+    /// Which acknowledgement it is.
+    pub record: IntegrityRecord,
 }
 
 /// The whole Event Log as one read left it.
@@ -935,6 +963,9 @@ pub struct EventLogView {
     /// Every change of the Rule Pack in force, in the order written. The
     /// derived views never see these: they are not actions on an Item.
     pub rule_packs: Vec<RecordedRulePack>,
+    /// Every answer to an integrity state, in the order written. The derived
+    /// views never see these either.
+    pub integrity: Vec<RecordedIntegrity>,
     /// The hash of the last record in the file.
     pub head: String,
     /// How many records no key in hand can verify.
@@ -979,8 +1010,9 @@ pub use writer::EventLogWriter;
 #[cfg(feature = "daemon")]
 mod writer {
     use super::{Event, EventLog, RulePackRecord};
+    use crate::integrity::IntegrityRecord;
 
-    use crate::chain::{ChainError, ChainState, ChainWriter};
+    use crate::chain::{ChainError, ChainState, ChainWriter, Verification};
     use crate::envelope::{Envelope, RecordKind};
     use crate::keychain::KeySource;
 
@@ -1004,6 +1036,19 @@ mod writer {
             Ok((EventLogWriter { writer }, state))
         }
 
+        /// Opens the log for appending after a verification made before, so
+        /// both chains are verified before a missing key is renewed for
+        /// either (see [`ChainWriter::open_verified`]).
+        pub fn open_verified(
+            log: &EventLog,
+            verification: Verification,
+            keys: &dyn KeySource,
+        ) -> Result<(EventLogWriter, ChainState), ChainError> {
+            let (writer, state) =
+                ChainWriter::open_verified(log.chain().clone(), verification, keys)?;
+            Ok((EventLogWriter { writer }, state))
+        }
+
         /// Appends one event and flushes it to the disk.
         pub fn append(&mut self, event: &Event) -> Result<Envelope, ChainError> {
             self.writer.append(event.to_payload())
@@ -1017,6 +1062,18 @@ mod writer {
         ) -> Result<Envelope, ChainError> {
             self.writer
                 .append_beside(RecordKind::RulePack, change.to_payload())
+        }
+
+        /// Appends one answer to an integrity state, as an `integrity` record
+        /// beside the events, and flushes it to the disk. The answer to a
+        /// broken Event Log is the record verification picks the chain up
+        /// again from.
+        pub fn record_integrity(
+            &mut self,
+            answer: &IntegrityRecord,
+        ) -> Result<Envelope, ChainError> {
+            self.writer
+                .append_beside(RecordKind::Integrity, answer.to_payload())
         }
 
         /// The hash a record appended now would link to.

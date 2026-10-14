@@ -33,3 +33,6 @@ corpus/benign/cache/
 # sidecars build-sidecars.sh copies in. Neither is ever committed.
 apps/menubar/gen/
 apps/menubar/binaries/
+
+# The Apple judgement helper built by a plain `swift build` in its package
+apps/apple-judge/.build/

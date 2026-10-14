@@ -293,6 +293,7 @@ mod crates_io {
             "status",
             "quarantine",
             "rule-feed",
+            "gate",
             "--developer-list-items",
         ] {
             let output = run(&this_build(), &[command]);
@@ -359,6 +360,15 @@ mod bundle {
 
         let status = run(&crates_io, &["status"]);
         assert_eq!(status.status.code(), Some(2));
+
+        // The Gate is the in-bundle build's alone: here `gate` is not a
+        // command, and the help text says what this build is instead.
+        let gate = run(&crates_io, &["gate", "--agent", "claude-code"]);
+        let said = text(&gate.stderr);
+        assert_eq!(gate.status.code(), Some(2), "{said}");
+        assert!(said.contains("`gate` is not a command"), "{said}");
+        assert!(said.contains("cannot show status"), "{said}");
+        assert!(gate.stdout.is_empty());
     }
 
     /// No daemon answers at a socket nobody listens on: Protection off, exit
@@ -535,5 +545,82 @@ mod bundle {
         assert_eq!(output.status.code(), Some(0), "{printed}");
         assert!(printed.contains("Last full Scan (scan-now)"), "{printed}");
         assert!(printed.ends_with("Nothing is open.\n"), "{printed}");
+    }
+
+    /// Runs the Gate as an Agent runs it, the event on stdin, under a home
+    /// and in a working directory of the test's own.
+    fn gate(daemon: &Daemon, agent: &str, event: &str, home: &Path) -> Output {
+        use std::io::Write as _;
+
+        let mut child = Command::new(this_build())
+            .args(["gate", "--agent", agent, "--socket", &daemon.socket()])
+            .current_dir(home)
+            .env("HOME", home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the CLI starts");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(event.as_bytes())
+            .expect("the event is written");
+        child.wait_with_output().expect("the CLI ran")
+    }
+
+    /// The Gate against a real daemon on a temporary home with a planted
+    /// skill that stays flagged: a `Skill` call naming it, a shell command
+    /// with a path into its tree, and a bare name joined to a `cwd` inside its
+    /// tree are denied with the per-call sentence; a bare name with `cwd`
+    /// elsewhere, another skill and a turn outside every project are let
+    /// through silently. The Gate writes nothing under the home it runs with.
+    #[test]
+    fn the_gate_denies_a_call_that_names_a_flagged_skill_against_a_real_daemon() {
+        let daemon = Daemon::over(home_with_a_planted_skill());
+        let skill = daemon._root.path().join("home/.claude/skills/setup");
+        let caller = Temporary::new("gate-caller");
+        let before = listing(caller.path());
+        let call = |cwd: &Path, tool: &str, input: &str| {
+            format!(
+                "{{\"hook_event_name\":\"PreToolUse\",\"cwd\":{:?},\"tool_name\":\"{tool}\",\
+                 \"tool_input\":{input}}}",
+                cwd.to_string_lossy()
+            )
+        };
+        let deny = "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\
+                    \"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"AgentSweep \
+                    blocked this step: the skill, tool or script it uses is flagged and waits \
+                    for the user's decision. Do not retry or work around it. Tell the user to \
+                    open AgentSweep.\"}}\n";
+
+        for event in [
+            call(caller.path(), "Skill", r#"{"skill":"setup"}"#),
+            call(
+                caller.path(),
+                "Bash",
+                r#"{"command":"bash ~/.claude/skills/setup/scripts/install.sh --quiet"}"#,
+            ),
+            call(&skill, "Bash", r#"{"command":"cat SKILL.md"}"#),
+        ] {
+            let output = gate(&daemon, "claude-code", &event, caller.path());
+            assert_eq!(output.status.code(), Some(0), "{event}");
+            assert_eq!(text(&output.stdout), deny, "{event}");
+        }
+
+        for event in [
+            call(caller.path(), "Bash", r#"{"command":"cat SKILL.md"}"#),
+            call(caller.path(), "Skill", r#"{"skill":"another"}"#),
+            format!(
+                "{{\"hook_event_name\":\"UserPromptSubmit\",\"cwd\":{:?},\"prompt\":\"hello\"}}",
+                caller.path().to_string_lossy()
+            ),
+        ] {
+            let output = gate(&daemon, "claude-code", &event, caller.path());
+            assert_eq!(output.status.code(), Some(0), "{event}");
+            assert_eq!(text(&output.stdout), "", "{event}");
+        }
+        assert_eq!(listing(caller.path()), before, "the Gate wrote");
     }
 }

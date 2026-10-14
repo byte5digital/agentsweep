@@ -1,7 +1,12 @@
-// The Findings window. It renders the list and the Folder Scan the app hands
-// over and invokes the app's commands; every decision about what is listed
-// and what is offered was made by the daemon and the app. Everything is
-// written with textContent, never as markup. Placeholder wording throughout.
+// The Findings window. It renders the frame the app hands over (the sidebar
+// with its counts, one pane per entry, the open Findings in the two Finding
+// panes as a list beside the selected Finding) and the Folder Scan, and
+// invokes the app's commands; every decision about what is listed, counted
+// and offered was made by the daemon and the app. Which pane and which
+// Finding are selected is the window's own. Everything is written with
+// textContent, never as markup. Placeholder wording throughout.
+
+import { takePosture } from "./posture.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -151,7 +156,80 @@ function renderCard(card) {
   return node;
 }
 
+// The two panes that list Findings: a list beside the selected Finding.
+const FINDING_PANES = ["threats", "exposures"];
+
+// The view the app sent last, rendered again when the selection moves.
+let view = null;
+// The pane in sight, and the Finding selected in each Finding pane.
+let selectedPane = "overview";
+const selectedFinding = { threats: null, exposures: null };
+
+function pane(id) {
+  return document.querySelector(`.pane[data-pane="${id}"]`);
+}
+
+function select(id) {
+  selectedPane = id;
+  if (view) {
+    render(view);
+  }
+}
+
+function renderSidebar(entries) {
+  const buttons = entries.map((entry) => {
+    const button = el("button", "entry");
+    button.type = "button";
+    button.dataset.pane = entry.pane;
+    button.append(el("span", "label", entry.label));
+    if (entry.count !== null) {
+      button.append(el("span", "count", String(entry.count)));
+    }
+    if (entry.pane === selectedPane) {
+      button.setAttribute("aria-current", "page");
+    }
+    button.addEventListener("click", () => select(entry.pane));
+    return button;
+  });
+  $("sidebar").replaceChildren(...buttons);
+  for (const entry of entries) {
+    pane(entry.pane).querySelector(".pane-title").textContent = entry.label;
+    pane(entry.pane).hidden = entry.pane !== selectedPane;
+  }
+}
+
+function renderRow(id, card) {
+  const row = el("button", "row");
+  row.type = "button";
+  row.setAttribute("role", "listitem");
+  row.dataset.category = card.category;
+  row.append(el("span", "title", `${card.kind} · ${card.name}`));
+  row.append(el("span", "chip", card.severity));
+  if (card.id === selectedFinding[id]) {
+    row.setAttribute("aria-current", "true");
+  }
+  row.addEventListener("click", () => {
+    selectedFinding[id] = card.id;
+    render(view);
+  });
+  return row;
+}
+
+function renderFindingPane(id, cards, loaded) {
+  const node = pane(id);
+  if (!cards.some((card) => card.id === selectedFinding[id])) {
+    selectedFinding[id] = cards.length > 0 ? cards[0].id : null;
+  }
+  node.querySelector(".empty").hidden = !loaded || cards.length > 0;
+  node.querySelector(".split").hidden = cards.length === 0;
+  node.querySelector(".list").replaceChildren(...cards.map((card) => renderRow(id, card)));
+  const selected = cards.find((card) => card.id === selectedFinding[id]);
+  node.querySelector(".detail").replaceChildren(...(selected ? [renderCard(selected)] : []));
+}
+
 function render(list) {
+  view = list;
+  takePosture(list.posture);
   $("off").hidden = list.off === null;
   $("off").textContent = list.off === null ? "" : `Protection is off: ${list.off}.`;
   // With Protection off the window offers nothing (spec section 6.2).
@@ -160,11 +238,10 @@ function render(list) {
   actionsWait = list.actionsWait;
   $("actions-wait").hidden = actionsWait === null;
   $("actions-wait").textContent = actionsWait === null ? "" : actionsWait;
-  $("counts").textContent = `${list.counts.threats} Threat, ${list.counts.exposures} Exposure`;
-  $("open").replaceChildren(...list.open.map(renderCard));
-  $("empty").hidden = !list.loaded || list.open.length > 0;
-  $("decided").replaceChildren(...list.decided.map(renderCard));
-  $("decided-section").hidden = list.decided.length === 0;
+  renderSidebar(list.sidebar);
+  for (const id of FINDING_PANES) {
+    renderFindingPane(id, list.panes[id], list.loaded);
+  }
   disableActions();
 }
 

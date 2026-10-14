@@ -1,5 +1,6 @@
-/* The Findings window. Placeholder layout; spec section 8 is not committed
-   to here. */
+/* The Findings window: a sidebar, and beside it the pane in sight, the two
+   Finding panes split into a list and the selected Finding (spec section
+   8.1). Placeholder styling inside the panes. */
 
 :root {
   --text: #1d1d1f;
@@ -10,6 +11,8 @@
   --threat: #c7372f;
   --exposure: #d98b00;
   --clear: #2e9d4f;
+  --sidebar: #ececee;
+  --selected: #dcdce0;
   color-scheme: light dark;
 }
 
@@ -20,6 +23,8 @@
     --surface: #1e1e20;
     --card: #2a2a2d;
     --rule: #3a3a3c;
+    --sidebar: #252528;
+    --selected: #3a3a3e;
   }
 }
 
@@ -35,21 +40,139 @@ body {
   font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
 }
 
+html,
+body {
+  height: 100%;
+}
+
+.frame {
+  display: flex;
+  height: 100vh;
+}
+
+.sidebar {
+  flex: 0 0 200px;
+  padding: 14px 8px;
+  overflow-y: auto;
+  background: var(--sidebar);
+  border-right: 1px solid var(--rule);
+}
+
+.brand {
+  margin: 0 8px 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.entry {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 1px 0;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+}
+
+.entry[aria-current="page"] {
+  background: var(--selected);
+  font-weight: 600;
+}
+
+.count {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.content {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 header {
-  position: sticky;
-  top: 0;
-  padding: 14px 20px 10px;
-  background: var(--surface);
+  padding: 12px 20px 10px;
   border-bottom: 1px solid var(--rule);
 }
 
-main {
-  padding: 4px 20px 24px;
+.content > .notice,
+.content > .folder {
+  margin: 12px 20px 0;
 }
 
-h1 {
-  margin: 0 0 6px;
-  font-size: 18px;
+main {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 4px 20px 16px;
+}
+
+.pane {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.split {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 12px;
+}
+
+.list {
+  flex: 0 0 240px;
+  overflow-y: auto;
+  border-right: 1px solid var(--rule);
+  padding-right: 8px;
+}
+
+.detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 2px 0;
+  padding: 6px 8px;
+  border: 0;
+  border-left: 3px solid var(--rule);
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+}
+
+.row[data-category="threat"] {
+  border-left-color: var(--threat);
+}
+
+.row[data-category="exposure"] {
+  border-left-color: var(--exposure);
+}
+
+.row[aria-current="true"] {
+  background: var(--selected);
+}
+
+.row .title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 h2 {

@@ -26,9 +26,9 @@
         "label": "findings",
         "title": "AgentSweep",
         "url": "window.html",
-        "width": 820,
-        "height": 640,
-        "minWidth": 560,
+        "width": 980,
+        "height": 660,
+        "minWidth": 760,
         "minHeight": 400,
         "visible": false,
         "center": true

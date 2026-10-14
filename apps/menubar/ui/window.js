@@ -4,9 +4,11 @@
 // invokes the app's commands; every decision about what is listed, counted
 // and offered was made by the daemon and the app. Which pane and which
 // Finding are selected is the window's own. Everything is written with
-// textContent, never as markup. Placeholder wording throughout.
+// textContent, never as markup. In the Simple Posture a Finding reads as the
+// app worded it (spec section 8.4); the Developer Posture's rendering is
+// still the placeholder.
 
-import { takePosture } from "./posture.js";
+import { isDeveloper, takePosture } from "./posture.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -143,17 +145,106 @@ function renderCard(card) {
     node.append(el("p", "id", `receipt ${card.receiptId}`));
   }
   if (card.actions.length > 0) {
-    const actions = el("div", "actions");
-    for (const action of card.actions) {
-      const button = el("button", "", action.label);
-      button.type = "button";
-      button.dataset.action = action.command;
-      button.addEventListener("click", () => run(action, card));
-      actions.append(button);
-    }
-    node.append(actions);
+    node.append(renderActions(card));
   }
   return node;
+}
+
+// The Findings whose technical details are open in the Simple Posture.
+const detailsOpen = new Set();
+
+// The technical table of one Finding: the same rows the Developer Posture
+// shows (spec section 8.2).
+function renderTechnical(card) {
+  const table = el("table", "technical");
+  for (const row of card.technical) {
+    const line = el("tr");
+    line.append(el("th", "", row.label), el("td", "", row.value));
+    table.append(line);
+  }
+  return table;
+}
+
+function renderActions(card) {
+  const actions = el("div", "actions");
+  for (const action of card.actions) {
+    const button = el("button", "", action.label);
+    button.type = "button";
+    button.dataset.action = action.command;
+    button.addEventListener("click", () => run(action, card));
+    actions.append(button);
+  }
+  return actions;
+}
+
+// One Finding in the Simple Posture: the verdict title, the Severity word on
+// its chip, the body in its fixed order, the actions, and the technical
+// details one click away. No id, path, hash or Score is rendered here.
+function renderSimpleCard(card) {
+  const simple = card.simple;
+  const node = el("article", "card");
+  node.dataset.category = card.category;
+  node.append(el("p", "title", simple.title));
+  const chips = el("div", "chips");
+  chips.append(el("span", `chip ${simple.chip}`, simple.severity));
+  node.append(chips);
+  let list = null;
+  for (const line of simple.lines) {
+    if (line.part === "heuristic") {
+      if (list === null) {
+        list = el("ul", "heuristics");
+        node.append(list);
+      }
+      list.append(el("li", "", line.text));
+      continue;
+    }
+    const muted = ["also", "project", "drift"].includes(line.part);
+    node.append(el("p", muted ? "muted" : "", line.text));
+  }
+  const actions = renderActions(card);
+  if (simple.admin) {
+    const copy = el("button", "", "Copy a message for your admin");
+    copy.type = "button";
+    copy.addEventListener("click", async () => {
+      try {
+        showResult({
+          message: await invoke("copy_for_admin", { target: card.id }),
+          sessions: "",
+          details: [],
+          conflict: false,
+          target: "",
+        });
+      } catch (why) {
+        showFailure(why);
+      }
+    });
+    actions.append(copy);
+  }
+  if (actions.childElementCount > 0) {
+    node.append(actions);
+  }
+  const open = detailsOpen.has(card.id);
+  const toggle = el("button", "link", open ? "Hide technical details" : "Show technical details");
+  toggle.type = "button";
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.addEventListener("click", () => {
+    if (detailsOpen.has(card.id)) {
+      detailsOpen.delete(card.id);
+    } else {
+      detailsOpen.add(card.id);
+    }
+    render(view);
+  });
+  node.append(toggle);
+  if (open) {
+    node.append(renderTechnical(card));
+  }
+  return node;
+}
+
+// A Finding of a Finding pane, in the Posture in force.
+function renderFinding(card) {
+  return isDeveloper() ? renderCard(card) : renderSimpleCard(card);
 }
 
 // The two panes that list Findings: a list beside the selected Finding.
@@ -203,8 +294,13 @@ function renderRow(id, card) {
   row.type = "button";
   row.setAttribute("role", "listitem");
   row.dataset.category = card.category;
-  row.append(el("span", "title", `${card.kind} · ${card.name}`));
-  row.append(el("span", "chip", card.severity));
+  if (isDeveloper()) {
+    row.append(el("span", "title", `${card.kind} · ${card.name}`));
+    row.append(el("span", "chip", card.severity));
+  } else {
+    row.append(el("span", "title", card.simple.title));
+    row.append(el("span", `chip ${card.simple.chip}`, card.simple.severity));
+  }
   if (card.id === selectedFinding[id]) {
     row.setAttribute("aria-current", "true");
   }
@@ -224,7 +320,7 @@ function renderFindingPane(id, cards, loaded) {
   node.querySelector(".split").hidden = cards.length === 0;
   node.querySelector(".list").replaceChildren(...cards.map((card) => renderRow(id, card)));
   const selected = cards.find((card) => card.id === selectedFinding[id]);
-  node.querySelector(".detail").replaceChildren(...(selected ? [renderCard(selected)] : []));
+  node.querySelector(".detail").replaceChildren(...(selected ? [renderFinding(selected)] : []));
 }
 
 function render(list) {

@@ -23,6 +23,8 @@
 //!   action requests, each answered with the daemon's sentence. A Quarantine
 //!   of a never-auto kind is the switch that neutralises its line in place,
 //!   and its Restore switches the line back on.
+//! - `copy_for_admin`: puts the message about a Managed Finding for whoever
+//!   administers the Mac on the clipboard (spec section 8.4).
 //! - `scan_now`: asks the daemon for a Full Scan; the progress arrives on the
 //!   stream.
 //! - `scan_folder`: the native folder picker, then a Folder Scan by the
@@ -58,6 +60,7 @@ use crate::placement;
 use crate::popover::View;
 use crate::supervision::{self, Services, SystemServices, Unsupervised};
 use crate::window::{Presence, presence};
+use crate::wording;
 
 /// The tray icon's id.
 const TRAY: &str = "agentsweep";
@@ -225,6 +228,47 @@ async fn fix(app: AppHandle, target: String) -> Result<Value, String> {
 #[tauri::command]
 async fn re_enable(app: AppHandle, target: String) -> Result<Value, String> {
     act(app, ActionRequest::of("re_enable", &target, None)).await
+}
+
+/// **Copy a message for your admin** on a Managed Finding: the message names
+/// the Item and why it was flagged, and holds no value of it.
+#[tauri::command]
+fn copy_for_admin(shell: tauri::State<'_, Shell>, target: String) -> Result<String, String> {
+    let finding = shell
+        .frame
+        .lock()
+        .expect("the frame is not poisoned")
+        .findings()
+        .get(&target)
+        .cloned()
+        .ok_or_else(|| "That Finding is no longer listed.".to_string())?;
+    let message = wording::simple(&finding)
+        .admin_message
+        .ok_or_else(|| "Only something your admin controls has a message for them.".to_string())?;
+    match put_on_clipboard(&message) {
+        true => Ok("A message for your admin is on the clipboard.".to_string()),
+        false => Err("The message could not be put on the clipboard.".to_string()),
+    }
+}
+
+/// Puts text on the general pasteboard, answering whether it is there.
+#[cfg(target_os = "macos")]
+fn put_on_clipboard(text: &str) -> bool {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+    use objc2_foundation::NSString;
+
+    let board = NSPasteboard::generalPasteboard();
+    board.clearContents();
+    // SAFETY: the pasteboard type is a constant AppKit exports and never
+    // changes.
+    let kind = unsafe { NSPasteboardTypeString };
+    board.setString_forType(&NSString::from_str(text), kind)
+}
+
+/// Anywhere but macOS there is no clipboard yet (spec section 6.1).
+#[cfg(not(target_os = "macos"))]
+fn put_on_clipboard(_text: &str) -> bool {
+    false
 }
 
 /// Asks the daemon for a Full Scan. Its progress arrives on the stream.
@@ -517,6 +561,7 @@ pub fn run() {
             acknowledge,
             fix,
             re_enable,
+            copy_for_admin,
             scan_now,
             scan_folder
         ])

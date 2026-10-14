@@ -345,8 +345,10 @@ mod tests {
 
     #[test]
     fn a_hook_entry_carries_the_script_its_adapter_resolved() {
-        let mut view = HookView::default();
-        view.command_resolved = "/home/u/.claude/hooks/run.sh".to_string();
+        let view = HookView {
+            command_resolved: "/home/u/.claude/hooks/run.sh".to_string(),
+            ..HookView::default()
+        };
         let hook = Item::entry(
             "claude-code",
             Scope::User,

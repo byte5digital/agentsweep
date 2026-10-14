@@ -38,6 +38,8 @@ use agentsweep_core::gate_registration::GateCommand;
 use agentsweep_core::health::GateLine;
 use agentsweep_core::heuristics::Band;
 use agentsweep_core::item::{Item, ItemId, Kind, Scope};
+use agentsweep_core::judged::{AppliedVerdict, CachedVerdicts, Judge, NoVerdicts, Verdicts};
+use agentsweep_core::judgement::Verdict;
 use agentsweep_core::keychain::KeySource;
 use agentsweep_core::overview::Overview;
 use agentsweep_core::pack::Manifest;
@@ -46,10 +48,11 @@ use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::{BACKGROUND_WORKERS, ScanKind, ScanPass};
 use agentsweep_core::state::{ScanSummary, Trigger};
+use agentsweep_core::verdicts::{VerdictCache, VerdictCacheView};
 
 use crate::actions::{Acting, ScanActions, act_in_scan};
 use crate::machine::{Machine, adapters, agents};
-use crate::overview::{Detected, ambiguous, of_the_full_scan};
+use crate::overview::{Detected, ambiguous, checked, of_the_full_scan};
 use crate::permission::{Access, Disk, Reach};
 
 /// Why a Scan could not be run.
@@ -177,6 +180,7 @@ pub fn run(
         manifest: &pack.manifest,
         previous,
         cache: &NoCache,
+        judge: None,
         workers: BACKGROUND_WORKERS,
         progress,
         acts: true,
@@ -207,6 +211,10 @@ pub struct FullScan<'a> {
     pub previous: &'a [Finding],
     /// The Tier outcomes this daemon already has.
     pub cache: &'a dyn Evaluations,
+    /// The active Judgement Engine, under which an Item that awaits
+    /// judgement is looked up in the Verdict cache. None while AI Judgement
+    /// is off.
+    pub judge: Option<&'a Judge>,
     /// How many worker threads run the Tiers.
     pub workers: usize,
     /// Who is told how far it has got.
@@ -266,6 +274,7 @@ impl FullScan<'_> {
             trigger,
             at: started_at,
             cache: self.cache,
+            judge: self.judge,
             workers: self.workers,
             acting: self.acts.then_some(&acting),
         }
@@ -281,6 +290,7 @@ impl FullScan<'_> {
             &survey.enumeration.items,
         );
         overview.ambiguous = judged.ambiguous.clone();
+        overview.checked = judged.checked.clone();
 
         Ok(ScanRun {
             summary: judged.summary,
@@ -522,6 +532,8 @@ pub struct Judged {
     /// The Items it looked at whose Score fell in the Ambiguous Band and that
     /// carry no Finding.
     pub ambiguous: Vec<agentsweep_core::overview::AmbiguousItem>,
+    /// The Items it looked at that a cached benign Verdict moved to Clear.
+    pub checked: Vec<agentsweep_core::overview::CheckedItem>,
 }
 
 /// Reading the stores, running one pass and writing what it decided.
@@ -548,6 +560,8 @@ pub struct Judgement<'a> {
     pub at: Timestamp,
     /// The Tier outcomes already held.
     pub cache: &'a dyn Evaluations,
+    /// The active Judgement Engine, None while AI Judgement is off.
+    pub judge: Option<&'a Judge>,
     /// How many worker threads run the Tiers.
     pub workers: usize,
     /// Where the pass may act by itself, absent when it may not.
@@ -576,13 +590,30 @@ impl Judgement<'_> {
         let declarations = Declarations::of(self.descriptors);
         let rule_pack = self.manifest.pack_version;
 
+        // The Verdict cache is read once, under the active engine. Its key and
+        // the evaluation key both name the engine and its model, so another
+        // engine misses the one and re-runs the Tiers past the other.
+        let label = self.judge.map(Judge::label).unwrap_or_default();
+        let held_verdicts = match self.judge {
+            Some(_) => read_the_verdicts(self.directory, self.keys),
+            None => VerdictCacheView::default(),
+        };
+        let cached = self
+            .judge
+            .map(|judge| CachedVerdicts::new(&held_verdicts, judge));
+        let verdicts: &dyn Verdicts = match &cached {
+            Some(cached) => cached,
+            None => &NoVerdicts,
+        };
+
         let start = match self.kind {
             ScanKind::Change => ScanPass::change,
             _ => ScanPass::full,
         };
         let outcome = start(self.pack, &held, self.plan, &trusted, &known, &declarations)
             .with_bands(self.manifest.bands)
-            .caching(self.cache, rule_pack, "")
+            .caching(self.cache, rule_pack, &label)
+            .judging(verdicts)
             .with_workers(self.workers)
             .at(self.at)
             .over(enumeration)
@@ -689,12 +720,19 @@ impl Judgement<'_> {
         withdrawn(&mut standing, self.pack);
         let fixed_versions = fixed_versions(&quarantined, enumeration, &raised);
         let switched = switched(&standing, &quarantined, enumeration, self.acting);
-        let facts = facts(&standing, &quarantined, enumeration, self.pack);
+        let facts = facts(
+            &standing,
+            &quarantined,
+            enumeration,
+            self.pack,
+            &outcome.judged,
+        );
         // Where every Finding stands is settled, so the open Threat Findings
         // are known, and the Items they are about are in hand: the facts the
         // Gate answers from are taken now, in the same write as the Findings.
         let gate_facts = gate_facts::for_open_threats(&standing, &enumeration.items);
         let ambiguous = ambiguous(&outcome.report.assessments, &enumeration.items, &raised);
+        let checked = checked(&outcome.judged, &enumeration.items);
 
         let bands = count_bands(&outcome);
         let summary = ScanSummary {
@@ -715,7 +753,10 @@ impl Judgement<'_> {
             ambiguous: bands.1,
             suspicious: bands.2,
             rule_pack,
-            engine: String::new(),
+            engine: self
+                .judge
+                .map(|judge| judge.engine.clone())
+                .unwrap_or_default(),
         };
 
         Ok(Judged {
@@ -737,7 +778,21 @@ impl Judgement<'_> {
             facts,
             gate_facts,
             ambiguous,
+            checked,
         })
+    }
+}
+
+/// The Verdict cache as it reads now. A cache that cannot be read is no
+/// cache: every Item that awaits judgement stays Ambiguous, and the daemon's
+/// log says why.
+fn read_the_verdicts(directory: &DataDirectory, keys: &dyn KeySource) -> VerdictCacheView {
+    match VerdictCache::in_data_directory(directory).read(keys) {
+        Ok(view) => view,
+        Err(error) => {
+            say!("the Verdict cache could not be read: {error}");
+            VerdictCacheView::default()
+        }
     }
 }
 
@@ -780,6 +835,7 @@ fn facts(
     quarantined: &QuarantineManifest,
     enumeration: &Enumeration,
     pack: &RulePack,
+    judged: &[AppliedVerdict],
 ) -> BTreeMap<FindingId, FindingFacts> {
     let items: BTreeMap<&ItemId, &Item> = enumeration
         .items
@@ -797,6 +853,18 @@ fn facts(
                     .find(|meta| meta.id == id)
                     .map(|meta| meta.phrase.clone())
                     .unwrap_or_default();
+            }
+            // The engine, its model and its contained reason stand beside
+            // the Finding a malicious Verdict opened, and beside nothing else.
+            if placed.finding.tier == Tier::AiJudgement
+                && let Some(applied) = judged.iter().find(|applied| {
+                    applied.item_id == placed.finding.item_id
+                        && matches!(applied.verdict, Verdict::Malicious { .. })
+                })
+            {
+                facts.judgement_engine = applied.engine.clone();
+                facts.judgement_model = applied.model.clone();
+                facts.judgement_reason = applied.reason().to_string();
             }
             if placed.state == FindingState::Stopped {
                 facts.actor = quarantined

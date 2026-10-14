@@ -16,8 +16,10 @@ use agentsweep_core::finding::Finding;
 use agentsweep_core::finding_facts::HeuristicLine;
 use agentsweep_core::heuristics::Assessment;
 use agentsweep_core::item::{Item, ItemId};
+use agentsweep_core::judged::AppliedVerdict;
+use agentsweep_core::judgement::Verdict;
 use agentsweep_core::overview::{
-    AgentRecord, AmbiguousItem, Overview, ProjectAgent, ProjectCheck, ProjectRecord,
+    AgentRecord, AmbiguousItem, CheckedItem, Overview, ProjectAgent, ProjectCheck, ProjectRecord,
 };
 
 /// One Agent as pooling found it: what `detect` said and which of the roots
@@ -110,6 +112,7 @@ pub fn of_the_full_scan(
         agents,
         projects,
         ambiguous: Vec::new(),
+        checked: Vec::new(),
     }
 }
 
@@ -138,6 +141,26 @@ pub fn ambiguous(
                     .iter()
                     .map(|heuristic| HeuristicLine::of(heuristic, Some(item)))
                     .collect(),
+            })
+        })
+        .collect()
+}
+
+/// The Items a cached benign Verdict moved to Clear, in enumeration order:
+/// the "checked by <engine>" notes the Developer Posture shows. A malicious
+/// Verdict is a Finding and an unsure one leaves the Item Ambiguous, so
+/// neither is named here.
+pub fn checked(judged: &[AppliedVerdict], items: &[Item]) -> Vec<CheckedItem> {
+    judged
+        .iter()
+        .filter(|applied| applied.verdict == Verdict::Benign)
+        .filter_map(|applied| {
+            let item = items.iter().find(|item| item.id == applied.item_id)?;
+            Some(CheckedItem {
+                item_id: item.id.clone(),
+                kind: item.kind,
+                engine: applied.engine.clone(),
+                model: applied.model.clone(),
             })
         })
         .collect()

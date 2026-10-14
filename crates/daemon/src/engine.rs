@@ -17,6 +17,8 @@
 use std::sync::Arc;
 
 use agentsweep_core::eventlog::{Action, Actor, Event};
+use agentsweep_core::judged::Judge;
+use agentsweep_core::judgement_request::Normalisation;
 use agentsweep_core::keychain::{ClaudeKey, ClaudeKeyStore, MemoryClaudeKeyStore};
 use agentsweep_core::ollama::OllamaClient;
 use agentsweep_core::settings::{
@@ -164,6 +166,14 @@ impl Daemon {
             recorded,
             ollama: None,
         }
+    }
+
+    /// The active Judgement Engine as a Scan looks up its Verdicts under,
+    /// None while AI Judgement is off. Requests normalise the home of the
+    /// machine in force.
+    pub fn judge_in_force(&self) -> Option<Judge> {
+        let machine = self.machine_in_force();
+        Judge::of_settings(&self.judgement(), Normalisation::of_home(machine.home()))
     }
 
     /// The AI Judgement choices as they stand.

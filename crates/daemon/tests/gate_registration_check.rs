@@ -123,6 +123,7 @@ impl Sandbox {
             workers: BACKGROUND_WORKERS,
             progress: &Unwatched,
             acts: true,
+            judge: None,
             gate: command,
         }
         .run(Trigger::ScanNow)

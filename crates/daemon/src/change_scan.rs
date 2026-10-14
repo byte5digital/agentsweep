@@ -60,6 +60,8 @@ pub struct ChangeScan<'a> {
     pub pooled: &'a [PathBuf],
     /// The Tier outcomes this daemon already has.
     pub cache: &'a dyn Evaluations,
+    /// The active Judgement Engine, None while AI Judgement is off.
+    pub judge: Option<&'a agentsweep_core::judged::Judge>,
     /// How many worker threads run the Tiers.
     pub workers: usize,
     /// Whether the Scan may act by itself, as a Full Scan may.
@@ -159,6 +161,7 @@ impl ChangeScan<'_> {
             trigger: Trigger::Watcher,
             at: started_at,
             cache: self.cache,
+            judge: self.judge,
             workers: self.workers,
             acting: self.acts.then_some(&acting),
         }
@@ -188,6 +191,7 @@ impl ChangeScan<'_> {
             // at.
             overview: agentsweep_core::overview::Overview {
                 ambiguous: judged.ambiguous,
+                checked: judged.checked,
                 ..Default::default()
             },
             // Only a Full Scan checks the Gate's registration.

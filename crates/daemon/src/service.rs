@@ -26,13 +26,14 @@ use agentsweep_core::baseline::{self, Retention};
 use agentsweep_core::chain::ChainState;
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::evaluation::EvaluationCache;
-use agentsweep_core::eventlog::{EventLog, PackChange, PackRules, RulePackRecord};
+use agentsweep_core::eventlog::{Action, EventLog, PackChange, PackRules, RulePackRecord};
 use agentsweep_core::finding::{Category, Finding, FindingId, FindingState};
 use agentsweep_core::gate_facts::GateRecord;
 use agentsweep_core::gate_registration::GateCommand;
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
 use agentsweep_core::integrity::ResetUnanswered;
 use agentsweep_core::item::Scope;
+use agentsweep_core::judged::installed_models;
 use agentsweep_core::keychain::{ClaudeKeyStore, KeySource, MemoryKeySource};
 use agentsweep_core::packs::{LoadedPack, PackOrigin, PackStore, Verdict, judge};
 use agentsweep_core::paths::DataDirectory;
@@ -40,6 +41,7 @@ use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::{BACKGROUND_WORKERS, ScanKind, on_demand_workers};
 use agentsweep_core::settings::{Settings, SettingsError, SettingsFile, SettingsWriter};
 use agentsweep_core::state::{RecordedFinding, State, StateFile, StateWriter, Trigger};
+use agentsweep_core::verdicts;
 use agentsweep_ipc::gate::{GateRequest, GateVerdict};
 use agentsweep_ipc::peer::PeerCheck;
 use agentsweep_ipc::protocol::{
@@ -646,6 +648,10 @@ impl Daemon {
         // The pack in force when the Scan starts is the one it runs to the
         // end; a pack accepted meanwhile asks for the Full Scan after it.
         let pack = self.pack_in_force();
+        // So is the Judgement Engine: its Verdicts are looked up, and its name
+        // and model key the evaluation cache, under what was active at the
+        // start.
+        let judge = self.judge_in_force();
         match work {
             Work::Full(trigger) => {
                 self.record_the_pack_change(&pack);
@@ -672,6 +678,7 @@ impl Daemon {
                     manifest: &pack.manifest,
                     previous: &previous,
                     cache: &*self.cache,
+                    judge: judge.as_ref(),
                     workers,
                     progress: &watching,
                     acts: true,
@@ -701,6 +708,7 @@ impl Daemon {
                     previous: &previous,
                     pooled: &pooled,
                     cache: &*self.cache,
+                    judge: judge.as_ref(),
                     workers: self.tuning.workers,
                     acts: true,
                 }
@@ -813,9 +821,14 @@ impl Daemon {
             let overview_before = state.overview.clone();
             match whole {
                 true => state.overview = run.overview.clone(),
-                false => state
-                    .overview
-                    .take_change(&run.looked_at, &run.overview.ambiguous),
+                false => {
+                    state
+                        .overview
+                        .take_change(&run.looked_at, &run.overview.ambiguous);
+                    state
+                        .overview
+                        .take_checked(&run.looked_at, &run.overview.checked);
+                }
             }
             if state.overview != overview_before {
                 overview_changed = Some(Box::new(state.overview.clone()));
@@ -890,6 +903,7 @@ impl Daemon {
             self.cache.sweep();
             self.follow(&run.watch_roots);
             self.compact(&run);
+            self.compact_the_verdicts(&run);
         }
 
         self.publish(StateEvent::ScanFinished {
@@ -990,6 +1004,45 @@ impl Daemon {
                 done.plan.uncovered.len()
             ),
             Err(error) => say!("the Baseline could not be compacted: {error}"),
+        }
+    }
+
+    /// Compacts the Verdict cache behind a completed Full Scan, at most once
+    /// a day: a Verdict whose model id or prompt version no longer matches an
+    /// installed engine is dropped, and one `verdicts-compacted` event anchors
+    /// the compacted file in the Event Log (spec sections 4.6.6 and 6.9).
+    fn compact_the_verdicts(self: &Arc<Daemon>, run: &ScanRun) {
+        if run.events != ChainState::Intact {
+            return;
+        }
+        if self.reset.lock().expect("the reset is not poisoned").any() {
+            return;
+        }
+        let at = Timestamp::now();
+        let last = match EventLog::in_data_directory(&self.directory).read(&*self.keys) {
+            Ok(view) => view
+                .events
+                .iter()
+                .filter(|recorded| recorded.event.action == Action::VerdictsCompacted)
+                .map(|recorded| recorded.recorded_at)
+                .next_back(),
+            Err(error) => {
+                say!("the Event Log could not be read for the Verdict cache: {error}");
+                return;
+            }
+        };
+        if !baseline::compaction_due(last, at) {
+            return;
+        }
+        let installed = installed_models(&self.judgement());
+        match verdicts::compact(&self.directory, &*self.keys, &installed) {
+            Ok(Some(done)) => say!(
+                "the Verdict cache was compacted: {} records before, {} after",
+                done.before,
+                done.after
+            ),
+            Ok(None) => {}
+            Err(error) => say!("the Verdict cache could not be compacted: {error}"),
         }
     }
 

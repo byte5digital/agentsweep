@@ -76,6 +76,7 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
         manifest: &loaded.manifest,
         previous: &[],
         cache: &cache,
+        judge: None,
         workers: BACKGROUND_WORKERS,
         progress: &Unwatched,
         // A measurement reads the machine and never acts on it, and never
@@ -134,6 +135,7 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
         previous: &cold.raised,
         pooled: &warm.roots,
         cache: &cache,
+        judge: None,
         workers: BACKGROUND_WORKERS,
         acts: false,
     }

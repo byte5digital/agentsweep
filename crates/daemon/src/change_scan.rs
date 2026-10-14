@@ -178,6 +178,13 @@ impl ChangeScan<'_> {
             facts: judged.facts,
             switched: judged.switched,
             gate_facts: judged.gate_facts,
+            // A Change Scan never detected every Agent nor read every root, so
+            // it speaks only for the Ambiguous Items among the ones it looked
+            // at.
+            overview: agentsweep_core::overview::Overview {
+                ambiguous: judged.ambiguous,
+                ..Default::default()
+            },
         }))
     }
 }

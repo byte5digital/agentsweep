@@ -37,6 +37,7 @@ use agentsweep_core::gate_facts::{self, GateFacts};
 use agentsweep_core::heuristics::Band;
 use agentsweep_core::item::{Item, ItemId, Kind, Scope};
 use agentsweep_core::keychain::KeySource;
+use agentsweep_core::overview::Overview;
 use agentsweep_core::pack::Manifest;
 use agentsweep_core::packs::LoadedPack;
 use agentsweep_core::paths::DataDirectory;
@@ -46,6 +47,7 @@ use agentsweep_core::state::{ScanSummary, Trigger};
 
 use crate::actions::{Acting, ScanActions, act_in_scan};
 use crate::machine::{Machine, adapters, agents};
+use crate::overview::{Detected, ambiguous, of_the_full_scan};
 
 /// Why a Scan could not be run.
 #[derive(Debug)]
@@ -116,6 +118,10 @@ pub struct ScanRun {
     /// The Gate facts of every open Threat Finding this Scan leaves, for the
     /// Items it looked at.
     pub gate_facts: BTreeMap<FindingId, GateFacts>,
+    /// What the Overview names: after a Full Scan the Agents, the pooled
+    /// project roots and the Ambiguous Items; after a Change Scan only the
+    /// Ambiguous Items among the ones it looked at.
+    pub overview: Overview,
 }
 
 /// What a Scan reports as it goes.
@@ -236,6 +242,12 @@ impl FullScan<'_> {
             survey.enumeration.items.len(),
             survey.enumeration.items.len(),
         );
+        let mut overview = of_the_full_scan(
+            &inventory.detected,
+            &inventory.roots,
+            &survey.enumeration.items,
+        );
+        overview.ambiguous = judged.ambiguous.clone();
 
         Ok(ScanRun {
             summary: judged.summary,
@@ -253,6 +265,7 @@ impl FullScan<'_> {
             switched: judged.switched,
             facts: judged.facts,
             gate_facts: judged.gate_facts,
+            overview,
         })
     }
 }
@@ -265,6 +278,9 @@ pub struct Pooled {
     /// Every project root any Agent's registry names and that is still there,
     /// pooled across the Agents and in a stable order.
     pub roots: Vec<PathBuf>,
+    /// What each Agent's detection and registry said, which is what the
+    /// Overview's Agent and project records are built from.
+    pub detected: Vec<Detected>,
 }
 
 /// Detects every Agent and pools every project root its own registry names.
@@ -277,14 +293,24 @@ pub fn pool(machine: &Machine) -> Pooled {
     let mut pooled = Pooled::default();
     for adapter in agents() {
         let detection = adapter.detect(&host);
+        let descriptor = adapter.descriptor();
         pooled
             .agents
-            .push((adapter.descriptor().agent.to_string(), detection.installed));
+            .push((descriptor.agent.to_string(), detection.installed));
+        let mut registered = Vec::new();
         for registration in adapter.projects(&host) {
             if registration.root.is_dir() {
+                registered.push(registration.root.clone());
                 pooled.roots.push(registration.root);
             }
         }
+        pooled.detected.push(Detected {
+            agent: descriptor.agent,
+            display_name: descriptor.display_name,
+            detection,
+            layers_not_read: adapter.layers_not_read(),
+            registered,
+        });
     }
     pooled.roots.sort();
     pooled.roots.dedup();
@@ -406,6 +432,9 @@ pub struct Judged {
     pub facts: BTreeMap<FindingId, FindingFacts>,
     /// The Gate facts of every open Threat Finding the pass leaves.
     pub gate_facts: BTreeMap<FindingId, GateFacts>,
+    /// The Items it looked at whose Score fell in the Ambiguous Band and that
+    /// carry no Finding.
+    pub ambiguous: Vec<agentsweep_core::overview::AmbiguousItem>,
 }
 
 /// Reading the stores, running one pass and writing what it decided.
@@ -578,6 +607,7 @@ impl Judgement<'_> {
         // are known, and the Items they are about are in hand: the facts the
         // Gate answers from are taken now, in the same write as the Findings.
         let gate_facts = gate_facts::for_open_threats(&standing, &enumeration.items);
+        let ambiguous = ambiguous(&outcome.report.assessments, &enumeration.items, &raised);
 
         let bands = count_bands(&outcome);
         let summary = ScanSummary {
@@ -619,6 +649,7 @@ impl Judgement<'_> {
             switched,
             facts,
             gate_facts,
+            ambiguous,
         })
     }
 }

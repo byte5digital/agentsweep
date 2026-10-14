@@ -59,6 +59,7 @@ pub mod integrity;
 pub mod log;
 pub mod machine;
 pub mod options;
+pub mod overview;
 pub mod peer_check;
 pub mod rule_feed;
 pub mod service;

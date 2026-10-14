@@ -512,6 +512,7 @@ impl Daemon {
             health: self.health(),
             scan: state.last_scan().cloned(),
             findings: state.findings.clone(),
+            overview: state.overview.clone(),
             activity: self
                 .activity
                 .lock()
@@ -692,6 +693,7 @@ impl Daemon {
             *reset
         };
         let mut changed: Vec<(FindingId, String, Option<Box<RecordedFinding>>)> = Vec::new();
+        let mut overview_changed = None;
         {
             let mut state = self.state.lock().expect("the state is not poisoned");
             let before: BTreeMap<FindingId, String> = state
@@ -758,6 +760,18 @@ impl Daemon {
                 (false, None) => {}
             }
             state.prune_gate_facts();
+            // A Full Scan speaks for every Agent, root and Item; a Change Scan
+            // only for the Ambiguous Items among the ones it looked at.
+            let overview_before = state.overview.clone();
+            match whole {
+                true => state.overview = run.overview.clone(),
+                false => state
+                    .overview
+                    .take_change(&run.looked_at, &run.overview.ambiguous),
+            }
+            if state.overview != overview_before {
+                overview_changed = Some(Box::new(state.overview.clone()));
+            }
             state.record_scan(run.summary.clone());
             let file = StateFile::in_data_directory(&self.directory);
             if let Err(error) = StateWriter::write(&file, &*self.keys, &state) {
@@ -810,6 +824,9 @@ impl Daemon {
         }
         for (id, state, finding) in changed {
             self.publish(StateEvent::FindingChanged { id, state, finding });
+        }
+        if let Some(overview) = overview_changed {
+            self.publish(StateEvent::OverviewChanged { overview });
         }
         // Only a Full Scan recomputes the watch roots, and housekeeping runs
         // behind one and behind nothing else.

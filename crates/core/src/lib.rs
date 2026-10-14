@@ -38,6 +38,7 @@ pub mod evaluation;
 pub mod eventlog;
 pub mod finding;
 pub mod finding_facts;
+pub mod gate_facts;
 pub mod health;
 pub mod heuristics;
 pub mod hits;

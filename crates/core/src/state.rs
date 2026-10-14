@@ -6,7 +6,9 @@
 //! daemon started is answered without a Scan: the open Findings with the
 //! moment each was first seen and the moment the user was told about it, the
 //! last thirty Scan summaries, the protected folder classes that were readable
-//! and the moment of the last Full Scan (spec section 6.5).
+//! and the moment of the last Full Scan (spec section 6.5), and what the Gate
+//! answers from without scanning: the pooled project roots and the facts of
+//! every open Threat Finding ([`crate::gate_facts`]).
 //!
 //! The whole file carries one HMAC under the chain key, it is written to a
 //! temporary file, flushed and renamed, and a file that is missing or does not
@@ -29,6 +31,7 @@ use crate::finding::{
     Category, FindingId, FindingState, RuleStatus, Severity, Source, Standing, Tier,
 };
 use crate::finding_facts::FindingFacts;
+use crate::gate_facts::GateRecord;
 use crate::item::{ItemId, Kind};
 use crate::keychain::{KeyError, KeySource};
 use crate::paths::DataDirectory;
@@ -435,6 +438,11 @@ pub struct State {
     /// can be taken over once, and it is never written back: absent in every
     /// state file this version writes.
     pub legacy_rule_feed: Option<bool>,
+    /// What the Gate answers from: the pooled project roots and the facts of
+    /// every open Threat Finding. Absent in a state file written before the
+    /// Gate facts existed, which the Gate reads as state unavailable until the
+    /// next Full Scan writes it (spec section 7.3).
+    pub gate: Option<GateRecord>,
 }
 
 /// A newer Rule Pack that was ignored because it needs a newer AgentSweep.
@@ -574,6 +582,24 @@ impl State {
             .and_then(|finding| finding.notified_at)
     }
 
+    /// Drops the Gate facts of every Finding that is not an open Threat
+    /// Finding any more: one that was stopped, trusted, acknowledged or is
+    /// gone, and one the state no longer holds at all.
+    pub fn prune_gate_facts(&mut self) {
+        let open = self.open_threats();
+        if let Some(gate) = self.gate.as_mut() {
+            gate.facts.retain(|id, _| open.contains(id));
+        }
+    }
+
+    /// The open Threat Findings, which are the only ones with Gate facts.
+    fn open_threats(&self) -> BTreeSet<FindingId> {
+        self.open()
+            .filter(|finding| finding.category == Category::Threat)
+            .map(|finding| finding.id.clone())
+            .collect()
+    }
+
     /// The most recent Scan summary.
     pub fn last_scan(&self) -> Option<&ScanSummary> {
         self.scans.last()
@@ -604,6 +630,14 @@ impl State {
                     .collect(),
             ),
         );
+        if let Some(gate) = &self.gate {
+            // Written only for what is still an open Threat Finding, whoever
+            // forgot to prune.
+            let open = self.open_threats();
+            let mut gate = gate.clone();
+            gate.facts.retain(|id, _| open.contains(id));
+            map.insert("gate".to_string(), gate.to_value());
+        }
         map.insert(
             "last_full_scan".to_string(),
             Value::from(
@@ -666,6 +700,12 @@ impl State {
             .get("feed")
             .and_then(|feed| feed.get("enabled"))
             .and_then(Value::as_bool);
+        // A state file written before the Gate facts existed has none, which
+        // reads as absent rather than as nothing flagged.
+        let gate = match value.get("gate") {
+            None => None,
+            Some(gate) => Some(GateRecord::from_value(gate)?),
+        };
         Some(State {
             findings,
             scans,
@@ -673,6 +713,7 @@ impl State {
             last_full_scan,
             feed,
             legacy_rule_feed,
+            gate,
         })
     }
 }
@@ -926,6 +967,81 @@ mod tests {
         state.record_scan(summary(Trigger::DaemonStart, "2026-09-24T08:00:00.000Z"));
         state.readable_classes.insert("documents".to_string());
         state
+    }
+
+    /// The state with the Gate facts of its one open Threat Finding.
+    fn a_gated_state() -> State {
+        let mut state = a_state();
+        let facts = crate::gate_facts::GateFacts {
+            agent: "claude-code".to_string(),
+            scope: "user".to_string(),
+            project_root: None,
+            kind: Kind::Skill,
+            user_instruction_file: false,
+            path: PathBuf::from("/home/u/.claude/skills/setup"),
+            resolved: None,
+            script: None,
+            names: vec![crate::item::Invocation::skill("setup")],
+        };
+        let mut gate = GateRecord {
+            roots: vec![PathBuf::from("/work/one"), PathBuf::from("/work/two")],
+            ..GateRecord::default()
+        };
+        gate.facts.insert(standing().id, facts);
+        state.gate = Some(gate);
+        state
+    }
+
+    #[test]
+    fn the_gate_facts_and_the_pooled_roots_round_trip() {
+        let state = a_gated_state();
+        let read = State::from_value(&state.to_value()).expect("a state");
+        assert_eq!(read.gate, state.gate);
+        assert_eq!(read, state);
+    }
+
+    /// A state file written before the Gate facts existed reads without error,
+    /// and the facts read as absent rather than as nothing flagged.
+    #[test]
+    fn an_older_state_file_reads_with_the_gate_facts_absent() {
+        let mut older = a_gated_state().to_value();
+        older
+            .as_object_mut()
+            .expect("an object")
+            .remove("gate")
+            .expect("the gate was written");
+        let read = State::from_value(&older).expect("an older state file reads");
+        assert_eq!(read.gate, None);
+        assert_eq!(read.findings, a_state().findings);
+    }
+
+    /// A Finding that leaves the open state loses its facts, in memory when
+    /// pruned and in the file whether or not it was.
+    #[test]
+    fn a_finding_that_is_no_longer_open_loses_its_gate_facts() {
+        for state in [
+            FindingState::Stopped,
+            FindingState::Trusted,
+            FindingState::Acknowledged,
+            FindingState::Gone,
+        ] {
+            let mut settled = a_gated_state();
+            settled.findings[0].state = state;
+            let written = State::from_value(&settled.to_value()).expect("a state");
+            assert!(
+                written.gate.as_ref().expect("a gate").facts.is_empty(),
+                "{state}"
+            );
+            settled.prune_gate_facts();
+            let gate = settled.gate.expect("the roots stay");
+            assert!(gate.facts.is_empty(), "{state}");
+            assert_eq!(gate.roots.len(), 2);
+        }
+        // An Exposure Finding never carries any.
+        let mut exposure = a_gated_state();
+        exposure.findings[0].category = Category::Exposure;
+        exposure.prune_gate_facts();
+        assert!(exposure.gate.expect("a gate").facts.is_empty());
     }
 
     /// What the daemon remembers about the Rule Feed survives the file; a

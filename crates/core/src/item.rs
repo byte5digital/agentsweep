@@ -430,6 +430,72 @@ impl fmt::Display for ItemId {
     }
 }
 
+/// What an Agent invokes an Item as: a skill by name, or an MCP server by the
+/// name and source class the Agent reports for it.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Invoked {
+    /// A skill or command, by the name the Agent's own invocation carries.
+    Skill,
+    /// An MCP server, by the name its tools are reached under.
+    McpServer,
+}
+
+impl Invoked {
+    /// The spelling the state file carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Invoked::Skill => "skill",
+            Invoked::McpServer => "mcp-server",
+        }
+    }
+
+    /// Reads back that spelling.
+    pub fn parse(text: &str) -> Option<Invoked> {
+        [Invoked::Skill, Invoked::McpServer]
+            .into_iter()
+            .find(|invoked| invoked.as_str() == text)
+    }
+}
+
+/// One name an Agent invokes an Item by, as its Surface Adapter worked it out.
+///
+/// The Gate matches a tool call against these (spec section 7.1), and they are
+/// computed by the adapter that knows how its Agent spells them, never by the
+/// core or a Rule: a Claude Code plugin's skills under their `plugin:name`
+/// form, a Codex skill as its `$name` mention uses it. A name is never a
+/// sensitive value.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Invocation {
+    /// A skill or an MCP server.
+    pub invoked: Invoked,
+    /// The name the Agent invokes it by.
+    pub name: String,
+    /// The source class the Agent reports beside the name of an MCP server
+    /// (Claude Code: `user`, `local`, `project`, `plugin`), empty where the
+    /// Agent reports none.
+    pub source: String,
+}
+
+impl Invocation {
+    /// A skill invoked by this name.
+    pub fn skill(name: impl Into<String>) -> Invocation {
+        Invocation {
+            invoked: Invoked::Skill,
+            name: name.into(),
+            source: String::new(),
+        }
+    }
+
+    /// An MCP server reached under this name, reported with this source class.
+    pub fn mcp_server(name: impl Into<String>, source: impl Into<String>) -> Invocation {
+        Invocation {
+            invoked: Invoked::McpServer,
+            name: name.into(),
+            source: source.into(),
+        }
+    }
+}
+
 /// One unit of bytes a Rule is run over: the whole file, one file of a tree,
 /// or the canonical serialised entry.
 #[derive(Clone, Copy, Debug)]
@@ -492,6 +558,9 @@ pub struct Item {
     pub content_hash: String,
     /// The files below a tree Item, empty for the other two shapes.
     pub tree: Tree,
+    /// The names the Agent invokes the Item by, as its Surface Adapter worked
+    /// them out. Empty for a kind nothing is invoked as by name.
+    pub invocations: Vec<Invocation>,
 }
 
 impl Item {
@@ -529,6 +598,7 @@ impl Item {
             content_hash: sha256_hex(&content),
             content,
             tree: Tree::default(),
+            invocations: Vec::new(),
         }
     }
 
@@ -590,6 +660,15 @@ impl Item {
     /// Attaches the normalised view the Surface Adapter parsed for this Item.
     pub fn with_view(mut self, view: crate::views::ParsedView) -> Item {
         self.view = view;
+        self
+    }
+
+    /// Records one name the Agent invokes the Item by. A name already recorded
+    /// is not recorded twice, and an empty name is no name.
+    pub fn invoked_as(mut self, invocation: Invocation) -> Item {
+        if !invocation.name.is_empty() && !self.invocations.contains(&invocation) {
+            self.invocations.push(invocation);
+        }
         self
     }
 

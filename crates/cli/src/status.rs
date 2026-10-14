@@ -282,6 +282,7 @@ mod tests {
             scan: Some(summary()),
             findings: Vec::new(),
             activity: Vec::new(),
+            overview: Default::default(),
         };
         let rendered = render(&status);
         assert!(
@@ -307,6 +308,7 @@ mod tests {
             scan: Some(summary()),
             findings: Vec::new(),
             activity: Vec::new(),
+            overview: Default::default(),
         };
         let rendered = render(&status);
         assert!(
@@ -325,6 +327,7 @@ mod tests {
             scan: Some(summary()),
             findings: vec![finding()],
             activity: Vec::new(),
+            overview: Default::default(),
         };
         let rendered = render(&status);
         assert!(
@@ -362,6 +365,7 @@ mod tests {
             scan: Some(summary()),
             findings: vec![finding(), exposure],
             activity: Vec::new(),
+            overview: Default::default(),
         };
         let rendered = render(&status);
         assert!(
@@ -378,6 +382,7 @@ mod tests {
             scan: Some(summary()),
             findings: Vec::new(),
             activity: Vec::new(),
+            overview: Default::default(),
         };
         assert!(
             render(&quiet).starts_with("All clear"),
@@ -399,6 +404,7 @@ mod tests {
             scan: Some(summary()),
             findings: vec![stopped],
             activity: Vec::new(),
+            overview: Default::default(),
         };
         let rendered = render(&status);
         assert!(!rendered.contains("open Finding"), "{rendered}");
@@ -419,6 +425,7 @@ mod tests {
             scan: Some(summary()),
             findings: vec![finding()],
             activity: Vec::new(),
+            overview: Default::default(),
         };
         let rendered = render(&status);
         assert!(
@@ -443,6 +450,7 @@ mod tests {
             scan: None,
             findings: Vec::new(),
             activity: Vec::new(),
+            overview: Default::default(),
         };
         let rendered = render(&status);
         assert!(rendered.starts_with("Checking now."), "{rendered}");
@@ -462,6 +470,7 @@ mod tests {
             scan: None,
             findings: Vec::new(),
             activity: Vec::new(),
+            overview: Default::default(),
         };
         assert!(!render(&status).contains("No Scan"), "{}", render(&status));
     }

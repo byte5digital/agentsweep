@@ -147,6 +147,9 @@ impl Findings {
             }
             StateEvent::HealthChanged { health } => self.health(health),
             StateEvent::Activity { .. } | StateEvent::SettingsChanged { .. } => Follow::Nothing,
+            // The minimal window shows no Overview; the full window's
+            // Overview pane reads it.
+            StateEvent::OverviewChanged { .. } => Follow::Nothing,
         }
     }
 
@@ -616,6 +619,7 @@ pub(crate) mod tests {
             scan: None,
             findings,
             activity: Vec::new(),
+            overview: Default::default(),
         }
     }
 

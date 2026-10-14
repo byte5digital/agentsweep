@@ -49,9 +49,8 @@ ignore = [
     # async-lifted callback in the component model. Like the entry above,
     # it lives in code YARA-X never reaches: it runs core WebAssembly modules
     # from its own compiler and never instantiates a component. No wasmtime
-    # 45 release carries the fix and YARA-X 1.21 still requires 45. Proposed
-    # by the orchestrator on 2026-10-14 on the ground the owner accepted for
-    # RUSTSEC-2026-0316; awaiting the owner's word.
+    # 45 release carries the fix and YARA-X 1.21 still requires 45. Accepted
+    # by the owner on 2026-10-14.
     "RUSTSEC-2026-0327",
     # The next five come from the menu bar app. Tauri 2.11.5 matches the URLs
     # of its capabilities with `urlpattern`, which reads identifiers with the

@@ -10,7 +10,7 @@
 //! dropped, because dropping them would silently un-quarantine and untrust
 //! everything a migrated Mac had decided.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
 use crate::envelope::Timestamp;
@@ -432,6 +432,10 @@ pub struct StandsBehind {
 #[derive(Clone, Debug, Default)]
 pub struct KnownActions {
     by_item: BTreeMap<ItemId, BTreeMap<String, StandsBehind>>,
+    /// The Gate's own entries that stand registered: every Hook Item and
+    /// content hash a `gate-registered` event named and no later
+    /// `gate-removed` event took back.
+    gate_entries: BTreeSet<(ItemId, String)>,
 }
 
 impl KnownActions {
@@ -445,6 +449,7 @@ impl KnownActions {
     pub fn rebuild(events: &[RecordedEvent]) -> KnownActions {
         let mut known = KnownActions::default();
         for recorded in events {
+            known.follow_the_gate(recorded);
             let action = match recorded.event.action {
                 Action::Quarantine
                 | Action::Restore
@@ -473,6 +478,38 @@ impl KnownActions {
             }
         }
         known
+    }
+
+    /// Keeps the Gate's standing entries up to date with one event.
+    fn follow_the_gate(&mut self, recorded: &RecordedEvent) {
+        let event = &recorded.event;
+        let Some(item_id) = event.item_id.clone() else {
+            return;
+        };
+        if event.content_hash.is_empty() {
+            return;
+        }
+        let entry = (item_id, event.content_hash.clone());
+        match event.action {
+            Action::GateRegistered => {
+                self.gate_entries.insert(entry);
+            }
+            Action::GateRemoved => {
+                self.gate_entries.remove(&entry);
+            }
+            _ => {}
+        }
+    }
+
+    /// True when this content of this Item is a Gate entry AgentSweep
+    /// registered itself and has not taken away since (spec section 7.6).
+    ///
+    /// The entry is known by the content hash its `gate-registered` event
+    /// names, never by its look: an entry someone else wrote, or one of
+    /// AgentSweep's that was edited, is not one.
+    pub fn is_gate_entry(&self, item_id: &ItemId, content_hash: &str) -> bool {
+        self.gate_entries
+            .contains(&(item_id.clone(), content_hash.to_string()))
     }
 
     /// The known action behind this content of this Item, if there is one.

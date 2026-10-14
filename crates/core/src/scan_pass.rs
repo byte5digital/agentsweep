@@ -26,7 +26,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::adapter::Enumeration;
-use crate::allowlist::{self, Allowlist};
+use crate::allowlist::{self, Allowlist, Clearance};
 use crate::baseline::{AcceptedBy, BaselineEntry, BaselineRecord, BaselineView};
 use crate::coverage::{CoveragePlan, CoverageRecord};
 use crate::derived::{KnownActions, TrustTable};
@@ -449,7 +449,7 @@ impl<'a> ScanPass<'a> {
         let workers = self.workers.max(1).min(items.len());
         if workers <= 1 {
             let mut scanners = Scanners::with_bands(self.pack, self.bands);
-            let allowlist = Allowlist::over(self.trusted);
+            let allowlist = Allowlist::over(self.trusted).with_gate_entries(self.known);
             return items
                 .iter()
                 .map(|item| self.assess_one(&allowlist, &mut scanners, item))
@@ -466,7 +466,7 @@ impl<'a> ScanPass<'a> {
             for _ in 0..workers {
                 scope.spawn(|| {
                     let mut scanners = Scanners::with_bands(self.pack, self.bands);
-                    let allowlist = Allowlist::over(self.trusted);
+                    let allowlist = Allowlist::over(self.trusted).with_gate_entries(self.known);
                     let mut mine: Vec<(usize, Assessment)> = Vec::new();
                     while !failed.load(Ordering::Relaxed) {
                         let at = next.fetch_add(1, Ordering::Relaxed);
@@ -508,6 +508,13 @@ impl<'a> ScanPass<'a> {
         scanners: &mut Scanners<'_>,
         item: &Item,
     ) -> Result<Assessment, ScanFailure> {
+        // A Gate entry is cleared by the registration that stands now, not by
+        // its content alone, so its clearance is neither read from the cache
+        // nor kept there: once AgentSweep takes the entry away, the same
+        // content is judged again like any other hook.
+        if allowlist.clears(item) == Some(Clearance::GateEntry) {
+            return allowlist::assess(allowlist, scanners, item);
+        }
         let key = EvaluationKey::of(item, item.baseline, self.rule_pack, self.engine);
         if let Some(held) = self.cache.lookup(&key) {
             return Ok(held);

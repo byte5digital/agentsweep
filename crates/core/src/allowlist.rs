@@ -1,18 +1,30 @@
 //! T0, the Allowlist: what the later Tiers never see.
 //!
 //! Known-good Items are identified by content hash or by official source
-//! (spec section 4.1) and are skipped by every Tier below. There are two ways
-//! in: the user granted [`crate::derived::TrustTable`] Trust to this content of
-//! this kind, wherever it appears, or the Item came from an official
-//! marketplace.
+//! (spec section 4.1) and are skipped by every Tier below. There are three
+//! ways in: the user granted [`crate::derived::TrustTable`] Trust to this
+//! content of this kind, wherever it appears; the Item came from an official
+//! marketplace; or the Item is one of the Gate's own entries, exactly as
+//! AgentSweep registered it (spec section 7.6).
+//!
+//! The Gate's entries name the command line interface wherever the daemon
+//! found it beside itself. In a release that is inside the app bundle; in a
+//! developer build it is `target/debug` of a checkout, and a checkout can sit
+//! below a directory Rule 0014 reads as an Agent configuration directory, such
+//! as the `.claude/worktrees` Claude Code keeps its worktrees in. AgentSweep's
+//! own registration is a known action, so the entries it wrote are never a
+//! Finding, neither Drift nor a Rule or Heuristic hit on their command. They
+//! are known by the content hash the `gate-registered` event names, so an
+//! entry someone else wrote, or one of AgentSweep's that was edited, is judged
+//! like every other hook.
 //!
 //! Trust is what makes Restore work. Restoring an automatically quarantined
 //! Item grants Trust to its content hash in the same transaction, and without
 //! this Tier the next Scan would quarantine it again (spec section 5.4).
 
-use crate::derived::TrustTable;
+use crate::derived::{KnownActions, TrustTable};
 use crate::heuristics::{Assessment, Band};
-use crate::item::Item;
+use crate::item::{Item, Kind};
 use crate::scan::{ScanFailure, Scanners};
 
 /// Why the Allowlist cleared an Item.
@@ -22,6 +34,9 @@ pub enum Clearance {
     Trusted,
     /// The Item came from an official marketplace.
     OfficialMarketplace,
+    /// The Item is a Gate entry AgentSweep registered itself and has not
+    /// taken away since.
+    GateEntry,
 }
 
 impl Clearance {
@@ -30,6 +45,7 @@ impl Clearance {
         match self {
             Clearance::Trusted => "trusted",
             Clearance::OfficialMarketplace => "official-marketplace",
+            Clearance::GateEntry => "agentsweep-gate",
         }
     }
 }
@@ -38,12 +54,23 @@ impl Clearance {
 #[derive(Clone, Copy, Debug)]
 pub struct Allowlist<'a> {
     trusted: &'a TrustTable,
+    known: Option<&'a KnownActions>,
 }
 
 impl<'a> Allowlist<'a> {
     /// The Allowlist a Scan runs with.
     pub fn over(trusted: &'a TrustTable) -> Allowlist<'a> {
-        Allowlist { trusted }
+        Allowlist {
+            trusted,
+            known: None,
+        }
+    }
+
+    /// The same Allowlist, clearing the Gate entries these known actions say
+    /// AgentSweep registered and has not taken away.
+    pub fn with_gate_entries(mut self, known: &'a KnownActions) -> Allowlist<'a> {
+        self.known = Some(known);
+        self
     }
 
     /// Why this Item is skipped by every later Tier, or nothing when it is
@@ -55,6 +82,13 @@ impl<'a> Allowlist<'a> {
     pub fn clears(&self, item: &Item) -> Option<Clearance> {
         if self.trusted.trusts(item.kind, &item.content_hash) {
             return Some(Clearance::Trusted);
+        }
+        if item.kind == Kind::Hook
+            && self
+                .known
+                .is_some_and(|known| known.is_gate_entry(&item.id, &item.content_hash))
+        {
+            return Some(Clearance::GateEntry);
         }
         item.provenance
             .is_official()
@@ -213,5 +247,61 @@ mod tests {
         assert_eq!(cleared.band, Band::Clear);
         assert_eq!(cleared.score, 0);
         assert!(!cleared.awaits_judgement());
+    }
+
+    /// A Hook Item standing in for one Gate entry: only its kind, id and
+    /// content hash matter to the Allowlist.
+    fn gate_entry(content: &str) -> Item {
+        let mut item = instruction_file(content);
+        item.kind = Kind::Hook;
+        item
+    }
+
+    /// The known actions of a real chain the events were appended to.
+    fn known_after(events: &[Event]) -> KnownActions {
+        let directory = TempDir::new().expect("a temporary directory");
+        let log = EventLog::at(directory.path().join("events.jsonl"));
+        let keys = MemoryKeySource::empty();
+        let (mut writer, _) = EventLogWriter::open(&log, &keys).expect("an open log");
+        for event in events {
+            writer.append(event).expect("an appended event");
+        }
+        KnownActions::rebuild(&log.read(&keys).expect("a readable log").events)
+    }
+
+    fn gate(action: Action, item: &Item) -> Event {
+        Event::new(action, Actor::Auto)
+            .about(&item.id, Kind::Hook, &item.content_hash)
+            .noting("agent", "claude-code")
+    }
+
+    #[test]
+    fn a_gate_entry_agentsweep_registered_is_cleared_until_it_is_taken_away() {
+        let table = TrustTable::default();
+        let entry = gate_entry("/somewhere/.claude/worktrees/w/target/debug/agentsweep");
+
+        let registered = known_after(&[gate(Action::GateRegistered, &entry)]);
+        let allowlist = Allowlist::over(&table).with_gate_entries(&registered);
+        assert_eq!(allowlist.clears(&entry), Some(Clearance::GateEntry));
+
+        // An Allowlist that was not handed the known actions clears nothing.
+        assert_eq!(Allowlist::over(&table).clears(&entry), None);
+
+        // The entry edited is other content, and the same content as another
+        // kind is not a Gate entry.
+        let edited = gate_entry("/somewhere/else/agentsweep");
+        let mut edited_at_the_same_id = edited.clone();
+        edited_at_the_same_id.id = entry.id.clone();
+        assert_eq!(allowlist.clears(&edited_at_the_same_id), None);
+        let mut other_kind = entry.clone();
+        other_kind.kind = Kind::InstructionFile;
+        assert_eq!(allowlist.clears(&other_kind), None);
+
+        let removed = known_after(&[
+            gate(Action::GateRegistered, &entry),
+            gate(Action::GateRemoved, &entry),
+        ]);
+        let allowlist = Allowlist::over(&table).with_gate_entries(&removed);
+        assert_eq!(allowlist.clears(&entry), None);
     }
 }

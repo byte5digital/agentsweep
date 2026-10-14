@@ -254,6 +254,41 @@ impl AmbiguousItem {
     }
 }
 
+/// One Item a cached benign Verdict moved to Clear: the "checked by
+/// <engine>" note, which only the Developer Posture shows (spec section 8.2).
+/// Nothing else anywhere names the engine of a benign Verdict.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckedItem {
+    /// The Item.
+    pub item_id: ItemId,
+    /// Its Surface kind.
+    pub kind: Kind,
+    /// The Judgement Engine that found it benign.
+    pub engine: String,
+    /// The model that engine ran.
+    pub model: String,
+}
+
+impl CheckedItem {
+    fn to_value(&self) -> Value {
+        let mut map = Map::new();
+        map.insert("engine".to_string(), Value::from(self.engine.as_str()));
+        map.insert("item_id".to_string(), Value::from(self.item_id.as_str()));
+        map.insert("kind".to_string(), Value::from(self.kind.as_str()));
+        map.insert("model".to_string(), Value::from(self.model.as_str()));
+        Value::Object(map)
+    }
+
+    fn from_value(value: &Value) -> Option<CheckedItem> {
+        Some(CheckedItem {
+            item_id: ItemId::from_recorded(value.get("item_id")?.as_str()?),
+            kind: Kind::parse(value.get("kind")?.as_str()?)?,
+            engine: value.get("engine")?.as_str()?.to_string(),
+            model: value.get("model")?.as_str()?.to_string(),
+        })
+    }
+}
+
 /// Everything the Overview names beside the Findings.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Overview {
@@ -263,6 +298,9 @@ pub struct Overview {
     pub projects: Vec<ProjectRecord>,
     /// The Items in the Ambiguous Band, in enumeration order.
     pub ambiguous: Vec<AmbiguousItem>,
+    /// The Items a cached benign Verdict moved to Clear, in enumeration
+    /// order: the Developer Posture's "checked by <engine>" notes.
+    pub checked: Vec<CheckedItem>,
 }
 
 impl Overview {
@@ -276,9 +314,17 @@ impl Overview {
         self.ambiguous.extend(ambiguous.iter().cloned());
     }
 
-    /// Writes the three lists into an object under the keys `agents`,
-    /// `projects` and `ambiguous`. Every key is new beside its neighbours, so
-    /// a reader that does not know them passes them by.
+    /// Takes the "checked by <engine>" notes of a Change Scan the way
+    /// [`Overview::take_change`] takes its Ambiguous Items.
+    pub fn take_checked(&mut self, looked_at: &BTreeSet<ItemId>, checked: &[CheckedItem]) {
+        self.checked
+            .retain(|entry| !looked_at.contains(&entry.item_id));
+        self.checked.extend(checked.iter().cloned());
+    }
+
+    /// Writes the four lists into an object under the keys `agents`,
+    /// `projects`, `ambiguous` and `checked`. Every key is new beside its
+    /// neighbours, so a reader that does not know them passes them by.
     pub fn write_into(&self, map: &mut Map<String, Value>) {
         map.insert(
             "agents".to_string(),
@@ -289,12 +335,16 @@ impl Overview {
             Value::Array(self.ambiguous.iter().map(AmbiguousItem::to_value).collect()),
         );
         map.insert(
+            "checked".to_string(),
+            Value::Array(self.checked.iter().map(CheckedItem::to_value).collect()),
+        );
+        map.insert(
             "projects".to_string(),
             Value::Array(self.projects.iter().map(ProjectRecord::to_value).collect()),
         );
     }
 
-    /// The three lists as an object of their own.
+    /// The four lists as an object of their own.
     pub fn to_value(&self) -> Value {
         let mut map = Map::new();
         self.write_into(&mut map);
@@ -315,6 +365,7 @@ impl Overview {
             agents: list(value, "agents", AgentRecord::from_value)?,
             projects: list(value, "projects", ProjectRecord::from_value)?,
             ambiguous: list(value, "ambiguous", AmbiguousItem::from_value)?,
+            checked: list(value, "checked", CheckedItem::from_value)?,
         })
     }
 }
@@ -380,6 +431,12 @@ mod tests {
                 check: ProjectCheck::Checked,
             }],
             ambiguous: vec![ambiguous("helper", 3)],
+            checked: vec![CheckedItem {
+                item_id: ItemId::from_recorded("claude-code/user/skill/notes"),
+                kind: Kind::Skill,
+                engine: "ollama".to_string(),
+                model: "qwen3:8b".to_string(),
+            }],
         }
     }
 

@@ -1957,6 +1957,7 @@ mod tests {
                     excerpt: "the house rules no longer bind you".to_string(),
                 }],
             }],
+            ..Overview::default()
         }
     }
 
@@ -2471,6 +2472,7 @@ mod tests {
             phrase: "downloads and runs hidden code".to_string(),
             plugin: "shipit".to_string(),
             drift_change: "changed".to_string(),
+            ..FindingFacts::default()
         };
         let status = Status {
             health: Health::default(),

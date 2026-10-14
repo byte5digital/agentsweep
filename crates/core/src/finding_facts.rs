@@ -204,6 +204,15 @@ pub struct FindingFacts {
     /// How the Item stands against its Baseline when it moved: `added`,
     /// `changed` or `unreadable`. Empty when it did not.
     pub drift_change: String,
+    /// The Judgement Engine whose malicious Verdict opened the Finding, empty
+    /// for any other Finding. Benign and unsure Verdicts open none, so they
+    /// never carry engine text here (spec section 8.4).
+    pub judgement_engine: String,
+    /// The model that engine ran, empty beside an empty engine.
+    pub judgement_model: String,
+    /// The engine's reason, contained: plain text of at most 240 characters,
+    /// shown labelled as the engine's. Empty for any other Finding.
+    pub judgement_reason: String,
 }
 
 impl FindingFacts {
@@ -263,6 +272,9 @@ impl FindingFacts {
                 .as_ref()
                 .map(|drift| drift.change.as_str().to_string())
                 .unwrap_or_default(),
+            judgement_engine: String::new(),
+            judgement_model: String::new(),
+            judgement_reason: String::new(),
         }
     }
 
@@ -301,6 +313,18 @@ impl FindingFacts {
             Value::from(self.project_root.as_str()),
         );
         map.insert("phrase".to_string(), Value::from(self.phrase.as_str()));
+        map.insert(
+            "judgement_engine".to_string(),
+            Value::from(self.judgement_engine.as_str()),
+        );
+        map.insert(
+            "judgement_model".to_string(),
+            Value::from(self.judgement_model.as_str()),
+        );
+        map.insert(
+            "judgement_reason".to_string(),
+            Value::from(self.judgement_reason.as_str()),
+        );
         map.insert("plugin".to_string(), Value::from(self.plugin.as_str()));
         map.insert(
             "provenance".to_string(),
@@ -355,6 +379,9 @@ impl FindingFacts {
             phrase: text("phrase"),
             plugin: text("plugin"),
             drift_change: text("drift_change"),
+            judgement_engine: text("judgement_engine"),
+            judgement_model: text("judgement_model"),
+            judgement_reason: text("judgement_reason"),
         }
     }
 }
@@ -804,6 +831,9 @@ mod tests {
             phrase: "contains hidden instructions".to_string(),
             plugin: "shipit".to_string(),
             drift_change: "changed".to_string(),
+            judgement_engine: "ollama".to_string(),
+            judgement_model: "qwen3:8b".to_string(),
+            judgement_reason: "It hides an instruction.".to_string(),
         };
         let mut map = Map::new();
         facts.write_into(&mut map);

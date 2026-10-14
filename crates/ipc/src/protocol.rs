@@ -219,8 +219,8 @@ pub enum Request {
         target: String,
     },
     /// Every Receipt in the quarantine store with the path its Item was taken
-    /// from, or only those taken from at or below one path. The one request of
-    /// this list that takes a path (ADR 0008).
+    /// from, or only those taken from at or below one path. The first request
+    /// of this list that takes a path (ADR 0008).
     RevealReceipt {
         /// The original place to look for, absent for every Receipt.
         path: Option<String>,

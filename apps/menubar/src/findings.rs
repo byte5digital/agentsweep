@@ -121,7 +121,7 @@ impl Findings {
                 };
                 Follow::Refresh
             }
-            StateEvent::FindingChanged { id, state } => {
+            StateEvent::FindingChanged { id, state, .. } => {
                 let Some(at) = self.findings.iter().position(|finding| &finding.id == id) else {
                     // A Finding this list has not seen: only the status
                     // carries what it says.
@@ -891,6 +891,7 @@ pub(crate) mod tests {
         let trusted = StateEvent::FindingChanged {
             id: all[0].id.clone(),
             state: "trusted".to_string(),
+            finding: None,
         };
         assert_eq!(list.apply(&trusted), Follow::Render);
         assert_eq!(
@@ -902,6 +903,7 @@ pub(crate) mod tests {
         let stopped = StateEvent::FindingChanged {
             id: all[1].id.clone(),
             state: "stopped".to_string(),
+            finding: None,
         };
         assert_eq!(list.apply(&stopped), Follow::Refresh, "the Receipt id");
         assert_eq!(
@@ -912,6 +914,7 @@ pub(crate) mod tests {
         let gone = StateEvent::FindingChanged {
             id: all[2].id.clone(),
             state: "gone".to_string(),
+            finding: None,
         };
         assert_eq!(list.apply(&gone), Follow::Render);
         assert!(list.get(all[2].id.as_str()).is_none());
@@ -919,6 +922,7 @@ pub(crate) mod tests {
         let unknown = StateEvent::FindingChanged {
             id: FindingId::from_recorded("claude-code/user/skill/new|rule/0001|def"),
             state: "open".to_string(),
+            finding: None,
         };
         assert_eq!(list.apply(&unknown), Follow::Refresh);
     }

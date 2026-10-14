@@ -1068,7 +1068,11 @@ impl Daemon {
             let mut state = self.state.lock().expect("the state is not poisoned");
             for recorded in state.findings.iter_mut() {
                 if change(recorded) {
-                    changed.push((recorded.id.clone(), recorded.state.to_string()));
+                    changed.push((
+                        recorded.id.clone(),
+                        recorded.state.to_string(),
+                        Some(Box::new(recorded.clone())),
+                    ));
                 }
             }
             let file = StateFile::in_data_directory(&self.directory);
@@ -1080,8 +1084,8 @@ impl Daemon {
                 .expect("the health is not poisoned")
                 .count_open(&state);
         }
-        for (id, state) in changed {
-            self.publish(StateEvent::FindingChanged { id, state });
+        for (id, state, finding) in changed {
+            self.publish(StateEvent::FindingChanged { id, state, finding });
         }
         self.tell_health();
     }

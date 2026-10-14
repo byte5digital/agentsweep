@@ -630,7 +630,7 @@ impl Daemon {
     /// what stands about the rest.
     fn took(self: &Arc<Daemon>, run: ScanRun) {
         let whole = run.summary.kind == ScanKind::Full;
-        let mut changed: Vec<(FindingId, String)> = Vec::new();
+        let mut changed: Vec<(FindingId, String, Option<Box<RecordedFinding>>)> = Vec::new();
         {
             let mut state = self.state.lock().expect("the state is not poisoned");
             let before: BTreeMap<FindingId, String> = state
@@ -663,14 +663,14 @@ impl Daemon {
             for finding in &findings {
                 let now = finding.state.to_string();
                 if before.get(&finding.id) != Some(&now) {
-                    changed.push((finding.id.clone(), now));
+                    changed.push((finding.id.clone(), now, Some(Box::new(finding.clone()))));
                 }
             }
             // A Finding the last Scan knew and this one did not derive at all
             // is gone, and the Activity keeps it.
             for id in before.keys() {
                 if !findings.iter().any(|finding| &finding.id == id) {
-                    changed.push((id.clone(), "gone".to_string()));
+                    changed.push((id.clone(), "gone".to_string(), None));
                 }
             }
 
@@ -725,8 +725,8 @@ impl Daemon {
                 run.baseline
             );
         }
-        for (id, state) in changed {
-            self.publish(StateEvent::FindingChanged { id, state });
+        for (id, state, finding) in changed {
+            self.publish(StateEvent::FindingChanged { id, state, finding });
         }
         // Only a Full Scan recomputes the watch roots, and housekeeping runs
         // behind one and behind nothing else.

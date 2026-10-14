@@ -453,6 +453,10 @@ pub enum StateEvent {
         /// Where it stands now, as [`agentsweep_core::finding::FindingState`]
         /// spells it, or `gone` when it is no longer raised.
         state: String,
+        /// The Finding as the status carries it now, with its facts, absent
+        /// when it is gone. Additive: a daemon from before sends none, and a
+        /// client that does not know it reads the id and the state as before.
+        finding: Option<Box<RecordedFinding>>,
     },
     /// A line for the Activity that is not a Finding: a Rule Pack accepted,
     /// a Rule withdrawn with the Findings it took with it. It is the live
@@ -1408,9 +1412,12 @@ impl Message {
                     StateEvent::ScanFinished { summary } => {
                         map.insert("summary".to_string(), summary.to_value());
                     }
-                    StateEvent::FindingChanged { id, state } => {
+                    StateEvent::FindingChanged { id, state, finding } => {
                         map.insert("id".to_string(), Value::from(id.as_str()));
                         map.insert("state".to_string(), Value::from(state.as_str()));
+                        if let Some(finding) = finding {
+                            map.insert("finding".to_string(), finding.to_value());
+                        }
                     }
                     StateEvent::Activity { line, sequence } => {
                         map.insert("line".to_string(), Value::from(line.as_str()));
@@ -1485,6 +1492,10 @@ impl Message {
                     "finding-changed" => StateEvent::FindingChanged {
                         id: FindingId::from_recorded(text("id")?),
                         state: text("state")?.to_string(),
+                        finding: value
+                            .get("finding")
+                            .and_then(RecordedFinding::from_value)
+                            .map(Box::new),
                     },
                     "activity" => StateEvent::Activity {
                         line: text("line")?.to_string(),
@@ -1608,6 +1619,7 @@ mod tests {
         round_trip(Message::Event(StateEvent::FindingChanged {
             id: FindingId::from_recorded("claude-code/user/skill/x|rule/0001|abc"),
             state: "open".to_string(),
+            finding: None,
         }));
         round_trip(Message::Event(StateEvent::Activity {
             line: "Rule Pack 2 accepted".to_string(),
@@ -1930,6 +1942,111 @@ mod tests {
             first_seen: moment("2026-09-24T08:00:00.000Z"),
             notified_at: None,
         }
+    }
+
+    /// The keys a Finding carried on the wire before its facts did, which is
+    /// what a client from before reads and all it reads.
+    const KEYS_BEFORE_THE_FACTS: [&str; 20] = [
+        "category",
+        "content_hash",
+        "drift",
+        "file",
+        "first_seen",
+        "fixed_version",
+        "id",
+        "item_id",
+        "kind",
+        "notified_at",
+        "plain",
+        "receipt_id",
+        "rule_id",
+        "severity",
+        "source",
+        "state",
+        "status",
+        "switched",
+        "tier",
+        "title",
+    ];
+
+    /// The facts are additive: every key a client from before reads is still
+    /// there with the value it had, so such a client reads the status as it
+    /// did; a client that knows the facts reads them back; and a status from
+    /// a daemon from before reads as no facts known.
+    #[test]
+    fn an_older_client_reads_a_status_whose_findings_carry_facts() {
+        use agentsweep_core::eventlog::Actor;
+        use agentsweep_core::finding_facts::{FindingFacts, HeuristicLine, WhyNothingHappened};
+
+        let mut finding = recorded(FindingState::Stopped, Category::Threat, "rule 0001", 1);
+        finding.switched = true;
+        let plain = finding.clone();
+        finding.facts = FindingFacts {
+            actor: Some(Actor::Auto),
+            scope: "project".to_string(),
+            project_root: "/src/demo".to_string(),
+            activation: "inactive".to_string(),
+            inactive_reason: "untrusted_project".to_string(),
+            provenance: "repository".to_string(),
+            why_nothing_happened: Some(WhyNothingHappened::Probation),
+            heuristics: vec![HeuristicLine {
+                id: 520,
+                weight: 3,
+                plain: "It tells the agent to ignore what it was told.".to_string(),
+                excerpt: "ignore previous instructions".to_string(),
+            }],
+            score: 3,
+            band: "Suspicious".to_string(),
+            rule_withdrawn: true,
+        };
+        let status = Status {
+            health: Health::default(),
+            scan: None,
+            findings: vec![finding.clone()],
+            activity: Vec::new(),
+        };
+        let value = status.to_value();
+
+        let written = value["findings"][0].as_object().expect("an object");
+        let before = plain.to_value();
+        for key in KEYS_BEFORE_THE_FACTS {
+            assert_eq!(written.get(key), before.get(key), "{key}");
+        }
+
+        let back = Status::from_value(&value).expect("a readable status");
+        assert_eq!(back.findings, vec![finding]);
+
+        let mut older = value.clone();
+        let object = older["findings"][0].as_object_mut().expect("an object");
+        object.retain(|key, _| KEYS_BEFORE_THE_FACTS.contains(&key.as_str()));
+        let back = Status::from_value(&older).expect("a status from before");
+        assert_eq!(back.findings, vec![plain]);
+    }
+
+    /// The stream carries the Finding as it stands now beside its id and
+    /// state, and a client that does not know it reads the id and the state.
+    #[test]
+    fn a_finding_changed_event_carries_the_finding_when_there_is_one() {
+        let finding = recorded(FindingState::Stopped, Category::Threat, "rule 0001", 1);
+        let event = Message::Event(StateEvent::FindingChanged {
+            id: finding.id.clone(),
+            state: "stopped".to_string(),
+            finding: Some(Box::new(finding.clone())),
+        });
+        let value = event.to_value();
+        assert_eq!(value["state"], "stopped");
+        assert_eq!(Message::from_value(&value), Some(event));
+
+        let mut older = value.clone();
+        older.as_object_mut().expect("an object").remove("finding");
+        assert_eq!(
+            Message::from_value(&older),
+            Some(Message::Event(StateEvent::FindingChanged {
+                id: finding.id.clone(),
+                state: "stopped".to_string(),
+                finding: None,
+            }))
+        );
     }
 
     /// What a client offers comes from the Finding as the daemon sent it

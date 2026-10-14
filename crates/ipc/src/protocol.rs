@@ -2266,6 +2266,9 @@ mod tests {
             score: 3,
             band: "Suspicious".to_string(),
             rule_withdrawn: true,
+            phrase: "downloads and runs hidden code".to_string(),
+            plugin: "shipit".to_string(),
+            drift_change: "changed".to_string(),
         };
         let status = Status {
             health: Health::default(),

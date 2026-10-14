@@ -386,6 +386,10 @@ fn a_finding_in_an_untrusted_project_names_its_scope_root_and_activation() {
     assert_eq!(planted.facts.activation, "inactive");
     assert_eq!(planted.facts.inactive_reason, "untrusted_project");
     assert!(!planted.facts.provenance.is_empty());
+    // The Simple Posture's title is built from the phrase of the Rule in
+    // force, which the daemon reads off the Rule Pack.
+    assert_eq!(planted.facts.phrase, "downloads and runs hidden code");
+    assert_eq!(planted.facts.plugin, "");
 }
 
 /// A Suspicious skill carries one line per fired Threat Heuristic with its

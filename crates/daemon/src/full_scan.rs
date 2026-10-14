@@ -673,6 +673,13 @@ fn facts(
         .map(|placed| {
             let item = items.get(&placed.finding.item_id).copied();
             let mut facts = FindingFacts::of(&placed.finding, item);
+            if let Source::Rule(id) = placed.finding.source {
+                facts.phrase = pack
+                    .metas()
+                    .find(|meta| meta.id == id)
+                    .map(|meta| meta.phrase.clone())
+                    .unwrap_or_default();
+            }
             if placed.state == FindingState::Stopped {
                 facts.actor = quarantined
                     .for_receipt(&placed.receipt_id)

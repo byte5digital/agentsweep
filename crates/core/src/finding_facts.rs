@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use crate::baseline::{SensitiveValues, sensitive_values};
 use crate::eventlog::Actor;
 use crate::finding::{Category, Finding, FiredHeuristic, RuleStatus, Source, Tier};
-use crate::item::{Item, ItemId, Kind, Scope, sha256_hex};
+use crate::item::{Item, ItemId, Kind, Provenance, Scope, sha256_hex};
 
 /// The longest excerpt a Heuristic line carries, in characters. A match is
 /// evidence to read, not content to reproduce.
@@ -194,6 +194,16 @@ pub struct FindingFacts {
     /// True when the Finding is stopped and the Rule that stopped it is not in
     /// the Rule Pack in force any more (spec sections 6.4 and 8.4).
     pub rule_withdrawn: bool,
+    /// The verdict phrase of the Rule or Exposure Heuristic behind the
+    /// Finding, which the Simple Posture builds its title from. Empty for any
+    /// other source and for a Rule the pack in force no longer holds.
+    pub phrase: String,
+    /// The name of the plugin the Item came with, empty unless its Provenance
+    /// is a plugin. The Simple Posture names a plugin's part by its plugin.
+    pub plugin: String,
+    /// How the Item stands against its Baseline when it moved: `added`,
+    /// `changed` or `unreadable`. Empty when it did not.
+    pub drift_change: String,
 }
 
 impl FindingFacts {
@@ -241,6 +251,18 @@ impl FindingFacts {
             score,
             band,
             rule_withdrawn: false,
+            phrase: String::new(),
+            plugin: item
+                .and_then(|item| match &item.provenance {
+                    Provenance::Plugin { id } => id.split('@').next().map(str::to_string),
+                    _ => None,
+                })
+                .unwrap_or_default(),
+            drift_change: finding
+                .drift
+                .as_ref()
+                .map(|drift| drift.change.as_str().to_string())
+                .unwrap_or_default(),
         }
     }
 
@@ -258,6 +280,10 @@ impl FindingFacts {
         );
         map.insert("band".to_string(), Value::from(self.band.as_str()));
         map.insert(
+            "drift_change".to_string(),
+            Value::from(self.drift_change.as_str()),
+        );
+        map.insert(
             "heuristics".to_string(),
             Value::Array(
                 self.heuristics
@@ -274,6 +300,8 @@ impl FindingFacts {
             "project_root".to_string(),
             Value::from(self.project_root.as_str()),
         );
+        map.insert("phrase".to_string(), Value::from(self.phrase.as_str()));
+        map.insert("plugin".to_string(), Value::from(self.plugin.as_str()));
         map.insert(
             "provenance".to_string(),
             Value::from(self.provenance.as_str()),
@@ -324,6 +352,9 @@ impl FindingFacts {
                 .get("rule_withdrawn")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            phrase: text("phrase"),
+            plugin: text("plugin"),
+            drift_change: text("drift_change"),
         }
     }
 }
@@ -582,6 +613,31 @@ mod tests {
     }
 
     #[test]
+    fn a_plugin_part_names_its_plugin_and_a_moved_item_its_change() {
+        let mut item = skill(Scope::User);
+        item.provenance = Provenance::Plugin {
+            id: "shipit@community-tools".to_string(),
+        };
+        let mut finding = finding_on(&item, Source::Drift);
+        finding.drift = Some(crate::drift::Drift {
+            change: crate::drift::Change::Added,
+            since: None,
+            accepted_hash: String::new(),
+            last_seen_hash: item.content_hash.clone(),
+            line: "new since your last Scan".to_string(),
+            detail: Vec::new(),
+        });
+        let facts = FindingFacts::of(&finding, Some(&item));
+        assert_eq!(facts.plugin, "shipit");
+        assert_eq!(facts.drift_change, "added");
+        assert_eq!(facts.phrase, "", "the phrase is the Rule Pack's to give");
+
+        let still = FindingFacts::of(&finding_on(&skill(Scope::User), Source::Rule(1)), None);
+        assert_eq!(still.plugin, "");
+        assert_eq!(still.drift_change, "");
+    }
+
+    #[test]
     fn an_item_not_at_hand_still_names_its_scope_from_its_id() {
         let item = skill(Scope::Project(PathBuf::from("/src/my skill/demo")));
         let facts = FindingFacts::of(&finding_on(&item, Source::Rule(1)), None);
@@ -745,6 +801,9 @@ mod tests {
             score: 3,
             band: "Suspicious".to_string(),
             rule_withdrawn: true,
+            phrase: "contains hidden instructions".to_string(),
+            plugin: "shipit".to_string(),
+            drift_change: "changed".to_string(),
         };
         let mut map = Map::new();
         facts.write_into(&mut map);

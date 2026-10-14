@@ -68,4 +68,7 @@ agentsweep-adapter-workspace = { workspace = true, features = ["testing"] }
 # Signs the test Rule Packs a fixture Rule Feed serves, with the development
 # keys the binary pins until the real key pairs exist.
 agentsweep-core = { workspace = true, features = ["daemon", "development-keys"] }
+# The Rule Pack release workflow's own release writer and signing step, so a
+# test proves the client accepts what the workflow publishes.
+agentsweep-xtask = { path = "../xtask" }
 tempfile = "3.27.0"

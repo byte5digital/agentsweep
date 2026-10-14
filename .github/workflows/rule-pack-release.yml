@@ -1,0 +1,173 @@
+name: Rule Pack release
+
+# A Rule ships within hours of an incident without an app release (spec
+# section 9.4). Pushing a protected `rules-v<N>` tag builds, signs and
+# verifies Rule Pack N, publishes it as the release `rules-v<N>` (never the
+# latest release, so the updater's `releases/latest/download/latest.json`
+# keeps pointing at the app), attests its assets, and only then points the
+# feed index at it, so the index never names a release that does not exist.
+on:
+  push:
+    tags:
+      - "rules-v*"
+
+permissions:
+  contents: read
+
+# Two packs are never released at once: the feed index is a single file.
+concurrency:
+  group: rule-pack-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 3
+
+jobs:
+  release:
+    name: Build, sign, verify and publish the Rule Pack
+    # The corpus runner reads Fixtures through the macOS Surface Adapters, so
+    # the pack is proven where the product runs, as in CI.
+    runs-on: macos-14
+    environment:
+      name: release
+    permissions:
+      # The release, its assets and the commit to the `feed` branch.
+      contents: write
+      # GitHub artifact attestations for every asset.
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_DIR: ${{ runner.temp }}/rule-pack-release
+      INDEX_DIR: ${{ runner.temp }}/rule-pack-index
+      XTASK: target/debug/agentsweep-xtask
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: .github/scripts/install-toolchain.sh
+
+      # The build tool is compiled before any secret is in the environment, so
+      # no build script ever runs beside a secret key. Its signer is the
+      # minisign crate from crates.io, locked like every other dependency.
+      - name: Build the build tool
+        run: cargo build -p agentsweep-xtask --locked
+
+      # N is strictly greater than the bundled pack's version and than the
+      # pack version the feed index holds. Without a `feed` branch there is no
+      # index yet; any other failure to ask for it stops the release.
+      - name: Hold the tag to the version gate
+        id: gate
+        run: |
+          index="${RUNNER_TEMP}/feed-index-now.json"
+          if git ls-remote --exit-code --heads origin feed > /dev/null; then
+            git fetch --no-tags --depth=1 origin feed
+            git show FETCH_HEAD:rules/latest.json > "${index}"
+            version="$("${XTASK}" pack-gate "${GITHUB_REF_NAME}" --index "${index}")"
+          else
+            asked=$?
+            if [ "${asked}" -ne 2 ]; then
+              echo "The feed branch could not be asked for (git ls-remote exited ${asked})." >&2
+              exit 1
+            fi
+            version="$("${XTASK}" pack-gate "${GITHUB_REF_NAME}")"
+          fi
+          echo "pack_version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run every Fixture of every Rule
+        run: |
+          "${XTASK}" corpus
+
+      # manifest.json and an uncompressed pack.tar of the rules/ and iocs/
+      # trees, released at the moment of this run.
+      - name: Build the release
+        env:
+          PACK_VERSION: ${{ steps.gate.outputs.pack_version }}
+        run: |
+          "${XTASK}" pack --pack-version "${PACK_VERSION}" --out "${RELEASE_DIR}"
+
+      # One detached, prehashed signature per Rule Pack secret key present:
+      # the active key, and during a planned rotation the next key as well
+      # (ADR 0006). The keys and their passwords reach this one process
+      # through its environment and are never written to a file or echoed.
+      - name: Sign the manifest with every Rule Pack key
+        env:
+          RULE_PACK_SECRET_KEY: ${{ secrets.RULE_PACK_SECRET_KEY }}
+          RULE_PACK_SECRET_KEY_PASSWORD: ${{ secrets.RULE_PACK_SECRET_KEY_PASSWORD }}
+          RULE_PACK_NEXT_SECRET_KEY: ${{ secrets.RULE_PACK_NEXT_SECRET_KEY }}
+          RULE_PACK_NEXT_SECRET_KEY_PASSWORD: ${{ secrets.RULE_PACK_NEXT_SECRET_KEY_PASSWORD }}
+        run: |
+          "${XTASK}" pack-sign "${RELEASE_DIR}"
+
+      # The core's own verifier against the keys pinned in this commit: a pack
+      # the shipped client would refuse is never published.
+      - name: Verify the signed release as the client would
+        env:
+          PACK_VERSION: ${{ steps.gate.outputs.pack_version }}
+        run: |
+          "${XTASK}" pack-verify "${RELEASE_DIR}" --pack-version "${PACK_VERSION}"
+
+      - name: Attest the release assets
+        # Placeholder SHA: pin the commit of the version named below before the first run.
+        uses: actions/attest-build-provenance@0000000000000000000000000000000000000000 # v3
+        with:
+          subject-path: |
+            ${{ env.RELEASE_DIR }}/manifest.json
+            ${{ env.RELEASE_DIR }}/*.minisig
+            ${{ env.RELEASE_DIR }}/pack.tar
+
+      # A draft first, so no client sees a release without its assets; then
+      # exactly the three kinds of asset; then published, never as the latest
+      # release (publishing a draft would otherwise make it the latest).
+      - name: Create the release, never the latest one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACK_VERSION: ${{ steps.gate.outputs.pack_version }}
+        run: |
+          id="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+            -f tag_name="${GITHUB_REF_NAME}" \
+            -f name="Rule Pack ${PACK_VERSION}" \
+            -f body="Rule Pack ${PACK_VERSION}, signed for the AgentSweep Rule Feed." \
+            -F draft=true \
+            -F prerelease=false \
+            -f make_latest=false \
+            --jq .id)"
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${RELEASE_DIR}/manifest.json" \
+            "${RELEASE_DIR}"/*.minisig \
+            "${RELEASE_DIR}/pack.tar"
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${id}" \
+            -F draft=false \
+            -f make_latest=false \
+            > /dev/null
+
+      # Only now that the release exists does the index point at it. The commit
+      # holds rules/latest.json with only the pack version; a push that is not
+      # a fast-forward fails rather than overwrite a newer index.
+      - name: Point the feed index at the release
+        env:
+          PACK_VERSION: ${{ steps.gate.outputs.pack_version }}
+        run: |
+          "${XTASK}" pack-index "${PACK_VERSION}" --out "${INDEX_DIR}"
+          export GIT_INDEX_FILE="${RUNNER_TEMP}/feed-git-index"
+          rm -f "${GIT_INDEX_FILE}"
+          parent=()
+          if git ls-remote --exit-code --heads origin feed > /dev/null; then
+            git fetch --no-tags --depth=1 origin feed
+            git read-tree FETCH_HEAD
+            parent=(-p FETCH_HEAD)
+          fi
+          blob="$(git hash-object -w "${INDEX_DIR}/latest.json")"
+          git update-index --add --cacheinfo "100644,${blob},rules/latest.json"
+          tree="$(git write-tree)"
+          commit="$(git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit-tree "${tree}" "${parent[@]}" -m "Point the Rule Feed at Rule Pack ${PACK_VERSION}")"
+          git push origin "${commit}:refs/heads/feed"
+
+      # Nothing secret is ever written to disk; this removes what the run left
+      # under the runner's temporary directory, whatever the outcome.
+      - name: Remove the release workspace
+        if: always()
+        run: rm -rf "${RELEASE_DIR}" "${INDEX_DIR}" "${RUNNER_TEMP}/feed-index-now.json" "${RUNNER_TEMP}/feed-git-index"

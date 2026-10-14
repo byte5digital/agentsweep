@@ -9,9 +9,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use agentsweep_core::pack::{Manifest, STATEMENT_FILE};
-use agentsweep_core::pack_archive::{self, ARCHIVE_FILE};
+use agentsweep_core::pack_signature::PINNED_KEYS;
 use agentsweep_core::rules::RulePack;
-use agentsweep_xtask::{benign, corpus, iocs, repo_root};
+use agentsweep_xtask::{benign, corpus, iocs, pack_release, repo_root};
 
 const USAGE: &str = "\
 agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
@@ -35,6 +35,18 @@ agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
         --statement             instead, write the bundled pack's own statement,
                                 pack.json at the repository root, with the options
                                 above and no file hashes
+    pack-gate <tag> [--index <file>]
+                                hold a release tag rules-v<N> to the version gate: N is
+                                strictly greater than the bundled pack's version and the
+                                pack_version of the feed index, when one is given; prints N
+    pack-sign <dir>             sign the release's manifest.json with every Rule Pack
+                                secret key in the environment (RULE_PACK_SECRET_KEY and,
+                                during a rotation, RULE_PACK_NEXT_SECRET_KEY, each with
+                                an optional _PASSWORD variable), one <KEY ID>.minisig each
+    pack-verify <dir> [--pack-version <n>]
+                                verify a signed release against the keys this commit pins,
+                                as the shipped client would, and report which key signed it
+    pack-index <n> --out <dir>  write the feed index latest.json pointing at pack <n>
 ";
 
 fn main() -> ExitCode {
@@ -51,6 +63,10 @@ fn main() -> ExitCode {
         }
         "render-iocs" => render_iocs(arguments.iter().any(|argument| argument == "--check")),
         "pack" => build_pack(&arguments[1..]),
+        "pack-gate" => gate_pack(&arguments[1..]),
+        "pack-sign" => sign_pack(&arguments[1..]),
+        "pack-verify" => verify_pack(&arguments[1..]),
+        "pack-index" => write_pack_index(&arguments[1..]),
         other => Err(format!("`{other}` is not a command\n\n{USAGE}")),
     };
 
@@ -253,12 +269,8 @@ fn build_pack(arguments: &[String]) -> Result<String, String> {
         ));
     }
 
-    fs::create_dir_all(&out).map_err(|error| format!("{}: {error}\n", out.display()))?;
-    let path = manifest.write(&out).map_err(|error| format!("{error}\n"))?;
-    let archive = pack_archive::write(&root, &manifest).map_err(|error| format!("{error}\n"))?;
-    let archive_path = out.join(ARCHIVE_FILE);
-    fs::write(&archive_path, archive)
-        .map_err(|error| format!("{}: {error}\n", archive_path.display()))?;
+    let (path, archive_path) = pack_release::write_release(&root, &manifest, &out)
+        .map_err(|error| format!("{error}\n"))?;
     Ok(format!(
         "pack {} for engine {} and up, released {}, {} files, bands {} and {}\n{}\n{}\n",
         manifest.pack_version,
@@ -270,6 +282,114 @@ fn build_pack(arguments: &[String]) -> Result<String, String> {
         path.display(),
         archive_path.display()
     ))
+}
+
+/// The version gate of a Rule Pack release: prints N alone, so the workflow
+/// can read it, or refuses with a sentence saying which version it is not
+/// newer than.
+fn gate_pack(arguments: &[String]) -> Result<String, String> {
+    let mut tag = None;
+    let mut index = None;
+    let mut rest = arguments.iter();
+    while let Some(argument) = rest.next() {
+        match argument.as_str() {
+            "--index" => {
+                let path = rest
+                    .next()
+                    .ok_or_else(|| format!("--index takes a file\n\n{USAGE}"))?;
+                let text =
+                    fs::read_to_string(path).map_err(|error| format!("{path}: {error}\n"))?;
+                index =
+                    Some(pack_release::read_index(&text).map_err(|error| format!("{error}\n"))?);
+            }
+            other if tag.is_none() && !other.starts_with('-') => tag = Some(other.to_string()),
+            other => {
+                return Err(format!(
+                    "`{other}` is not an option of pack-gate\n\n{USAGE}"
+                ));
+            }
+        }
+    }
+    let tag = tag.ok_or_else(|| format!("pack-gate takes the release tag\n\n{USAGE}"))?;
+    let version = pack_release::gate(&tag, Manifest::bundled().pack_version, index)
+        .map_err(|error| format!("{error}\n"))?;
+    Ok(format!("{version}\n"))
+}
+
+/// Signs a release with every Rule Pack secret key in the environment.
+fn sign_pack(arguments: &[String]) -> Result<String, String> {
+    let [directory] = arguments else {
+        return Err(format!("pack-sign takes the release directory\n\n{USAGE}"));
+    };
+    let keys = pack_release::keys_from(|name| std::env::var(name).ok())
+        .map_err(|error| format!("{error}\n"))?;
+    let release = PathBuf::from(directory);
+    let ids = pack_release::sign(&release, &keys).map_err(|error| format!("{error}\n"))?;
+    let mut report = String::new();
+    for id in ids {
+        report.push_str(&format!("signed the manifest with the key {id}\n"));
+    }
+    Ok(report)
+}
+
+/// Verifies a signed release against the keys this commit pins.
+fn verify_pack(arguments: &[String]) -> Result<String, String> {
+    let mut directory = None;
+    let mut expected = None;
+    let mut rest = arguments.iter();
+    while let Some(argument) = rest.next() {
+        match argument.as_str() {
+            "--pack-version" => {
+                let value = rest
+                    .next()
+                    .ok_or_else(|| format!("--pack-version takes a value\n\n{USAGE}"))?;
+                expected = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| "the pack version is a monotonic integer\n".to_string())?,
+                );
+            }
+            other if directory.is_none() && !other.starts_with('-') => {
+                directory = Some(PathBuf::from(other));
+            }
+            other => {
+                return Err(format!(
+                    "`{other}` is not an option of pack-verify\n\n{USAGE}"
+                ));
+            }
+        }
+    }
+    let directory =
+        directory.ok_or_else(|| format!("pack-verify takes the release directory\n\n{USAGE}"))?;
+    let verified =
+        pack_release::verify(&directory, &PINNED_KEYS).map_err(|error| format!("{error}\n"))?;
+    if let Some(expected) = expected
+        && verified.manifest.pack_version != expected
+    {
+        return Err(format!(
+            "refused: the manifest states Rule Pack {}, and the release is rules-v{expected}\n",
+            verified.manifest.pack_version
+        ));
+    }
+    Ok(verified.report())
+}
+
+/// Writes the feed index pointing at one pack version.
+fn write_pack_index(arguments: &[String]) -> Result<String, String> {
+    let [version, flag, out] = arguments else {
+        return Err(format!("pack-index takes <n> --out <dir>\n\n{USAGE}"));
+    };
+    if flag != "--out" {
+        return Err(format!(
+            "`{flag}` is not an option of pack-index\n\n{USAGE}"
+        ));
+    }
+    let version: u64 = version
+        .parse()
+        .map_err(|_| "the pack version is a monotonic integer\n".to_string())?;
+    let path = pack_release::write_index(&PathBuf::from(out), version)
+        .map_err(|error| format!("{error}\n"))?;
+    Ok(format!("{}\n", path.display()))
 }
 
 /// The moment this runs, in RFC 3339 to the second, UTC.

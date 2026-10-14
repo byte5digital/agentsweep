@@ -20,6 +20,12 @@ agentsweep-adapter-codex.workspace = true
 agentsweep-adapter-workspace.workspace = true
 agentsweep-core.workspace = true
 flate2 = "1.1.10"
+# The minisign compatible signer of a Rule Pack release: one detached,
+# prehashed signature over the manifest per Rule Pack secret key the release
+# workflow's environment holds (spec section 9.4). It is built from crates.io
+# with `--locked` like every other tool CI builds, and it runs in the release
+# workflow alone: no shipped binary signs anything.
+minisign = "0.10.0"
 serde_json = "1.0.151"
 tar = { version = "0.4.46", default-features = false }
 # Only the parser: the corpus runner reads an `item.toml` and writes nothing.

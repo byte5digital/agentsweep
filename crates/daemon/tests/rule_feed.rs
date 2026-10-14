@@ -1391,6 +1391,99 @@ fn the_fetch_is_daily_and_a_feed_unreachable_for_thirty_days_raises_the_notice()
     );
 }
 
+/// A release as the Rule Pack release workflow makes it: the repository's
+/// pack copied into a temporary root, built by the build tool's release
+/// writer and signed by its signing step with the development active secret
+/// half, then read back from the release directory as the feed would serve
+/// it.
+fn signed_by_the_release_step(version: u64) -> Release {
+    use agentsweep_core::pack_signature::development::ACTIVE_SECRET;
+    use agentsweep_xtask::pack_release::{self, SigningKey};
+
+    let temporary = tempfile::tempdir().expect("a temporary directory");
+    let root = temporary.path().join("pack");
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for tree in PACK_TREES {
+        copy_tree(&repository.join(tree), &root.join(tree));
+    }
+    let manifest =
+        Manifest::of_pack(&root, version, "0.1.0", Bands::V1, RELEASED).expect("a manifest");
+    let out = temporary.path().join("release");
+    pack_release::write_release(&root, &manifest, &out).expect("a release");
+    let key = SigningKey::read(ACTIVE_SECRET, None, "the development active key").expect("a key");
+    let ids = pack_release::sign(&out, &[key]).expect("signed");
+
+    let read = |name: &str| std::fs::read(out.join(name)).expect("a release asset");
+    Release {
+        manifest: read(MANIFEST_FILE),
+        archive: read(ARCHIVE_FILE),
+        signatures: ids
+            .iter()
+            .map(|id| {
+                let text = String::from_utf8(read(&format!("{id}.minisig"))).expect("text");
+                (id.clone(), text)
+            })
+            .collect(),
+    }
+}
+
+/// The release workflow's own signing step makes what the client accepts:
+/// the daemon takes a release signed by it, and refuses one whose signature
+/// file is renamed to a wrong key id, or whose manifest was altered after
+/// signing.
+#[test]
+fn a_release_signed_by_the_release_workflow_is_accepted_and_a_tampered_one_is_refused() {
+    let sandbox = Sandbox::with_a_planted_skill("release-step");
+    let feed = FeedServer::start();
+    let daemon = sandbox.start(&feed, false);
+    let fetch = || daemon.daemon().fetch_rule_feed();
+
+    // The signature filed under a key id nobody pins: the client finds no
+    // signature by a pinned key at all.
+    let mut renamed = signed_by_the_release_step(2);
+    assert_eq!(renamed.signatures.len(), 1);
+    renamed.signatures[0].0 = "0123456789ABCDEF".to_string();
+    feed.offer_index(2);
+    feed.offer_release(2, &renamed);
+    assert!(
+        matches!(fetch(), FeedOutcome::Refused(why) if why.contains("no pinned key signed")),
+        "a signature under a wrong key id is refused"
+    );
+
+    // Filed under the standby key's id, which did not make it.
+    let mut posing = signed_by_the_release_step(3);
+    posing.signatures[0].0 =
+        agentsweep_core::pack_signature::development::pinned(KeyRole::Standby).key_id();
+    feed.offer_index(3);
+    feed.offer_release(3, &posing);
+    assert!(
+        matches!(fetch(), FeedOutcome::Refused(why) if why.contains("verifies")),
+        "a signature under another pinned key's id is refused"
+    );
+
+    // The manifest altered after signing.
+    let mut altered = signed_by_the_release_step(4);
+    let text = String::from_utf8(altered.manifest.clone()).expect("a manifest");
+    altered.manifest = text
+        .replacen(RELEASED, "2026-10-02T09:30:00Z", 1)
+        .into_bytes();
+    assert_ne!(altered.manifest, text.into_bytes());
+    feed.offer_index(4);
+    feed.offer_release(4, &altered);
+    assert!(
+        matches!(fetch(), FeedOutcome::Refused(why) if why.contains("verifies")),
+        "a manifest altered after signing is refused"
+    );
+    assert_eq!(daemon.daemon().pack_in_force().origin, PackOrigin::Bundled);
+
+    // And the release as the signing step made it is accepted.
+    feed.offer_index(5);
+    feed.offer_release(5, &signed_by_the_release_step(5));
+    assert_eq!(fetch(), FeedOutcome::Accepted { pack_version: 5 });
+    wait_for_the_pack_scan(daemon.daemon());
+    assert_eq!(daemon.daemon().pack_in_force().manifest.pack_version, 5);
+}
+
 /// The same Health with no Scan running and no Finding open, which is where
 /// the Rule Pack notices take the headline: a Scan in flight and open
 /// Findings outrank them (spec section 6.6).

@@ -190,6 +190,8 @@ impl ChangeScan<'_> {
                 ambiguous: judged.ambiguous,
                 ..Default::default()
             },
+            // Only a Full Scan checks the Gate's registration.
+            gate_lines: None,
         }))
     }
 }

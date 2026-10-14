@@ -12,9 +12,11 @@
 //! accepts the Hook Item the write left and the next Scan raises no Drift on
 //! it (spec section 4.6.4).
 //!
-//! When to register and when to check is not decided here: the check on every
-//! Full Scan and the switch in Settings come with their own tickets and call
-//! these two functions.
+//! Every Full Scan calls [`verify`] for every Agent it detected, before it
+//! enumerates (spec section 7.6): the mending write is then already in the
+//! Event Log when the Scan rebuilds its known actions, so the Scan that mends
+//! reads the fresh entries `unchanged`. The switch in Settings comes with its
+//! own ticket and calls [`register`] and [`remove`].
 
 use std::path::Path;
 
@@ -22,8 +24,9 @@ use agentsweep_core::adapter::SurfaceAdapter;
 use agentsweep_core::chain::ChainError;
 use agentsweep_core::eventlog::{Action, Actor, Event};
 use agentsweep_core::gate_registration::{
-    AtomicWriter, GateCommand, GateEntry, GateError, GateWrite,
+    AtomicWriter, GateCheck, GateCommand, GateEntry, GateError, GateWrite,
 };
+use agentsweep_core::health::GateTrouble;
 use agentsweep_core::host::Host;
 use agentsweep_core::item::Kind;
 use agentsweep_core::keychain::KeySource;
@@ -113,6 +116,39 @@ pub fn remove(
         );
     }
     Ok(write)
+}
+
+/// Verifies one detected Agent's Gate entries and mends them, which is what
+/// every Full Scan does for every Agent it detected (spec section 7.6).
+///
+/// Answers with the Health line the Agent is to carry, or nothing when the
+/// check passed or the mending write went through. A mending write is the
+/// daemon's own and a known action: it raises no Finding and notifies
+/// nobody. Managed policy that drops the user's hooks writes nothing. The
+/// user's own switch is never written back; the entries are kept in place
+/// beside it and the line says the Gate cannot run there.
+pub fn verify(
+    adapter: &dyn SurfaceAdapter,
+    host: &Host,
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+    command: &GateCommand,
+) -> Option<GateTrouble> {
+    let agent = adapter.descriptor().agent;
+    let mended = |kept: Option<GateTrouble>| match register(adapter, host, directory, keys, command)
+    {
+        Ok(_) => kept,
+        Err(error) => {
+            say!("the Gate could not be registered with {agent}: {error}");
+            Some(GateTrouble::RegistrationFailed)
+        }
+    };
+    match adapter.check_gate(host, command) {
+        GateCheck::NoGate | GateCheck::Registered => None,
+        GateCheck::ManagedPolicy => Some(GateTrouble::ManagedPolicy),
+        GateCheck::SwitchedOffByUser => mended(Some(GateTrouble::SwitchedOffByUser)),
+        GateCheck::Missing(_) | GateCheck::Unreadable(_) => mended(None),
+    }
 }
 
 /// One `gate-removed` event per entry taken away, then one `gate-registered`

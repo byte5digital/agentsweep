@@ -34,6 +34,8 @@ use agentsweep_core::finding::{FindingId, FindingState, RuleStatus, Severity, So
 use agentsweep_core::finding::{RULE_WITHDRAWN_GONE, RULE_WITHDRAWN_STOPPED};
 use agentsweep_core::finding_facts::FindingFacts;
 use agentsweep_core::gate_facts::{self, GateFacts};
+use agentsweep_core::gate_registration::GateCommand;
+use agentsweep_core::health::GateLine;
 use agentsweep_core::heuristics::Band;
 use agentsweep_core::item::{Item, ItemId, Kind, Scope};
 use agentsweep_core::keychain::KeySource;
@@ -126,6 +128,10 @@ pub struct ScanRun {
     /// project roots and the Ambiguous Items; after a Change Scan only the
     /// Ambiguous Items among the ones it looked at.
     pub overview: Overview,
+    /// The Gate lines the registration check left, one per detected Agent
+    /// where the Gate cannot stand. Absent when this Scan did not check: a
+    /// Change Scan, or a Full Scan that was not handed the Gate's command.
+    pub gate_lines: Option<Vec<GateLine>>,
 }
 
 /// What a Scan reports as it goes.
@@ -174,6 +180,7 @@ pub fn run(
         workers: BACKGROUND_WORKERS,
         progress,
         acts: true,
+        gate: None,
     }
     .run(trigger)
 }
@@ -208,6 +215,10 @@ pub struct FullScan<'a> {
     /// proves bad and take out again what came back. The daemon's Scans do; a
     /// measurement of the budgets never touches the machine it measures.
     pub acts: bool,
+    /// The command the Gate runs, when this Scan verifies and mends the
+    /// Gate's registration with every detected Agent (spec section 7.6).
+    /// The daemon's Full Scans do; a measurement never does.
+    pub gate: Option<&'a GateCommand>,
 }
 
 impl FullScan<'_> {
@@ -217,6 +228,16 @@ impl FullScan<'_> {
         let began = std::time::Instant::now();
 
         let inventory = pool(self.machine, &self.access);
+        let inventory = pool(self.machine);
+        // The registration check runs after detection and before the
+        // enumeration, so a mending write is already in the Event Log when
+        // the pass rebuilds its known actions: the fresh entries read
+        // `unchanged`, and an entry replaced under another path is gone
+        // before anything could raise a Finding on it. An entry an attacker
+        // edited is still enumerated, beside the fresh one, as Drift.
+        let gate_lines = self.gate.map(|command| {
+            check_the_gate(self.machine, &inventory, self.directory, self.keys, command)
+        });
         let adapters = adapters();
         let mut survey = survey(
             self.machine,
@@ -280,8 +301,42 @@ impl FullScan<'_> {
             facts: judged.facts,
             gate_facts: judged.gate_facts,
             overview,
+            gate_lines,
         })
     }
+}
+
+/// Verifies and mends the Gate's registration with every Agent the detection
+/// found, and answers with the Gate lines Health is to carry. An Agent that
+/// was not detected is neither written to nor named.
+fn check_the_gate(
+    machine: &Machine,
+    inventory: &Pooled,
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+    command: &GateCommand,
+) -> Vec<GateLine> {
+    let host = machine.host(Vec::new());
+    let mut lines = Vec::new();
+    for adapter in agents() {
+        let descriptor = adapter.descriptor();
+        let detected = inventory
+            .agents
+            .iter()
+            .any(|(agent, installed)| *installed && agent == descriptor.agent);
+        if !detected {
+            continue;
+        }
+        if let Some(trouble) = crate::gate::verify(&*adapter, &host, directory, keys, command) {
+            lines.push(GateLine {
+                agent: descriptor.agent.to_string(),
+                name: descriptor.display_name.to_string(),
+                trouble,
+            });
+        }
+    }
+    lines.sort_by_key(|line| line.trouble);
+    lines
 }
 
 /// What the Agents' own registries say this machine holds.

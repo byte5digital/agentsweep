@@ -29,6 +29,7 @@ use agentsweep_core::evaluation::EvaluationCache;
 use agentsweep_core::eventlog::{EventLog, PackChange, PackRules, RulePackRecord};
 use agentsweep_core::finding::{Category, Finding, FindingId, FindingState};
 use agentsweep_core::gate_facts::GateRecord;
+use agentsweep_core::gate_registration::GateCommand;
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
 use agentsweep_core::integrity::ResetUnanswered;
 use agentsweep_core::item::Scope;
@@ -90,6 +91,11 @@ pub struct Tuning {
     /// for a developer run, so a test or a hand run never reaches an Ollama
     /// on this Mac unless it says so.
     pub detect_ollama: Option<bool>,
+    /// The command the Gate runs, which every Full Scan verifies with every
+    /// detected Agent: the command line interface beside this daemon in the
+    /// bundle. Absent when there is no such path, and then nothing is
+    /// registered.
+    pub gate: Option<GateCommand>,
 }
 
 impl Default for Tuning {
@@ -103,6 +109,7 @@ impl Default for Tuning {
             feed: FeedTuning::default(),
             folders: Arc::new(Disk),
             detect_ollama: None,
+            gate: crate::gate::bundled_command(),
         }
     }
 }
@@ -116,6 +123,7 @@ impl std::fmt::Debug for Tuning {
             .field("pack", &self.pack)
             .field("feed", &self.feed)
             .field("detect_ollama", &self.detect_ollama)
+            .field("gate", &self.gate)
             .finish_non_exhaustive()
     }
 }
@@ -668,6 +676,8 @@ impl Daemon {
                     workers,
                     progress: &watching,
                     acts: true,
+                    // The Gate is always on until its switch arrives.
+                    gate: self.tuning.gate.as_ref(),
                 }
                 .run(trigger);
                 match run {
@@ -827,6 +837,10 @@ impl Daemon {
                 health.items = run.summary.items;
                 health.projects_need_permission =
                     crate::permission::needing_permission(&state.overview);
+            }
+            // A line clears on the first Full Scan whose check passes.
+            if let Some(lines) = &run.gate_lines {
+                health.gate_lines = lines.clone();
             }
             health.count_open(&state);
         }

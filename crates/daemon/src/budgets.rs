@@ -78,8 +78,10 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
         cache: &cache,
         workers: BACKGROUND_WORKERS,
         progress: &Unwatched,
-        // A measurement reads the machine and never acts on it.
+        // A measurement reads the machine and never acts on it, and never
+        // registers the Gate there either.
         acts: false,
+        gate: None,
     };
     let cold = scan.run(Trigger::DaemonStart)?;
     cache.sweep();

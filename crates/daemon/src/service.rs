@@ -27,7 +27,7 @@ use agentsweep_core::chain::ChainState;
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::evaluation::EvaluationCache;
 use agentsweep_core::eventlog::{EventLog, PackChange, PackRules, RulePackRecord};
-use agentsweep_core::finding::{Finding, FindingId, FindingState};
+use agentsweep_core::finding::{Category, Finding, FindingId, FindingState};
 use agentsweep_core::gate_facts::GateRecord;
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
 use agentsweep_core::integrity::ResetUnanswered;
@@ -39,6 +39,7 @@ use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan_pass::{BACKGROUND_WORKERS, ScanKind, on_demand_workers};
 use agentsweep_core::settings::{Settings, SettingsError, SettingsFile, SettingsWriter};
 use agentsweep_core::state::{RecordedFinding, State, StateFile, StateWriter, Trigger};
+use agentsweep_ipc::gate::{GateRequest, GateVerdict};
 use agentsweep_ipc::peer::PeerCheck;
 use agentsweep_ipc::protocol::{
     ActivityLine, Hello, Message, Refusal, Request, RequestError, StateEvent, Status,
@@ -451,6 +452,27 @@ impl Daemon {
             .expect("the state is not poisoned")
             .gate
             .clone()
+    }
+
+    /// The Gate's verdict on one request, from the pooled roots and the Gate
+    /// facts the state holds (spec section 7.3). It holds the state only long
+    /// enough to read them: it never scans, never reads a Surface and never
+    /// waits for a running Scan, which writes the state only at its end. A
+    /// block is neither logged nor counted (spec section 7.6), and nothing of
+    /// the request is ever written to the log.
+    pub fn gate(&self, request: &GateRequest) -> GateVerdict {
+        let state = self.state.lock().expect("the state is not poisoned");
+        let open_threats: BTreeSet<FindingId> = state
+            .open()
+            .filter(|finding| finding.category == Category::Threat)
+            .map(|finding| finding.id.clone())
+            .collect();
+        crate::gate_answer::verdict(
+            state.gate.as_ref(),
+            &open_threats,
+            request,
+            self.machine.home(),
+        )
     }
 
     /// The project roots the last Scan pooled.
@@ -1113,6 +1135,8 @@ impl Daemon {
             Request::Records { chain, from } => self.records(*chain, *from),
             Request::AcknowledgeKeyMissing => self.acknowledge_key_missing(),
             Request::AcknowledgeChainBroken => self.acknowledge_chain_broken(),
+            // Answered here, from what the state holds, beside any Scan.
+            Request::Gate(gate) => Ok(self.gate(gate).to_value()),
             // Everything else acts, and is carried out where acting lives.
             _ => self.act(request),
         }

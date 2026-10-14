@@ -463,7 +463,8 @@ impl Daemon {
             | Request::Settings { .. }
             | Request::Records { .. }
             | Request::AcknowledgeKeyMissing
-            | Request::AcknowledgeChainBroken => Err(RequestError::unknown(request.as_str())),
+            | Request::AcknowledgeChainBroken
+            | Request::Gate(_) => Err(RequestError::unknown(request.as_str())),
         }
     }
 

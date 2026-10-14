@@ -18,6 +18,7 @@
 pub mod client;
 pub mod engine;
 pub mod frame;
+pub mod integrity;
 pub mod peer;
 pub mod protocol;
 pub mod settings;
@@ -25,6 +26,7 @@ pub mod socket;
 
 pub use client::{Client, ClientError, Subscription};
 pub use frame::{MAX_FRAME, read_frame, write_frame};
+pub use integrity::{ChainRecords, IntegrityAnswer, RECORDS_PAGE, RecordLine};
 pub use peer::{Nobody, Peer, PeerCheck, SameUser};
 pub use protocol::{
     ActionReport, AgentSessions, DO_NOT_OPEN_YET, EngineChange, EngineState, FolderFinding,

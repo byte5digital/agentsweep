@@ -10,11 +10,13 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use agentsweep_core::envelope::ChainId;
 use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::quarantine::Conflict;
 
 use crate::engine::{EngineChange, EngineState};
 use crate::settings::{SettingsChange, SettingsState};
+use crate::integrity::{ChainRecords, IntegrityAnswer};
 
 use crate::protocol::{
     ActionReport, FolderScanResult, Hello, Message, Refusal, Request, RequestError,
@@ -269,6 +271,30 @@ impl Client {
         let answer = self.ask(Request::Settings { change })?;
         SettingsState::from_value(&answer)
             .ok_or_else(|| ClientError::Unexpected("the settings could not be read".to_string()))
+    }
+
+    /// One page of the records of the Event Log or the Baseline, from one
+    /// sequence on ("Look at the records", "Show what changed").
+    pub fn records(&mut self, chain: ChainId, from: u64) -> Result<ChainRecords, ClientError> {
+        let answer = self.ask(Request::Records { chain, from })?;
+        ChainRecords::from_value(&answer)
+            .ok_or_else(|| ClientError::Unexpected("the records could not be read".to_string()))
+    }
+
+    /// "Start a fresh record": answers the "protection state was reset" state.
+    pub fn acknowledge_key_missing(&mut self) -> Result<IntegrityAnswer, ClientError> {
+        self.integrity(Request::AcknowledgeKeyMissing)
+    }
+
+    /// "Scan again, trusting nothing": answers the "records tampered" state.
+    pub fn acknowledge_chain_broken(&mut self) -> Result<IntegrityAnswer, ClientError> {
+        self.integrity(Request::AcknowledgeChainBroken)
+    }
+
+    fn integrity(&mut self, request: Request) -> Result<IntegrityAnswer, ClientError> {
+        let answer = self.ask(request)?;
+        IntegrityAnswer::from_value(&answer)
+            .ok_or_else(|| ClientError::Unexpected("the answer could not be read".to_string()))
     }
 
     fn engine_request(&mut self, request: Request) -> Result<EngineState, ClientError> {

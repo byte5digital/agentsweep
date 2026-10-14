@@ -23,7 +23,7 @@ use std::fmt;
 use serde_json::{Map, Value};
 
 use agentsweep_core::chain::{BreakReason, ChainState};
-use agentsweep_core::envelope::Timestamp;
+use agentsweep_core::envelope::{ChainId, Timestamp};
 use agentsweep_core::eventlog::{Actor, Outcome, Primitive, ReceiptStep, SessionsRunning};
 use agentsweep_core::finding::{Category, FindingId, FindingState};
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
@@ -275,11 +275,33 @@ pub enum Request {
         /// What to move; nothing to read only.
         change: SettingsChange,
     },
+    /// Read the records of one chain, a page at a time, each with whether the
+    /// key in hand verifies it; for a broken chain the state names the
+    /// sequence where it stops being trustworthy ("Look at the records",
+    /// "Show what changed", spec section 8.6). Nothing is acted on. Answers
+    /// with a [`crate::integrity::ChainRecords`].
+    Records {
+        /// The Event Log or the Baseline.
+        chain: ChainId,
+        /// The first sequence to read from.
+        from: u64,
+    },
+    /// "Start a fresh record": the chains that started again because the key
+    /// was missing are taken as they are, and the "protection state was
+    /// reset" rung clears. Recorded on the Event Log. Answers with an
+    /// [`crate::integrity::IntegrityAnswer`].
+    AcknowledgeKeyMissing,
+    /// "Scan again, trusting nothing": every broken chain is picked up again
+    /// after its break, automatic Quarantine is unfrozen, and a Full Scan
+    /// judges everything trusted since the break again (ADR 0003). Recorded
+    /// on the Event Log. Answers with an
+    /// [`crate::integrity::IntegrityAnswer`].
+    AcknowledgeChainBroken,
 }
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 17] = [
+    pub const NAMES: [&'static str; 20] = [
         "status",
         "scan-now",
         "subscribe",
@@ -297,6 +319,9 @@ impl Request {
         "set-claude-key",
         "remove-claude-key",
         "settings",
+        "records",
+        "acknowledge-key-missing",
+        "acknowledge-chain-broken",
     ];
 
     /// The spelling a request carries.
@@ -319,6 +344,9 @@ impl Request {
             Request::SetClaudeKey { .. } => "set-claude-key",
             Request::RemoveClaudeKey => "remove-claude-key",
             Request::Settings { .. } => "settings",
+            Request::Records { .. } => "records",
+            Request::AcknowledgeKeyMissing => "acknowledge-key-missing",
+            Request::AcknowledgeChainBroken => "acknowledge-chain-broken",
         }
     }
 
@@ -368,6 +396,10 @@ impl Request {
             Request::Settings { change } => change.write_into(map),
             Request::SetClaudeKey { key } => {
                 map.insert("key".to_string(), Value::from(key.expose()));
+            }
+            Request::Records { chain, from } => {
+                map.insert("chain".to_string(), Value::from(chain.as_str()));
+                map.insert("from".to_string(), Value::from(*from));
             }
             _ => {}
         }
@@ -425,6 +457,15 @@ impl Request {
             "settings" => Request::Settings {
                 change: SettingsChange::read_from(value)?,
             },
+            "records" => Request::Records {
+                chain: ChainId::parse(text("chain")?)?,
+                from: match value.get("from") {
+                    None | Some(Value::Null) => 0,
+                    Some(from) => from.as_u64()?,
+                },
+            },
+            "acknowledge-key-missing" => Request::AcknowledgeKeyMissing,
+            "acknowledge-chain-broken" => Request::AcknowledgeChainBroken,
             _ => return None,
         })
     }
@@ -833,7 +874,7 @@ pub fn health_from_value(value: &Value) -> Option<Health> {
 
 /// One chain state as the wire carries it: what verification found, and where
 /// it stopped when it found a break.
-fn chain_state_to_value(state: &ChainState) -> Value {
+pub(crate) fn chain_state_to_value(state: &ChainState) -> Value {
     let mut map = Map::new();
     let (name, sequence, reason) = match state {
         ChainState::Intact => ("intact", 0u64, String::new()),
@@ -851,7 +892,7 @@ fn chain_state_to_value(state: &ChainState) -> Value {
 /// The break reason is a sentence rather than a code, because nothing acts on
 /// it: the Developer Posture prints it and the precedence reads the state. It
 /// comes back as [`BreakReason::Malformed`] carrying that sentence.
-fn chain_state_from_value(value: &Value) -> Option<ChainState> {
+pub(crate) fn chain_state_from_value(value: &Value) -> Option<ChainState> {
     match value.get("state")?.as_str()? {
         "intact" => Some(ChainState::Intact),
         "key-missing" => Some(ChainState::KeyMissing),
@@ -1899,6 +1940,16 @@ mod tests {
                     ]),
                 },
             },
+            Request::Records {
+                chain: ChainId::Events,
+                from: 0,
+            },
+            Request::Records {
+                chain: ChainId::Baseline,
+                from: 500,
+            },
+            Request::AcknowledgeKeyMissing,
+            Request::AcknowledgeChainBroken,
         ]
     }
 

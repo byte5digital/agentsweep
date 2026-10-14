@@ -21,11 +21,20 @@
 //! an `EPERM` there (a grant taken back in System Settings) is Needs
 //! Permission again rather than a project whose Items have all gone.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use agentsweep_core::baseline::{BaselineRecord, Origin};
+use agentsweep_core::baseline::{Baseline, BaselineRecord, Origin};
+use agentsweep_core::chain::ChainState;
+use agentsweep_core::keychain::KeySource;
+use agentsweep_core::overview::{Overview, ProjectCheck};
+use agentsweep_core::paths::DataDirectory;
+use agentsweep_core::state::Trigger;
+
+use crate::service::Daemon;
 
 /// Where a path lies, as far as the operating system's consent is concerned.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -319,6 +328,145 @@ fn proven_by<'a>(
         .map(|(path, _)| classify(home, Path::new(path)))
         .filter(|class| class.is_protected())
         .collect()
+}
+
+/// How many projects the Overview lists as Needing Permission, which is the
+/// count Health carries (spec section 6.6).
+pub fn needing_permission(overview: &Overview) -> usize {
+    overview
+        .projects
+        .iter()
+        .filter(|project| project.check == ProjectCheck::NeedsPermission)
+        .count()
+}
+
+/// The protected classes an intact Baseline in the data directory proves
+/// readable, as the state file spells them. Nothing when the Baseline cannot
+/// be read or is not intact: a record nobody can vouch for proves nothing.
+pub fn proven_readable_classes(
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+    home: &Path,
+) -> BTreeSet<String> {
+    match Baseline::in_data_directory(directory).read(keys) {
+        Ok(view) if view.state == ChainState::Intact => proven_readable(home, view.records())
+            .into_iter()
+            .map(|class| class.as_str().to_string())
+            .collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+/// The name of the thread "Check now" makes its reads on, which is never a
+/// thread that answers a connection.
+pub const FIRST_READ_THREAD: &str = "agentsweep-first-read";
+
+impl Daemon {
+    /// The protected classes the state file remembers as read before.
+    pub(crate) fn readable_classes(&self) -> BTreeSet<LocationClass> {
+        remembered(
+            &self
+                .state
+                .lock()
+                .expect("the state is not poisoned")
+                .readable_classes,
+        )
+    }
+
+    /// "Check now": the user's click that makes the first read into each
+    /// location class a project Needs Permission in (spec sections 8.6 and
+    /// 9.7).
+    ///
+    /// One root of each pending class is read, on a thread that serves no
+    /// connection, because the call may block for as long as the system alert
+    /// is on screen (research section 3). A class whose read succeeds is
+    /// remembered in the state file, and a Full Scan then reads its projects;
+    /// a denied read leaves its projects Needing Permission. Answers with
+    /// true when the reads were started, false when one "Check now" is still
+    /// making them or no project Needs Permission.
+    pub fn check_now(self: &Arc<Daemon>) -> bool {
+        if self.checking.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        let pending = self.pending_classes();
+        if pending.is_empty() {
+            self.checking.store(false, Ordering::SeqCst);
+            return false;
+        }
+        let daemon = Arc::clone(self);
+        let started = std::thread::Builder::new()
+            .name(FIRST_READ_THREAD.to_string())
+            .spawn(move || {
+                daemon.read_for_the_first_time(pending);
+                daemon.checking.store(false, Ordering::SeqCst);
+            });
+        if started.is_err() {
+            say!("the thread that makes the first reads could not be started");
+            self.checking.store(false, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+
+    /// The roots that Need Permission, by their protected class.
+    fn pending_classes(&self) -> BTreeMap<LocationClass, Vec<PathBuf>> {
+        let home = self.machine.home().to_path_buf();
+        let state = self.state.lock().expect("the state is not poisoned");
+        let mut pending: BTreeMap<LocationClass, Vec<PathBuf>> = BTreeMap::new();
+        for project in &state.overview.projects {
+            if project.check != ProjectCheck::NeedsPermission {
+                continue;
+            }
+            let root = PathBuf::from(&project.root);
+            let class = classify(&home, &root);
+            if class.is_protected() {
+                pending.entry(class).or_default().push(root);
+            }
+        }
+        pending
+    }
+
+    /// Reads one root of each class, remembers each class that answered and
+    /// asks for the Full Scan that reads their projects. A root that is gone
+    /// gives way to the next root of its class.
+    fn read_for_the_first_time(self: &Arc<Daemon>, pending: BTreeMap<LocationClass, Vec<PathBuf>>) {
+        let mut granted = Vec::new();
+        for (class, roots) in pending {
+            for root in roots {
+                match self.tuning.folders.read(&root) {
+                    Ok(()) => {
+                        say!("{} is readable: {}", class.as_str(), root.display());
+                        granted.push(class);
+                        break;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        say!(
+                            "{} is not readable yet ({}): {}",
+                            class.as_str(),
+                            match is_denied(&error) {
+                                true => "the operating system did not allow it",
+                                false => "the read failed",
+                            },
+                            root.display()
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+        if granted.is_empty() {
+            return;
+        }
+        {
+            let mut state = self.state.lock().expect("the state is not poisoned");
+            for class in granted {
+                state.readable_classes.insert(class.as_str().to_string());
+            }
+            self.write_state(&state);
+        }
+        self.scan_behind(Trigger::ScanNow);
+    }
 }
 
 #[cfg(test)]

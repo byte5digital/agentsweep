@@ -43,8 +43,24 @@ pub struct Detected {
 /// with every installed Agent, since each of them looks for its Surfaces at
 /// every pooled root, and with every Agent whose registry names it; each says
 /// whether its own registry does (spec section 3.3). A root the Full Scan
-/// pooled is a root it read.
-pub fn of_the_full_scan(detected: &[Detected], roots: &[PathBuf], items: &[Item]) -> Overview {
+/// pooled is a root it read; a withheld root Needs Permission and is listed
+/// as such, never as checked (spec section 9.7).
+pub fn of_the_full_scan(
+    detected: &[Detected],
+    roots: &[PathBuf],
+    withheld: &[PathBuf],
+    items: &[Item],
+) -> Overview {
+    let mut every: Vec<(&PathBuf, ProjectCheck)> = roots
+        .iter()
+        .map(|root| (root, ProjectCheck::Checked))
+        .chain(
+            withheld
+                .iter()
+                .map(|root| (root, ProjectCheck::NeedsPermission)),
+        )
+        .collect();
+    every.sort_by(|a, b| a.0.cmp(b.0));
     let agents = detected
         .iter()
         .map(|found| AgentRecord {
@@ -58,9 +74,9 @@ pub fn of_the_full_scan(detected: &[Detected], roots: &[PathBuf], items: &[Item]
                 .as_ref()
                 .map(|dir| dir.display().to_string())
                 .unwrap_or_default(),
-            projects: roots
+            projects: every
                 .iter()
-                .filter(|root| found.registered.contains(root))
+                .filter(|(root, _)| found.registered.contains(root))
                 .count(),
             items: items
                 .iter()
@@ -73,9 +89,9 @@ pub fn of_the_full_scan(detected: &[Detected], roots: &[PathBuf], items: &[Item]
                 .collect(),
         })
         .collect();
-    let projects = roots
+    let projects = every
         .iter()
-        .map(|root| ProjectRecord {
+        .map(|&(root, check)| ProjectRecord {
             root: root.display().to_string(),
             agents: detected
                 .iter()
@@ -87,7 +103,7 @@ pub fn of_the_full_scan(detected: &[Detected], roots: &[PathBuf], items: &[Item]
                     })
                 })
                 .collect(),
-            check: ProjectCheck::Checked,
+            check,
         })
         .collect();
     Overview {
@@ -153,7 +169,7 @@ mod tests {
             detected("absent", false, &[]),
         ];
         let roots = [PathBuf::from("/work/a"), PathBuf::from("/work/b")];
-        let overview = of_the_full_scan(&found, &roots, &[]);
+        let overview = of_the_full_scan(&found, &roots, &[], &[]);
 
         assert_eq!(overview.agents.len(), 3, "an Agent not installed is listed");
         assert_eq!(overview.agents[0].projects, 2);
@@ -183,6 +199,34 @@ mod tests {
                 .agents
                 .iter()
                 .all(|agent| agent.registered)
+        );
+    }
+
+    /// A root that Needs Permission is listed among the others, in path
+    /// order, counted for the Agent that registered it and never as checked.
+    #[test]
+    fn a_withheld_root_is_listed_as_needing_permission() {
+        let found = [detected(
+            "claude-code",
+            true,
+            &["/home/Documents/b", "/work/a"],
+        )];
+        let roots = [PathBuf::from("/work/a")];
+        let withheld = [PathBuf::from("/home/Documents/b")];
+        let overview = of_the_full_scan(&found, &roots, &withheld, &[]);
+
+        assert_eq!(overview.agents[0].projects, 2);
+        let listed: Vec<(&str, ProjectCheck)> = overview
+            .projects
+            .iter()
+            .map(|project| (project.root.as_str(), project.check))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                ("/home/Documents/b", ProjectCheck::NeedsPermission),
+                ("/work/a", ProjectCheck::Checked),
+            ]
         );
     }
 }

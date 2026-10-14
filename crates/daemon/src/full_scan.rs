@@ -48,6 +48,7 @@ use agentsweep_core::state::{ScanSummary, Trigger};
 use crate::actions::{Acting, ScanActions, act_in_scan};
 use crate::machine::{Machine, adapters, agents};
 use crate::overview::{Detected, ambiguous, of_the_full_scan};
+use crate::permission::{Access, Disk, Reach};
 
 /// Why a Scan could not be run.
 #[derive(Debug)]
@@ -96,6 +97,9 @@ pub struct ScanRun {
     pub watch_roots: WatchRoots,
     /// The project roots that were pooled.
     pub roots: Vec<PathBuf>,
+    /// The registered project roots that were not read because they Need
+    /// Permission (spec section 9.7). Empty after a Change Scan.
+    pub withheld: Vec<PathBuf>,
     /// The Agents that were found, by adapter id. Empty after a Change Scan.
     pub agents: Vec<(String, bool)>,
     /// What verifying the Event Log found.
@@ -154,8 +158,13 @@ pub fn run(
     progress: &dyn Progress,
 ) -> Result<ScanRun, ScanError> {
     let pack = LoadedPack::bundled().map_err(|error| ScanError::Pack(error.to_string()))?;
+    let readable = BTreeSet::new();
     FullScan {
         machine,
+        access: Access {
+            readable: &readable,
+            folders: &Disk,
+        },
         directory,
         keys,
         pack: &pack.rules,
@@ -173,6 +182,9 @@ pub fn run(
 pub struct FullScan<'a> {
     /// The machine to scan.
     pub machine: &'a Machine,
+    /// What the Scan may read by itself: a project root in a protected
+    /// location class never read before Needs Permission and is not touched.
+    pub access: Access<'a>,
     /// Where the stores are.
     pub directory: &'a DataDirectory,
     /// The chain key behind them.
@@ -204,7 +216,7 @@ impl FullScan<'_> {
         let started_at = Timestamp::now();
         let began = std::time::Instant::now();
 
-        let inventory = pool(self.machine);
+        let inventory = pool(self.machine, &self.access);
         let adapters = adapters();
         let mut survey = survey(
             self.machine,
@@ -245,6 +257,7 @@ impl FullScan<'_> {
         let mut overview = of_the_full_scan(
             &inventory.detected,
             &inventory.roots,
+            &inventory.withheld,
             &survey.enumeration.items,
         );
         overview.ambiguous = judged.ambiguous.clone();
@@ -256,6 +269,7 @@ impl FullScan<'_> {
             looked_at: judged.looked_at,
             watch_roots: survey.watch_roots,
             roots: inventory.roots,
+            withheld: inventory.withheld,
             agents: inventory.agents,
             events: judged.events,
             baseline: judged.baseline,
@@ -278,6 +292,9 @@ pub struct Pooled {
     /// Every project root any Agent's registry names and that is still there,
     /// pooled across the Agents and in a stable order.
     pub roots: Vec<PathBuf>,
+    /// The registered roots that Need Permission and were not touched, in a
+    /// stable order. None of them is in `roots`.
+    pub withheld: Vec<PathBuf>,
     /// What each Agent's detection and registry said, which is what the
     /// Overview's Agent and project records are built from.
     pub detected: Vec<Detected>,
@@ -287,10 +304,13 @@ pub struct Pooled {
 ///
 /// Never crawls the file system: an Agent's registry is the only place a
 /// project comes from, which is why re-pooling costs one read of the home
-/// (spec section 1.2).
-pub fn pool(machine: &Machine) -> Pooled {
+/// (spec section 1.2). A root in a protected location class the daemon has
+/// not read before is withheld without being touched, and so is one whose
+/// read is denied (spec section 9.7).
+pub fn pool(machine: &Machine, access: &Access<'_>) -> Pooled {
     let host = machine.inventory();
     let mut pooled = Pooled::default();
+    let mut reached: BTreeMap<PathBuf, Reach> = BTreeMap::new();
     for adapter in agents() {
         let detection = adapter.detect(&host);
         let descriptor = adapter.descriptor();
@@ -299,9 +319,20 @@ pub fn pool(machine: &Machine) -> Pooled {
             .push((descriptor.agent.to_string(), detection.installed));
         let mut registered = Vec::new();
         for registration in adapter.projects(&host) {
-            if registration.root.is_dir() {
-                registered.push(registration.root.clone());
-                pooled.roots.push(registration.root);
+            // Two Agents may name the same root; it is read once.
+            let reach = *reached
+                .entry(registration.root.clone())
+                .or_insert_with(|| access.reach(machine.home(), &registration.root));
+            match reach {
+                Reach::Read => {
+                    registered.push(registration.root.clone());
+                    pooled.roots.push(registration.root);
+                }
+                Reach::NeedsPermission => {
+                    registered.push(registration.root.clone());
+                    pooled.withheld.push(registration.root);
+                }
+                Reach::Gone => {}
             }
         }
         pooled.detected.push(Detected {
@@ -314,6 +345,8 @@ pub fn pool(machine: &Machine) -> Pooled {
     }
     pooled.roots.sort();
     pooled.roots.dedup();
+    pooled.withheld.sort();
+    pooled.withheld.dedup();
     pooled
 }
 

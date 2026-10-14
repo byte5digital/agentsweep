@@ -177,6 +177,13 @@ pub enum Request {
     /// Run a Full Scan now. One that is already running is joined rather than
     /// started again (spec section 6.4).
     ScanNow,
+    /// "Check now": make the first read into each location class a project
+    /// Needs Permission in, on a thread of the daemon's that answers no
+    /// request, then scan the projects whose class answered (spec sections
+    /// 8.6 and 9.7). Answers at once, before any read is made: `started` is
+    /// true when the reads were started, false when they are already being
+    /// made or no project Needs Permission.
+    CheckNow,
     /// Send every state event from now until the connection closes.
     Subscribe,
     /// Take the Item of one Threat Finding out of its Surface, by the
@@ -324,9 +331,10 @@ pub enum Request {
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 23] = [
+    pub const NAMES: [&'static str; 24] = [
         "status",
         "scan-now",
+        "check-now",
         "subscribe",
         "quarantine",
         "restore",
@@ -355,6 +363,7 @@ impl Request {
         match self {
             Request::Status => "status",
             Request::ScanNow => "scan-now",
+            Request::CheckNow => "check-now",
             Request::Subscribe => "subscribe",
             Request::Quarantine { .. } => "quarantine",
             Request::Restore { .. } => "restore",
@@ -465,6 +474,7 @@ impl Request {
         Some(match name {
             "status" => Request::Status,
             "scan-now" => Request::ScanNow,
+            "check-now" => Request::CheckNow,
             "subscribe" => Request::Subscribe,
             "quarantine" => Request::Quarantine { target: target()? },
             "restore" => Request::Restore {
@@ -2019,6 +2029,7 @@ mod tests {
         vec![
             Request::Status,
             Request::ScanNow,
+            Request::CheckNow,
             Request::Subscribe,
             Request::Quarantine {
                 target: finding.clone(),

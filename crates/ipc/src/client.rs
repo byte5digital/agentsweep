@@ -139,6 +139,18 @@ impl Client {
             .ok_or_else(|| ClientError::Unexpected("the answer could not be read".to_string()))
     }
 
+    /// "Check now": asks the daemon to make the first read into each location
+    /// class a project Needs Permission in, and returns before any read is
+    /// made. True when the reads were started, false when they are already
+    /// being made or no project Needs Permission.
+    pub fn check_now(&mut self) -> Result<bool, ClientError> {
+        let answer = self.ask(Request::CheckNow)?;
+        answer
+            .get("started")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| ClientError::Unexpected("the answer could not be read".to_string()))
+    }
+
     /// Takes the Item of one Threat Finding out of its Surface. The target is
     /// a Finding id, or the id of an Item with one open Threat Finding.
     pub fn quarantine(&mut self, target: &str) -> Result<ActionReport, ClientError> {

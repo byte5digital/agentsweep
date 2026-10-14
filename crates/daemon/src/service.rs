@@ -53,6 +53,7 @@ use crate::due::{self, Occasion, PowerState, Schedule, SystemPower};
 use crate::full_scan::{FullScan, Progress, ScanRun};
 use crate::machine::Machine;
 use crate::options::{KeySourceChoice, Options};
+use crate::permission::{Access, Disk, Folders, proven_readable_classes};
 use crate::rule_feed::{self, Endpoints, FeedClient, FeedTuning, Fetched, Validators};
 use crate::stores::{open_both_chains, open_the_event_log};
 use crate::watcher::{self, Batch, Decision, Timings, Watch};
@@ -80,6 +81,10 @@ pub struct Tuning {
     pub pack: Option<Arc<RulePack>>,
     /// Where the Rule Feed is and how the fetch is timed.
     pub feed: FeedTuning,
+    /// The handle every read into a protected location class goes through:
+    /// the disk itself, unless a test hands in one that records, denies or
+    /// blocks (spec section 9.7).
+    pub folders: Arc<dyn Folders>,
 }
 
 impl Default for Tuning {
@@ -91,6 +96,7 @@ impl Default for Tuning {
             workers: BACKGROUND_WORKERS,
             pack: None,
             feed: FeedTuning::default(),
+            folders: Arc::new(Disk),
         }
     }
 }
@@ -170,7 +176,7 @@ pub struct Daemon {
     pub(crate) keys: Box<dyn KeySource + Send + Sync>,
     pub(crate) machine: Machine,
     check: Arc<dyn PeerCheck>,
-    tuning: Tuning,
+    pub(crate) tuning: Tuning,
     /// The cached derivation, which is what a client is answered out of.
     pub(crate) state: Mutex<State>,
     /// The user's choices, as the settings file holds them, or every default
@@ -243,6 +249,9 @@ pub struct Daemon {
     /// hand has finished, so `KeepAlive` starts the new binary (spec section
     /// 9.5).
     leaving: AtomicBool,
+    /// True while a "Check now" makes its reads into the protected location
+    /// classes, so two clicks never make them twice at once.
+    pub(crate) checking: AtomicBool,
 }
 
 impl Daemon {
@@ -329,6 +338,12 @@ impl Daemon {
             Some(home) => Machine::named(home.clone()),
             None => Machine::real(options.home_directory()?),
         };
+        // A rebuilt state file remembers the protected classes the Baseline
+        // proves AgentSweep read before, and no other: the grant was given
+        // once, and losing the cache must not ask for it again.
+        if state_file != StateFileHealth::Loaded {
+            state.readable_classes = proven_readable_classes(&directory, &*keys, machine.home());
+        }
 
         // The bundled pack is compiled once, here. A daemon that cannot
         // compile its own pack has nothing to protect with and says so rather
@@ -371,7 +386,7 @@ impl Daemon {
             protection: Protection::On,
             events: crate::integrity::shown(&events, reset.events),
             baseline: crate::integrity::shown(&baseline, reset.baseline),
-            projects_need_permission: 0,
+            projects_need_permission: crate::permission::needing_permission(&state.overview),
             state_file,
             settings_unreadable,
             scanning: false,
@@ -420,6 +435,7 @@ impl Daemon {
             subscribers: Mutex::new(Vec::new()),
             told: Mutex::new(None),
             leaving: AtomicBool::new(false),
+            checking: AtomicBool::new(false),
         }))
     }
 
@@ -623,8 +639,13 @@ impl Daemon {
                     Trigger::ScanNow | Trigger::Folder => on_demand_workers(),
                     _ => self.tuning.workers,
                 };
+                let readable = self.readable_classes();
                 let run = FullScan {
                     machine: &self.machine_in_force(),
+                    access: Access {
+                        readable: &readable,
+                        folders: &*self.tuning.folders,
+                    },
                     directory: &self.directory,
                     keys: &*self.keys,
                     pack: &pack.rules,
@@ -644,8 +665,13 @@ impl Daemon {
             Work::Change(batch) => {
                 let at = Timestamp::now();
                 let pooled = self.pooled_roots();
+                let readable = self.readable_classes();
                 let run = ChangeScan {
                     machine: &self.machine_in_force(),
+                    access: Access {
+                        readable: &readable,
+                        folders: &*self.tuning.folders,
+                    },
                     directory: &self.directory,
                     keys: &*self.keys,
                     pack: &pack.rules,
@@ -786,6 +812,8 @@ impl Daemon {
             // counted the handful it was told about.
             if whole {
                 health.items = run.summary.items;
+                health.projects_need_permission =
+                    crate::permission::needing_permission(&state.overview);
             }
             health.count_open(&state);
         }
@@ -1125,6 +1153,12 @@ impl Daemon {
             Request::Status => Ok(self.status().to_value()),
             Request::ScanNow => {
                 let started = self.scan(Trigger::ScanNow);
+                Ok(serde_json::json!({ "started": started }))
+            }
+            // The reads are made on a thread of their own, never this one:
+            // the call may block while the system alert is on screen.
+            Request::CheckNow => {
+                let started = self.check_now();
                 Ok(serde_json::json!({ "started": started }))
             }
             // Handled by the caller, which turns the connection into a stream.
@@ -1737,9 +1771,16 @@ impl Daemon {
     /// with the new pack anyway and is joined; one that is running started
     /// with the old pack, so another is put behind it.
     fn scan_with_the_new_pack(self: &Arc<Daemon>) {
+        self.scan_behind(Trigger::RulePack);
+    }
+
+    /// Asks for a Full Scan that starts after anything that is running now:
+    /// one that is waiting is joined, one that is running started before
+    /// whatever asks for this one, so another is put behind it.
+    pub(crate) fn scan_behind(self: &Arc<Daemon>, trigger: Trigger) {
         let mut queue = self.queue.lock().expect("the queue is not poisoned");
         if queue.full.is_none() {
-            queue.full = Some(Trigger::RulePack);
+            queue.full = Some(trigger);
         }
         let start = queue.claim_the_thread();
         drop(queue);
@@ -1749,7 +1790,7 @@ impl Daemon {
     }
 
     /// Writes the state file, saying so when it could not be written.
-    fn write_state(&self, state: &State) {
+    pub(crate) fn write_state(&self, state: &State) {
         let file = StateFile::in_data_directory(&self.directory);
         if let Err(error) = StateWriter::write(&file, &*self.keys, state) {
             say!("the cached state could not be written: {error}");

@@ -34,12 +34,16 @@ use agentsweep_core::state::Trigger;
 use crate::actions::Acting;
 use crate::full_scan::{Covering, Judgement, ScanError, ScanRun, pool, survey};
 use crate::machine::{Machine, adapters};
+use crate::permission::Access;
 use crate::watcher::Batch;
 
 /// One Change Scan, with everything it is allowed to use named.
 pub struct ChangeScan<'a> {
     /// The machine to scan.
     pub machine: &'a Machine,
+    /// What the Scan may read by itself, as for a Full Scan: a newly
+    /// registered root that Needs Permission is never bootstrapped.
+    pub access: Access<'a>,
     /// Where the stores are.
     pub directory: &'a DataDirectory,
     /// The chain key behind them.
@@ -79,7 +83,7 @@ impl ChangeScan<'_> {
         // place a project comes from and reading them is reading the home, so
         // a batch that touched one re-pools without anybody having to work out
         // which file is a registry.
-        let inventory = pool(self.machine);
+        let inventory = pool(self.machine, &self.access);
         let bootstrapped: Vec<PathBuf> = inventory
             .roots
             .iter()
@@ -169,6 +173,7 @@ impl ChangeScan<'_> {
             // says so by declaring none.
             watch_roots: agentsweep_core::adapter::WatchRoots::default(),
             roots: inventory.roots,
+            withheld: Vec::new(),
             agents: Vec::new(),
             events: judged.events,
             baseline: judged.baseline,

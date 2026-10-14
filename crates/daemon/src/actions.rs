@@ -495,6 +495,7 @@ impl Daemon {
             Request::RevealReceipt { path } => self.reveal(path.as_deref()),
             Request::Status
             | Request::ScanNow
+            | Request::CheckNow
             | Request::Subscribe
             | Request::RuleFeed { .. }
             | Request::Sessions

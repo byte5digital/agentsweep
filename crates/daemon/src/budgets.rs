@@ -12,6 +12,7 @@
 //! against the author's own machine can be quoted in a measurements note
 //! without leaking what is on it.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::time::Instant;
 
@@ -26,6 +27,7 @@ use crate::change_scan::ChangeScan;
 use crate::full_scan::{FullScan, Unwatched};
 use crate::machine::Machine;
 use crate::options::{KeySourceChoice, Options};
+use crate::permission::{Access, Disk};
 use crate::watcher::Batch;
 
 /// Runs the measurements and prints them.
@@ -58,8 +60,16 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
     // Cold: an empty evaluation cache and a Baseline that knows nothing, which
     // is the first Full Scan a machine ever gets.
     let cache = EvaluationCache::new();
+    // A measurement never makes the first read into a protected location
+    // class: the projects there Need Permission and are left out.
+    let readable = BTreeSet::new();
+    let access = Access {
+        readable: &readable,
+        folders: &Disk,
+    };
     let scan = FullScan {
         machine: &machine,
+        access,
         directory: &directory,
         keys: &keys,
         pack,
@@ -114,6 +124,7 @@ pub fn measure(options: &Options) -> Result<(), Box<dyn Error>> {
     };
     let change = ChangeScan {
         machine: &machine,
+        access,
         directory: &directory,
         keys: &keys,
         pack,

@@ -34,12 +34,14 @@ use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use agentsweep_core::adapter::Enumeration;
 use agentsweep_core::entry_edit::{
     EditError, EntryPath, Format as EditFormat, append_json, drop_json, drop_toml, insert_toml,
-    parses,
+    parses, read_entry,
 };
 use agentsweep_core::gate_registration::{
-    GATE_TIMEOUT_SECONDS, GateCheck, GateCommand, GateEntry, GateError, SurfaceWriter, rewrite,
+    GATE_TIMEOUT_SECONDS, GateCheck, GateCommand, GateEntry, GateError, GateWrite, SurfaceWriter,
+    rewrite,
 };
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{ItemId, Kind, Scope, sha256_hex};
@@ -47,7 +49,7 @@ use serde_json::{Value, json};
 
 use crate::document::{Document, json_of, parse_toml, surface_name};
 use crate::hooks::{self, Handler, Pin};
-use crate::{AGENT_ID, CONFIG_FILE, Codex, HOOKS_FILE};
+use crate::{AGENT_ID, CONFIG_FILE, Codex, HOOKS_FEATURE, HOOKS_FILE};
 
 /// The matcher of the `PreToolUse` group: a shell command and every MCP tool.
 pub const PRE_TOOL_USE_MATCHER: &str = "Bash|mcp__.*";
@@ -101,6 +103,172 @@ fn is_ours(group: &Value, ours: &Value) -> bool {
         .get("hooks")
         .and_then(Value::as_array)
         .is_some_and(|handlers| handlers.len() == 1 && handlers[0] == *ours)
+}
+
+/// True when a group under `event` holds one command handler that carries
+/// AgentSweep's arguments and timeout, and nothing else, under the matcher
+/// the Gate gives the event, but runs a command line interface at another
+/// path. That is AgentSweep's own entry after the bundle moved, and the
+/// registration replaces it (the owner's decision of 2026-10-14).
+fn is_moved(event: &str, group: &Value, ours: &Value) -> bool {
+    let Some((_, matcher)) = EVENTS.iter().find(|(name, _)| *name == event) else {
+        return false;
+    };
+    if group.get("matcher").and_then(Value::as_str) != *matcher {
+        return false;
+    }
+    let Some([handler]) = group
+        .get("hooks")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+    else {
+        return false;
+    };
+    let Some(fields) = handler.as_object() else {
+        return false;
+    };
+    let arguments = format!(" {}", GateCommand::arguments(AGENT_ID).join(" "));
+    fields.len() == 3
+        && handler.get("type") == ours.get("type")
+        && handler.get("timeout") == ours.get("timeout")
+        && handler
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|line| line.ends_with(&arguments))
+        && handler.get("command") != ours.get("command")
+}
+
+/// What taking groups out of a hooks file did: the text left, the entries
+/// that went with the keys of their pins, and the pins of the groups that
+/// moved up, from their old key to their new one.
+#[derive(Clone, Debug, Default)]
+struct Dropped {
+    text: String,
+    entries: Vec<GateEntry>,
+    keys: Vec<String>,
+    rekeys: Vec<(String, String)>,
+}
+
+/// Takes every group `picks` chooses out of a hooks file, and works out where
+/// the groups after them in the same event move to.
+///
+/// Codex files a pin under the position of its group, so a group that goes
+/// shifts every later group of its event one place up, and its pin would no
+/// longer match. Each shifted handler's key is named twice, old and new, in
+/// the order the groups are written, so that moving the records one after
+/// the other never writes over a record still to be moved.
+fn drop_groups(
+    host: &Host,
+    path: &Path,
+    text: &str,
+    picks: &dyn Fn(&str, &Value) -> bool,
+) -> Result<Dropped, EditError> {
+    let document = hooks_document(host, path, text)?;
+    let mut dropped = Dropped {
+        text: text.to_string(),
+        ..Dropped::default()
+    };
+    for (event, groups) in document.members("hooks") {
+        let Some(groups) = groups.as_array() else {
+            continue;
+        };
+        let gone: Vec<usize> = groups
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| picks(&event, group))
+            .map(|(index, _)| index)
+            .collect();
+        if gone.is_empty() {
+            continue;
+        }
+        for handler in hooks::handlers(&document, "hooks") {
+            if handler.event != event {
+                continue;
+            }
+            if gone.contains(&handler.group_index) {
+                let locator = handler.locator(&document);
+                dropped.keys.push(hooks::state_key(path, &handler));
+                dropped.entries.push(GateEntry {
+                    item_id: ItemId::new(AGENT_ID, &Scope::User, Kind::Hook, &locator),
+                    locator,
+                    content_hash: sha256_hex(&handler.content()),
+                    path: path.to_path_buf(),
+                });
+                continue;
+            }
+            let ahead = gone
+                .iter()
+                .filter(|index| **index < handler.group_index)
+                .count();
+            if ahead == 0 {
+                continue;
+            }
+            let mut moved = handler.clone();
+            moved.group_index -= ahead;
+            dropped.rekeys.push((
+                hooks::state_key(path, &handler),
+                hooks::state_key(path, &moved),
+            ));
+        }
+        (dropped.text, _) = drop_json(
+            &dropped.text,
+            &EntryPath::of(&["hooks", event.as_str()]),
+            &|group| picks(&event, group),
+        )?;
+    }
+    Ok(dropped)
+}
+
+/// Drops the pin records filed under `keys`, then files every record of
+/// `rekeys` again under its new key, and says how many records moved.
+fn refile_pins(
+    text: &str,
+    keys: &[String],
+    rekeys: &[(String, String)],
+) -> Result<(String, bool, usize), EditError> {
+    let mut text = text.to_string();
+    let mut changed = false;
+    for key in keys {
+        let dropped;
+        (text, dropped) = drop_toml(&text, &record_path(key))?;
+        changed |= dropped;
+    }
+    let mut moved = 0;
+    for (from, to) in rekeys {
+        let Some(record) = read_entry(EditFormat::Toml, &text, &record_path(from)) else {
+            continue;
+        };
+        (text, _) = drop_toml(&text, &record_path(from))?;
+        text = insert_toml(&text, &record_path(to), &record)?;
+        changed = true;
+        moved += 1;
+    }
+    Ok((text, changed, moved))
+}
+
+/// What the configuration layers say about hooks for the Gate: managed
+/// policy that drops the user's hooks, or the user's own switch.
+fn hooks_switched_off(adapter: &Codex, host: &Host) -> Option<GateCheck> {
+    let layers = adapter.global_layers(host, &mut Enumeration::default());
+    let off = |config: &Document| {
+        HOOKS_FEATURE
+            .iter()
+            .any(|switch| config.flag(switch) == Some(false))
+    };
+    let managed = layers.iter().any(|layer| {
+        layer.managed
+            && layer.config.as_ref().is_some_and(|config| {
+                config.flag("allow_managed_hooks_only") == Some(true) || off(config)
+            })
+    });
+    if managed {
+        return Some(GateCheck::ManagedPolicy);
+    }
+    let home = adapter.config_dir(host)?;
+    let user = layers.iter().any(|layer| {
+        layer.scope == Scope::User && layer.folder == home && layer.config.as_ref().is_some_and(off)
+    });
+    user.then_some(GateCheck::SwitchedOffByUser)
 }
 
 /// The two files the Gate writes, in the effective Codex home.
@@ -237,15 +405,25 @@ pub fn register(
     host: &Host,
     writer: &dyn SurfaceWriter,
     command: &GateCommand,
-) -> Result<Vec<GateEntry>, GateError> {
+) -> Result<GateWrite, GateError> {
     let files = files(adapter, host)?;
     config_parses(host, &files.config)?;
+    let ours = handler(command);
 
     // The groups first: the keys of their pins are counted from where they
-    // end up, which is known only once the hooks file is written.
+    // end up, which is known only once the hooks file is written. A group of
+    // AgentSweep's under another path goes before anything is appended, and
+    // the user's groups after it move up with their pins.
     let mut groups: Vec<Found> = Vec::new();
+    let mut dropped = Dropped::default();
     let appended = rewrite(host, writer, &files.hooks, &mut |current| {
-        let mut text = current.unwrap_or("{}").to_string();
+        dropped = drop_groups(
+            host,
+            &files.hooks,
+            current.unwrap_or("{}"),
+            &|event, group| is_moved(event, group, &ours),
+        )?;
+        let mut text = dropped.text.clone();
         let present: BTreeSet<&str> = ours_in(&hooks_document(host, &files.hooks, &text)?, command)
             .iter()
             .map(|found| found.event)
@@ -263,15 +441,18 @@ pub fn register(
             appended.push(event);
         }
         groups = ours_in(&hooks_document(host, &files.hooks, &text)?, command);
-        match appended.is_empty() {
+        match appended.is_empty() && dropped.entries.is_empty() {
             true => Ok(None),
             false => Ok(Some((text, appended))),
         }
     })?
     .unwrap_or_default();
 
+    let mut pins_rekeyed = 0;
     let pinned = rewrite(host, writer, &files.config, &mut |current| {
-        let mut text = current.unwrap_or_default().to_string();
+        let (mut text, refiled, moved) =
+            refile_pins(current.unwrap_or_default(), &dropped.keys, &dropped.rekeys)?;
+        pins_rekeyed = moved;
         let state = state_of(&text)?;
         let mut pinned = Vec::new();
         for found in &groups {
@@ -285,22 +466,32 @@ pub fn register(
             )?;
             pinned.push(found.entry.item_id.clone());
         }
-        match pinned.is_empty() {
+        match pinned.is_empty() && !refiled {
             true => Ok(None),
             false => Ok(Some((text, pinned))),
         }
     })?
     .unwrap_or_default();
 
-    Ok(groups
+    let written = groups
         .into_iter()
         .filter(|found| appended.contains(&found.event) || pinned.contains(&found.entry.item_id))
         .map(|found| found.entry)
-        .collect())
+        .collect();
+    Ok(GateWrite {
+        written,
+        removed: dropped.entries,
+        pins_rekeyed,
+    })
 }
 
-/// Whether every event carries a Gate group whose pin Codex would trust.
+/// Whether every event carries a Gate group whose pin Codex would trust and
+/// no group of AgentSweep's sits under another path, and whether managed
+/// policy or the user's own layer switch hooks off.
 pub fn check(adapter: &Codex, host: &Host, command: &GateCommand) -> GateCheck {
+    if let Some(off) = hooks_switched_off(adapter, host) {
+        return off;
+    }
     let all = || EVENTS.iter().map(|(event, _)| event.to_string()).collect();
     let Ok(files) = files(adapter, host) else {
         return GateCheck::Missing(all());
@@ -324,9 +515,18 @@ pub fn check(adapter: &Codex, host: &Host, command: &GateCommand) -> GateCheck {
         .filter(|found| hooks::pin_of(&state, &found.key, &found.handler) == Pin::Trusted)
         .map(|found| found.event)
         .collect();
+    let ours = handler(command);
+    let moved = |event: &str| {
+        document
+            .value
+            .get("hooks")
+            .and_then(|hooks| hooks.get(event))
+            .and_then(Value::as_array)
+            .is_some_and(|groups| groups.iter().any(|group| is_moved(event, group, &ours)))
+    };
     let missing: Vec<String> = EVENTS
         .iter()
-        .filter(|(event, _)| !trusted.contains(event))
+        .filter(|(event, _)| !trusted.contains(event) || moved(event))
         .map(|(event, _)| event.to_string())
         .collect();
     match missing.is_empty() {
@@ -336,58 +536,52 @@ pub fn check(adapter: &Codex, host: &Host, command: &GateCommand) -> GateCheck {
 }
 
 /// Takes away the groups whose only handler is AgentSweep's and the pin
-/// records filed under their keys, and names the entries taken away.
+/// records filed under their keys, files the pins of the groups after them
+/// again under their new position, and names the entries taken away.
 pub fn remove(
     adapter: &Codex,
     host: &Host,
     writer: &dyn SurfaceWriter,
     command: &GateCommand,
-) -> Result<Vec<GateEntry>, GateError> {
+) -> Result<GateWrite, GateError> {
     let files = files(adapter, host)?;
     config_parses(host, &files.config)?;
     let ours = handler(command);
 
     // The keys are counted on the hooks file as it was before the groups
     // went, which is where Codex filed the pins.
-    let mut keys: Vec<String> = Vec::new();
-    let removed = rewrite(host, writer, &files.hooks, &mut |current| {
-        keys.clear();
+    let mut dropped = Dropped::default();
+    rewrite(host, writer, &files.hooks, &mut |current| {
+        dropped = Dropped::default();
         let Some(current) = current else {
             return Ok(None);
         };
-        let found = ours_in(&hooks_document(host, &files.hooks, current)?, command);
-        if found.is_empty() {
-            return Ok(None);
+        dropped = drop_groups(host, &files.hooks, current, &|_, group| {
+            is_ours(group, &ours)
+        })?;
+        match dropped.entries.is_empty() {
+            true => Ok(None),
+            false => Ok(Some((dropped.text.clone(), ()))),
         }
-        keys = found.iter().map(|found| found.key.clone()).collect();
-        let mut text = current.to_string();
-        for (event, _) in EVENTS {
-            (text, _) = drop_json(&text, &EntryPath::of(&["hooks", event]), &|group| {
-                is_ours(group, &ours)
-            })?;
-        }
-        let entries = found.into_iter().map(|found| found.entry).collect();
-        Ok(Some((text, entries)))
-    })?
-    .unwrap_or_default();
+    })?;
 
+    let mut pins_rekeyed = 0;
     rewrite(host, writer, &files.config, &mut |current| {
         let Some(current) = current else {
             return Ok(None);
         };
-        let mut text = current.to_string();
-        let mut dropped_any = false;
-        for key in &keys {
-            let dropped;
-            (text, dropped) = drop_toml(&text, &record_path(key))?;
-            dropped_any |= dropped;
-        }
-        match dropped_any {
+        let (text, changed, moved) = refile_pins(current, &dropped.keys, &dropped.rekeys)?;
+        pins_rekeyed = moved;
+        match changed {
             true => Ok(Some((text, ()))),
             false => Ok(None),
         }
     })?;
-    Ok(removed)
+    Ok(GateWrite {
+        written: Vec::new(),
+        removed: dropped.entries,
+        pins_rekeyed,
+    })
 }
 
 #[cfg(test)]
@@ -553,7 +747,8 @@ mod tests {
 
         let written = adapter
             .register_gate(&home.host(), &Writer, &command())
-            .expect("registered");
+            .expect("registered")
+            .written;
 
         assert_eq!(written.len(), 2, "{written:?}");
         let after = read_json(&home.hooks());
@@ -612,7 +807,8 @@ mod tests {
         let hooks_now = std::fs::read_to_string(home.hooks()).expect("the hooks file");
         let again = adapter
             .register_gate(&home.host(), &Writer, &command())
-            .expect("nothing to do");
+            .expect("nothing to do")
+            .written;
         assert!(again.is_empty(), "{again:?}");
         assert_eq!(
             std::fs::read_to_string(home.hooks()).expect("the file"),
@@ -638,7 +834,8 @@ mod tests {
         let adapter = Codex::new();
         let written = adapter
             .register_gate(&home.host(), &Writer, &command())
-            .expect("registered");
+            .expect("registered")
+            .written;
 
         let text = std::fs::read_to_string(home.hooks()).expect("the hooks file");
         let document = hooks_document(&home.host(), &home.hooks(), &text).expect("JSON");
@@ -759,11 +956,13 @@ mod tests {
         let adapter = Codex::new();
         let written = adapter
             .register_gate(&home.host(), &Writer, &command())
-            .expect("registered");
+            .expect("registered")
+            .written;
 
         let removed = adapter
             .remove_gate(&home.host(), &Writer, &command())
-            .expect("removed");
+            .expect("removed")
+            .removed;
 
         assert_eq!(removed, written);
         assert_eq!(
@@ -783,7 +982,8 @@ mod tests {
         );
         let again = adapter
             .remove_gate(&home.host(), &Writer, &command())
-            .expect("nothing to remove");
+            .expect("nothing to remove")
+            .removed;
         assert!(again.is_empty());
     }
 
@@ -793,7 +993,8 @@ mod tests {
         let adapter = Codex::new();
         let written = adapter
             .register_gate(&home.host(), &Writer, &command())
-            .expect("registered");
+            .expect("registered")
+            .written;
         assert_eq!(written.len(), 2);
         let after = read_json(&home.hooks());
         assert_eq!(
@@ -855,7 +1056,8 @@ mod tests {
 
         let again = adapter
             .register_gate(&home.host(), &Writer, &command())
-            .expect("pinned again");
+            .expect("pinned again")
+            .written;
 
         assert_eq!(again.len(), 1);
         assert!(again[0].locator.contains("#PreToolUse/"), "{:?}", again[0]);
@@ -881,7 +1083,8 @@ mod tests {
 
         let written = Codex::new()
             .register_gate(&host, &Writer, &command())
-            .expect("registered");
+            .expect("registered")
+            .written;
 
         assert_eq!(written.len(), 2);
         assert!(
@@ -943,6 +1146,264 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(home.config()).expect("the file"),
             ""
+        );
+    }
+}
+
+#[cfg(test)]
+mod check_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use agentsweep_core::adapter::SurfaceAdapter;
+    use agentsweep_core::gate_registration::{WriteError, hash_now};
+    use agentsweep_core::item::Activation;
+
+    /// Where the bundle puts the command line interface, and where an older
+    /// copy of the bundle put it. Nothing runs either.
+    const CLI: &str = "/Applications/AgentSweep.app/Contents/MacOS/agentsweep";
+    const OLD_CLI: &str = "/Volumes/Old/AgentSweep.app/Contents/MacOS/agentsweep";
+
+    struct Writer;
+
+    impl SurfaceWriter for Writer {
+        fn write_if_unchanged(
+            &self,
+            path: &Path,
+            expected: Option<&str>,
+            text: &str,
+        ) -> Result<(), WriteError> {
+            if hash_now(path).map_err(WriteError::Io)?.as_deref() != expected {
+                return Err(WriteError::Changed);
+            }
+            std::fs::write(path, text).map_err(WriteError::Io)
+        }
+    }
+
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+
+    /// A temporary machine with an installed Codex and a stand-in for the
+    /// administrator's directory beside its home. Nothing here touches the
+    /// real machine.
+    struct Machine {
+        root: PathBuf,
+    }
+
+    impl Machine {
+        fn new() -> Machine {
+            let root = std::env::temp_dir().join(format!(
+                "agentsweep-codex-gate-check-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("home/.codex")).expect("a Codex home");
+            std::fs::create_dir_all(root.join("system/etc/codex")).expect("a managed directory");
+            Machine { root }
+        }
+
+        fn host(&self) -> Host {
+            Host::new(self.root.join("home"), Vec::new()).with_system_root(self.root.join("system"))
+        }
+
+        fn hooks(&self) -> PathBuf {
+            self.root.join("home/.codex/hooks.json")
+        }
+
+        fn config(&self) -> PathBuf {
+            self.root.join("home/.codex/config.toml")
+        }
+
+        fn write(&self, relative: &str, content: &str) {
+            std::fs::write(self.root.join(relative), content).expect("a file");
+        }
+    }
+
+    impl Drop for Machine {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn records(path: &Path) -> Value {
+        state_of(&std::fs::read_to_string(path).unwrap_or_default()).expect("TOML")
+    }
+
+    /// The user's own `PreToolUse` group, appended after whatever is there,
+    /// and pinned under the key Codex counts for it, as its review does.
+    fn add_users_group(machine: &Machine) -> (String, String) {
+        let users = json!({"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "bash ~/.codex/lint.sh", "timeout": 30}
+        ]});
+        let text = std::fs::read_to_string(machine.hooks()).unwrap_or_else(|_| "{}".to_string());
+        let text =
+            append_json(&text, &EntryPath::of(&["hooks", "PreToolUse"]), &users).expect("appended");
+        std::fs::write(machine.hooks(), &text).expect("the hooks file");
+        let document = hooks_document(&machine.host(), &machine.hooks(), &text).expect("JSON");
+        let handler = hooks::handlers(&document, "hooks")
+            .into_iter()
+            .find(|found| found.handler["command"] == "bash ~/.codex/lint.sh")
+            .expect("the user's handler");
+        let key = hooks::state_key(&machine.hooks(), &handler);
+        let hash = hooks::pin_hash(&handler).expect("a command handler");
+        let config = std::fs::read_to_string(machine.config()).unwrap_or_default();
+        let config = insert_toml(&config, &record_path(&key), &json!({"trusted_hash": hash}))
+            .expect("a pin");
+        std::fs::write(machine.config(), config).expect("the config layer");
+        (key, hash)
+    }
+
+    /// The owner's decision of 2026-10-14 on Codex pin positions: removing
+    /// AgentSweep's group moves the user's group after it one place up, and
+    /// its pin goes with it under the new key with the same hash, so Codex
+    /// still runs the user's hook.
+    #[test]
+    fn removal_refiles_the_pin_of_a_users_group_that_moved_up() {
+        let machine = Machine::new();
+        let adapter = Codex::new();
+        adapter
+            .register_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("registered");
+        let (old_key, hash) = add_users_group(&machine);
+        assert!(old_key.ends_with(":pre_tool_use:1:0"), "{old_key}");
+
+        let removed = adapter
+            .remove_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("removed");
+
+        assert_eq!(removed.removed.len(), 2, "{removed:?}");
+        assert_eq!(removed.pins_rekeyed, 1);
+        let new_key = old_key.replace(":pre_tool_use:1:0", ":pre_tool_use:0:0");
+        let after = records(&machine.config());
+        assert_eq!(after[&new_key]["trusted_hash"], hash.as_str(), "{after}");
+        assert!(after.get(&old_key).is_none(), "{after}");
+        assert_eq!(after.as_object().map(|records| records.len()), Some(1));
+
+        let enumeration = adapter.enumerate(&machine.host(), &[]);
+        let users = enumeration
+            .items
+            .iter()
+            .find(|item| item.id.as_str().contains("hooks.json#PreToolUse/Bash/"))
+            .expect("the user's Hook Item");
+        assert_eq!(users.activation, Activation::Active, "Codex trusts it");
+    }
+
+    /// The owner's decision of 2026-10-14: AgentSweep's groups under another
+    /// path go, with their pins, the user's group behind them keeps its
+    /// trust, and the fresh groups are pinned.
+    #[test]
+    fn registering_replaces_the_groups_under_another_cli_path() {
+        let machine = Machine::new();
+        let adapter = Codex::new();
+        let before = adapter
+            .register_gate(&machine.host(), &Writer, &GateCommand::at(OLD_CLI))
+            .expect("registered under the old path")
+            .written;
+        let (_, hash) = add_users_group(&machine);
+        assert!(matches!(
+            adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+            GateCheck::Missing(_)
+        ));
+
+        let moved = adapter
+            .register_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("registered under the new path");
+
+        assert_eq!(moved.written.len(), 2, "{moved:?}");
+        let mut removed = moved.removed.clone();
+        let mut expected = before;
+        removed.sort_by(|a, b| a.locator.cmp(&b.locator));
+        expected.sort_by(|a, b| a.locator.cmp(&b.locator));
+        assert_eq!(removed, expected);
+        let text = std::fs::read_to_string(machine.hooks()).expect("the hooks file");
+        assert!(!text.contains("/Volumes/Old"), "{text}");
+        assert_eq!(
+            adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+            GateCheck::Registered
+        );
+        let after = records(&machine.config());
+        let users_key = format!("{}:pre_tool_use:0:0", machine.hooks().display());
+        assert_eq!(after[&users_key]["trusted_hash"], hash.as_str(), "{after}");
+        assert_eq!(after.as_object().map(|records| records.len()), Some(3));
+    }
+
+    /// `enabled = false` on the pin of AgentSweep's own entry is mended like
+    /// any other failure of the pin.
+    #[test]
+    fn a_pin_switched_off_is_written_again() {
+        let machine = Machine::new();
+        let adapter = Codex::new();
+        adapter
+            .register_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("registered");
+        let key = format!("{}:user_prompt_submit:0:0", machine.hooks().display());
+        let text = std::fs::read_to_string(machine.config()).expect("the layer");
+        let hash = records(&machine.config())[&key]["trusted_hash"].clone();
+        let text = insert_toml(
+            &text,
+            &record_path(&key),
+            &json!({"trusted_hash": hash, "enabled": false}),
+        )
+        .expect("switched off");
+        std::fs::write(machine.config(), text).expect("the layer");
+        assert_eq!(
+            adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+            GateCheck::Missing(vec!["UserPromptSubmit".to_string()])
+        );
+
+        let mended = adapter
+            .register_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("mended");
+
+        assert_eq!(mended.written.len(), 1, "{mended:?}");
+        assert!(records(&machine.config())[&key].get("enabled").is_none());
+        assert_eq!(
+            adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+            GateCheck::Registered
+        );
+    }
+
+    #[test]
+    fn managed_policy_that_drops_user_hooks_is_reported() {
+        for (file, content) in [
+            (
+                "system/etc/codex/requirements.toml",
+                "allow_managed_hooks_only = true\n",
+            ),
+            (
+                "system/etc/codex/config.toml",
+                "[features]\nhooks = false\n",
+            ),
+        ] {
+            let machine = Machine::new();
+            machine.write(file, content);
+            assert_eq!(
+                Codex::new().check_gate(&machine.host(), &GateCommand::at(CLI)),
+                GateCheck::ManagedPolicy,
+                "{file}"
+            );
+        }
+    }
+
+    /// The user layer's `[features] hooks = false` is the user's own choice:
+    /// reported, never written.
+    #[test]
+    fn the_users_hooks_switch_is_reported_and_never_written() {
+        let machine = Machine::new();
+        machine.write("home/.codex/config.toml", "[features]\nhooks = false\n");
+        let adapter = Codex::new();
+        assert_eq!(
+            adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+            GateCheck::SwitchedOffByUser
+        );
+        adapter
+            .register_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("registered");
+        let text = std::fs::read_to_string(machine.config()).expect("the layer");
+        assert!(text.starts_with("[features]\nhooks = false\n"), "{text}");
+        assert_eq!(
+            adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+            GateCheck::SwitchedOffByUser
         );
     }
 }

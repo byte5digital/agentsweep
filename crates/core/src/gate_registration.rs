@@ -83,19 +83,63 @@ pub struct GateEntry {
     pub path: PathBuf,
 }
 
+/// What one Gate write did to an Agent's files: the entries it wrote, the
+/// entries it took away, and how many pins of other groups it filed again
+/// under a new key because a group ahead of them went.
+///
+/// A registration writes the entries an event is missing and takes away the
+/// entries that carry AgentSweep's own arguments and timeout under another
+/// command line interface path, so that after the bundle moved there is
+/// exactly one AgentSweep entry per event (the owner's decision of
+/// 2026-10-14). A removal only takes away. Codex files a pin under the
+/// position of its group, so a group that goes shifts every group after it in
+/// the same event; their pins are filed again under the new position with the
+/// same hash, so the user's own trust survives (the owner's decision of
+/// 2026-10-14).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GateWrite {
+    /// The entries written.
+    pub written: Vec<GateEntry>,
+    /// The entries taken away.
+    pub removed: Vec<GateEntry>,
+    /// How many pins of groups that are not AgentSweep's were filed again
+    /// under their new position.
+    pub pins_rekeyed: usize,
+}
+
+impl GateWrite {
+    /// True when the write changed nothing.
+    pub fn is_empty(&self) -> bool {
+        self.written.is_empty() && self.removed.is_empty() && self.pins_rekeyed == 0
+    }
+}
+
 /// What looking at an Agent's Gate entries found.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GateCheck {
     /// This Agent has no Gate.
     NoGate,
-    /// Every event carries AgentSweep's entry, unchanged.
+    /// Every event carries AgentSweep's entry, unchanged, and no entry
+    /// carries AgentSweep's arguments and timeout under another path.
     Registered,
-    /// These events carry no unchanged AgentSweep entry, by the Agent's own
-    /// event names.
+    /// These events carry no unchanged AgentSweep entry, or carry one of
+    /// AgentSweep's under another command line interface path, by the
+    /// Agent's own event names.
     Missing(Vec<String>),
     /// The file the entries live in could not be read or parsed, so nothing
     /// can be said and nothing may be written over it.
     Unreadable(PathBuf),
+    /// Managed policy drops the user's hooks: Claude Code's managed
+    /// `allowManagedHooksOnly` or `disableAllHooks`, Codex's
+    /// `allow_managed_hooks_only` in `requirements.toml` or a managed
+    /// `[features] hooks = false`. Nothing is written for this Agent.
+    ManagedPolicy,
+    /// The user switched the Agent's hooks off in their own settings: a
+    /// User-scope `disableAllHooks` in Claude Code, `[features] hooks = false`
+    /// in the Codex user layer. That is the user's own choice and AgentSweep
+    /// never writes it (the owner's decision of 2026-10-14); the entries
+    /// themselves are still kept in place.
+    SwitchedOffByUser,
 }
 
 /// Why a Gate write did not happen.

@@ -9,17 +9,31 @@
 //! `timeout` of five seconds.
 //!
 //! Each group is appended after the groups already written, so nothing the
-//! user registered moves. Removal takes away exactly the groups whose only
-//! handler is AgentSweep's, command, arguments and timeout alike, and nothing
-//! else. Every entry written or taken away is named by the id and hash the
-//! enumeration gives its Hook Item, which is what the daemon records.
+//! user registered moves. A group whose one handler carries AgentSweep's
+//! arguments and timeout under another command line interface path is
+//! AgentSweep's own entry after the bundle moved, and registering takes it
+//! away, so there is exactly one AgentSweep entry per event (the owner's
+//! decision of 2026-10-14). An entry edited in any other way is never
+//! repaired in place: a fresh one is appended and the edited one stays, a
+//! Hook Item whose locator changed. Removal takes away exactly the groups
+//! whose only handler is AgentSweep's, command, arguments and timeout alike,
+//! and nothing else. Every entry written or taken away is named by the id and
+//! hash the enumeration gives its Hook Item, which is what the daemon records.
+//!
+//! The check also reads what switches hooks off. A managed
+//! `allowManagedHooksOnly` or `disableAllHooks` is managed policy, and
+//! nothing is written; a User-scope `disableAllHooks` is the user's own
+//! choice, which AgentSweep reports and never writes (spec section 7.6 as
+//! amended on 2026-10-14).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use agentsweep_core::adapter::Enumeration;
 use agentsweep_core::entry_edit::{EditError, EntryPath, append_json, drop_json};
 use agentsweep_core::gate_registration::{
-    GATE_TIMEOUT_SECONDS, GateCheck, GateCommand, GateEntry, GateError, SurfaceWriter, rewrite,
+    GATE_TIMEOUT_SECONDS, GateCheck, GateCommand, GateEntry, GateError, GateWrite, SurfaceWriter,
+    rewrite,
 };
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{ItemId, Kind, Scope, sha256_hex};
@@ -102,10 +116,67 @@ fn registered_events(document: &Document, command: &GateCommand) -> BTreeSet<&'s
     found
 }
 
+/// True when a group under `event` holds one handler that carries
+/// AgentSweep's arguments and timeout, and nothing else, under the matcher
+/// the Gate gives the event, but runs a command line interface at another
+/// path. That is AgentSweep's own entry after the bundle moved, and the
+/// registration replaces it (the owner's decision of 2026-10-14).
+fn is_moved(event: &str, group: &Value, ours: &Value) -> bool {
+    let Some((_, matcher)) = EVENTS.iter().find(|(name, _)| *name == event) else {
+        return false;
+    };
+    if group.get("matcher").and_then(Value::as_str) != *matcher {
+        return false;
+    }
+    let Some([handler]) = group
+        .get("hooks")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+    else {
+        return false;
+    };
+    let Some(fields) = handler.as_object() else {
+        return false;
+    };
+    fields.len() == 4
+        && handler.get("type") == ours.get("type")
+        && handler.get("args") == ours.get("args")
+        && handler.get("timeout") == ours.get("timeout")
+        && handler.get("command").is_some_and(Value::is_string)
+        && handler.get("command") != ours.get("command")
+}
+
+/// The groups of the Gate's events that are AgentSweep's under another path.
+fn moved_events(document: &Document, command: &GateCommand) -> BTreeSet<&'static str> {
+    let ours = handler(command);
+    EVENTS
+        .iter()
+        .filter(|(event, _)| {
+            document
+                .value
+                .get("hooks")
+                .and_then(|hooks| hooks.get(*event))
+                .and_then(Value::as_array)
+                .is_some_and(|groups| groups.iter().any(|group| is_moved(event, group, &ours)))
+        })
+        .map(|(event, _)| *event)
+        .collect()
+}
+
 /// The Gate entries of a document, in the events given, as Hook Items. A
 /// handler of AgentSweep's in a group the user shares is not one of them.
 fn entries(document: &Document, command: &GateCommand, events: &[&str]) -> Vec<GateEntry> {
     let ours = handler(command);
+    entries_where(document, events, &|_, group| is_ours(group, &ours))
+}
+
+/// The entries of the groups `picks` takes, in the events given, as Hook
+/// Items.
+fn entries_where(
+    document: &Document,
+    events: &[&str],
+    picks: &dyn Fn(&str, &Value) -> bool,
+) -> Vec<GateEntry> {
     hooks::handlers(document)
         .into_iter()
         .filter(|found| events.contains(&found.event.as_str()))
@@ -115,7 +186,7 @@ fn entries(document: &Document, command: &GateCommand, events: &[&str]) -> Vec<G
                 .get("hooks")
                 .and_then(|hooks| hooks.get(&found.event))
                 .and_then(|groups| groups.get(found.group_index))
-                .is_some_and(|group| is_ours(group, &ours))
+                .is_some_and(|group| picks(&found.event, group))
         })
         .map(|found| {
             let locator = found.locator(document);
@@ -129,17 +200,29 @@ fn entries(document: &Document, command: &GateCommand, events: &[&str]) -> Vec<G
         .collect()
 }
 
-/// Appends a group for every event that does not carry AgentSweep's entry
-/// unchanged, and names the entries written.
+/// Takes away every group that is AgentSweep's under another path, appends a
+/// group for every event that does not carry AgentSweep's entry unchanged,
+/// and names the entries written and taken away.
 pub fn register(
     adapter: &ClaudeCode,
     host: &Host,
     writer: &dyn SurfaceWriter,
     command: &GateCommand,
-) -> Result<Vec<GateEntry>, GateError> {
+) -> Result<GateWrite, GateError> {
     let path = settings_file(adapter, host)?;
+    let ours = handler(command);
+    let events: Vec<&str> = EVENTS.iter().map(|(event, _)| *event).collect();
     let written = rewrite(host, writer, &path, &mut |current| {
         let mut text = current.unwrap_or("{}").to_string();
+        let before = document(host, &path, &text)?;
+        let removed = entries_where(&before, &events, &|event, group| {
+            is_moved(event, group, &ours)
+        });
+        for event in moved_events(&before, command) {
+            (text, _) = drop_json(&text, &EntryPath::of(&["hooks", event]), &|group| {
+                is_moved(event, group, &ours)
+            })?;
+        }
         let present = registered_events(&document(host, &path, &text)?, command);
         let mut appended = Vec::new();
         for (event, matcher) in EVENTS {
@@ -153,17 +236,41 @@ pub fn register(
             )?;
             appended.push(event);
         }
-        if appended.is_empty() {
+        if appended.is_empty() && removed.is_empty() {
             return Ok(None);
         }
-        let entries = entries(&document(host, &path, &text)?, command, &appended);
-        Ok(Some((text, entries)))
+        let written = entries(&document(host, &path, &text)?, command, &appended);
+        Ok(Some((
+            text,
+            GateWrite {
+                written,
+                removed,
+                pins_rekeyed: 0,
+            },
+        )))
     })?;
     Ok(written.unwrap_or_default())
 }
 
-/// Whether every event carries AgentSweep's entry unchanged.
+/// True when a managed settings file drops the user's hooks:
+/// `allowManagedHooksOnly`, or `disableAllHooks`, which no lower layer can
+/// set back.
+fn managed_policy_blocks(adapter: &ClaudeCode, host: &Host) -> bool {
+    adapter
+        .managed_documents(host, &mut Enumeration::default())
+        .iter()
+        .any(|document| {
+            document.flag("allowManagedHooksOnly") == Some(true)
+                || document.flag("disableAllHooks") == Some(true)
+        })
+}
+
+/// Whether every event carries AgentSweep's entry unchanged, and whether
+/// managed policy or the user's own settings switch hooks off.
 pub fn check(adapter: &ClaudeCode, host: &Host, command: &GateCommand) -> GateCheck {
+    if managed_policy_blocks(adapter, host) {
+        return GateCheck::ManagedPolicy;
+    }
     let Ok(path) = settings_file(adapter, host) else {
         return GateCheck::Missing(EVENTS.iter().map(|(e, _)| e.to_string()).collect());
     };
@@ -175,10 +282,14 @@ pub fn check(adapter: &ClaudeCode, host: &Host, command: &GateCommand) -> GateCh
     let Ok(document) = document(host, &path, &text) else {
         return GateCheck::Unreadable(path);
     };
+    if document.flag("disableAllHooks") == Some(true) {
+        return GateCheck::SwitchedOffByUser;
+    }
     let present = registered_events(&document, command);
+    let moved = moved_events(&document, command);
     let missing: Vec<String> = EVENTS
         .iter()
-        .filter(|(event, _)| !present.contains(event))
+        .filter(|(event, _)| !present.contains(event) || moved.contains(event))
         .map(|(event, _)| event.to_string())
         .collect();
     match missing.is_empty() {
@@ -194,7 +305,7 @@ pub fn remove(
     host: &Host,
     writer: &dyn SurfaceWriter,
     command: &GateCommand,
-) -> Result<Vec<GateEntry>, GateError> {
+) -> Result<GateWrite, GateError> {
     let path = settings_file(adapter, host)?;
     let ours = handler(command);
     let events: Vec<&str> = EVENTS.iter().map(|(event, _)| *event).collect();
@@ -214,7 +325,10 @@ pub fn remove(
         }
         Ok(Some((text, entries)))
     })?;
-    Ok(removed.unwrap_or_default())
+    Ok(GateWrite {
+        removed: removed.unwrap_or_default(),
+        ..GateWrite::default()
+    })
 }
 
 #[cfg(test)]
@@ -351,7 +465,8 @@ mod tests {
 
         let written = adapter
             .register_gate(&home.host(), &Writer::plain(), &command())
-            .expect("registered");
+            .expect("registered")
+            .written;
 
         assert_eq!(written.len(), 3, "{written:?}");
         let after = read(&home.settings());
@@ -397,7 +512,8 @@ mod tests {
         // Registering again finds every entry in place and writes nothing.
         let again = adapter
             .register_gate(&home.host(), &Writer::plain(), &command())
-            .expect("nothing to do");
+            .expect("nothing to do")
+            .written;
         assert!(again.is_empty(), "{again:?}");
         assert_eq!(read(&home.settings()), after);
         assert_eq!(
@@ -415,7 +531,8 @@ mod tests {
         let adapter = ClaudeCode::new();
         let written = adapter
             .register_gate(&home.host(), &Writer::plain(), &command())
-            .expect("registered");
+            .expect("registered")
+            .written;
 
         let enumeration = adapter.enumerate(&home.host(), &[]);
         let hooks: Vec<_> = enumeration
@@ -440,7 +557,8 @@ mod tests {
         let home = Home::new();
         let written = ClaudeCode::new()
             .register_gate(&home.host(), &Writer::plain(), &command())
-            .expect("registered");
+            .expect("registered")
+            .written;
         assert_eq!(written.len(), 3);
         let after = read(&home.settings());
         assert_eq!(keys(&after), ["hooks"]);
@@ -465,7 +583,8 @@ mod tests {
 
         let written = ClaudeCode::new()
             .register_gate(&host, &Writer::plain(), &command())
-            .expect("registered");
+            .expect("registered")
+            .written;
 
         assert!(
             written
@@ -492,7 +611,8 @@ mod tests {
         };
         let written = adapter
             .register_gate(&home.host(), &once, &command())
-            .expect("written on the second read");
+            .expect("written on the second read")
+            .written;
         assert_eq!(written.len(), 3);
         assert_eq!(
             read(&home.settings())["model"],
@@ -550,11 +670,13 @@ mod tests {
         let adapter = ClaudeCode::new();
         let written = adapter
             .register_gate(&home.host(), &Writer::plain(), &command())
-            .expect("registered");
+            .expect("registered")
+            .written;
 
         let removed = adapter
             .remove_gate(&home.host(), &Writer::plain(), &command())
-            .expect("removed");
+            .expect("removed")
+            .removed;
 
         assert_eq!(removed, written);
         assert_eq!(
@@ -571,7 +693,8 @@ mod tests {
         );
         let again = adapter
             .remove_gate(&home.host(), &Writer::plain(), &command())
-            .expect("nothing to remove");
+            .expect("nothing to remove")
+            .removed;
         assert!(again.is_empty());
     }
 
@@ -601,7 +724,8 @@ mod tests {
 
         let removed = ClaudeCode::new()
             .remove_gate(&home.host(), &Writer::plain(), &command())
-            .expect("removed");
+            .expect("removed")
+            .removed;
 
         assert_eq!(removed.len(), 1);
         let after = read(&home.settings());
@@ -632,5 +756,169 @@ mod tests {
             Err(GateError::NoGate)
         ));
         assert!(!home.settings().exists());
+    }
+
+    /// The owner's decision of 2026-10-14: an entry with AgentSweep's
+    /// arguments and timeout under another path is AgentSweep's after the
+    /// bundle moved, and registering leaves exactly one entry per event.
+    #[test]
+    fn registering_replaces_the_entries_under_another_cli_path() {
+        let home = Home::new();
+        std::fs::write(home.settings(), USERS_OWN).expect("a settings file");
+        let adapter = ClaudeCode::new();
+        let old = GateCommand::at("/Volumes/Old/AgentSweep.app/Contents/MacOS/agentsweep");
+        let before = adapter
+            .register_gate(&home.host(), &Writer::plain(), &old)
+            .expect("registered under the old path")
+            .written;
+        assert_eq!(
+            adapter.check_gate(&home.host(), &command()),
+            GateCheck::Missing(vec![
+                "UserPromptSubmit".to_string(),
+                "PreToolUse".to_string(),
+                "UserPromptExpansion".to_string()
+            ])
+        );
+
+        let moved = adapter
+            .register_gate(&home.host(), &Writer::plain(), &command())
+            .expect("registered under the new path");
+
+        assert_eq!(moved.written.len(), 3, "{moved:?}");
+        let mut removed = moved.removed.clone();
+        let mut expected = before.clone();
+        removed.sort_by(|a, b| a.locator.cmp(&b.locator));
+        expected.sort_by(|a, b| a.locator.cmp(&b.locator));
+        assert_eq!(removed, expected);
+        let after = read(&home.settings());
+        let text = after.to_string();
+        assert!(!text.contains("/Volumes/Old"), "{text}");
+        assert_eq!(after["hooks"]["PreToolUse"][0]["matcher"], "Bash");
+        for event in ["UserPromptSubmit", "PreToolUse", "UserPromptExpansion"] {
+            let ours: Vec<&Value> = after["hooks"][event]
+                .as_array()
+                .expect("groups")
+                .iter()
+                .filter(|group| group["hooks"][0]["args"][0] == "gate")
+                .collect();
+            assert_eq!(ours.len(), 1, "{event}: {after}");
+        }
+        assert_eq!(
+            adapter.check_gate(&home.host(), &command()),
+            GateCheck::Registered
+        );
+    }
+
+    /// An entry edited in any other way is not repaired in place: a fresh one
+    /// is appended and the edited one stays where it is.
+    #[test]
+    fn an_edited_entry_stays_beside_the_fresh_one() {
+        let home = Home::new();
+        let adapter = ClaudeCode::new();
+        adapter
+            .register_gate(&home.host(), &Writer::plain(), &command())
+            .expect("registered");
+        let mut file = read(&home.settings());
+        file["hooks"]["UserPromptSubmit"][0]["hooks"][0]["timeout"] = json!(60);
+        file["hooks"]["PreToolUse"][0]["hooks"][0]["args"] =
+            json!(["gate", "--agent", "claude-code", "--quiet"]);
+        std::fs::write(
+            home.settings(),
+            serde_json::to_string_pretty(&file).expect("JSON"),
+        )
+        .expect("an edit");
+        assert_eq!(
+            adapter.check_gate(&home.host(), &command()),
+            GateCheck::Missing(vec![
+                "UserPromptSubmit".to_string(),
+                "PreToolUse".to_string()
+            ])
+        );
+
+        let mended = adapter
+            .register_gate(&home.host(), &Writer::plain(), &command())
+            .expect("mended");
+
+        assert_eq!(mended.written.len(), 2, "{mended:?}");
+        assert!(mended.removed.is_empty(), "{mended:?}");
+        let after = read(&home.settings());
+        assert_eq!(
+            after["hooks"]["UserPromptSubmit"][0],
+            file["hooks"]["UserPromptSubmit"][0]
+        );
+        assert_eq!(
+            after["hooks"]["PreToolUse"][0],
+            file["hooks"]["PreToolUse"][0]
+        );
+        assert_eq!(
+            after["hooks"]["UserPromptSubmit"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            after["hooks"]["PreToolUse"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            adapter.check_gate(&home.host(), &command()),
+            GateCheck::Registered
+        );
+    }
+
+    fn managed_home(content: &str) -> (Home, Host) {
+        let home = Home::new();
+        let directory = home
+            .root
+            .join("system")
+            .join(crate::MANAGED_DIRECTORY.trim_start_matches('/'));
+        std::fs::create_dir_all(&directory).expect("a managed directory");
+        std::fs::write(directory.join(crate::MANAGED_SETTINGS_FILE), content)
+            .expect("a managed settings file");
+        let host = home.host().with_system_root(home.root.join("system"));
+        (home, host)
+    }
+
+    /// Managed policy that drops the user's hooks is reported; the check
+    /// never says registered or missing there.
+    #[test]
+    fn managed_policy_that_drops_user_hooks_is_reported() {
+        for policy in [
+            "{\"allowManagedHooksOnly\": true}",
+            "{\"disableAllHooks\": true}",
+        ] {
+            let (_home, host) = managed_home(policy);
+            assert_eq!(
+                ClaudeCode::new().check_gate(&host, &command()),
+                GateCheck::ManagedPolicy,
+                "{policy}"
+            );
+        }
+        let (_home, host) = managed_home("{\"allowManagedHooksOnly\": false}");
+        assert!(matches!(
+            ClaudeCode::new().check_gate(&host, &command()),
+            GateCheck::Missing(_)
+        ));
+    }
+
+    /// A User-scope `disableAllHooks` is the user's own choice: the check
+    /// reports it and registering never writes it.
+    #[test]
+    fn a_user_disable_all_hooks_is_reported_and_never_written() {
+        let home = Home::new();
+        std::fs::write(home.settings(), "{\n  \"disableAllHooks\": true\n}\n")
+            .expect("a settings file");
+        let adapter = ClaudeCode::new();
+        assert_eq!(
+            adapter.check_gate(&home.host(), &command()),
+            GateCheck::SwitchedOffByUser
+        );
+        adapter
+            .register_gate(&home.host(), &Writer::plain(), &command())
+            .expect("registered");
+        let after = read(&home.settings());
+        assert_eq!(after["disableAllHooks"], json!(true));
+        assert_eq!(
+            adapter.check_gate(&home.host(), &command()),
+            GateCheck::SwitchedOffByUser
+        );
     }
 }

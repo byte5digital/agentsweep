@@ -22,7 +22,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::gate_registration::{GateCheck, GateCommand, GateEntry, GateError, SurfaceWriter};
+use crate::gate_registration::{GateCheck, GateCommand, GateError, GateWrite, SurfaceWriter};
 use crate::host::Host;
 use crate::item::{Item, ItemId, Kind, Scope, Shape};
 use crate::quarantine::{Conflict, EnforcementError, Receipt, RestoreReport, Store};
@@ -488,7 +488,9 @@ pub trait SurfaceAdapter {
 
     /// Writes the Gate's own entries into this Agent's user settings, one for
     /// each event the Gate listens on that does not carry one unchanged
-    /// already, and names every entry it wrote (spec sections 7.2 and 7.6).
+    /// already, takes away every entry that carries AgentSweep's arguments and
+    /// timeout under another command line interface path, and names every
+    /// entry it wrote or took away (spec sections 7.2 and 7.6).
     ///
     /// The file is the one in the effective config directory the Host gives,
     /// never one followed from an env file. Each entry is appended after what
@@ -500,28 +502,31 @@ pub trait SurfaceAdapter {
         host: &Host,
         writer: &dyn SurfaceWriter,
         command: &GateCommand,
-    ) -> Result<Vec<GateEntry>, GateError> {
+    ) -> Result<GateWrite, GateError> {
         let _ = (host, writer, command);
         Err(GateError::NoGate)
     }
 
     /// Whether every event the Gate listens on carries AgentSweep's entry with
-    /// the command, arguments and timeout unchanged. Reads, never writes. The
-    /// default is that this Agent has no Gate.
+    /// the command, arguments and timeout unchanged, and whether managed
+    /// policy or the user's own settings switch the Agent's hooks off. Reads,
+    /// never writes. The default is that this Agent has no Gate.
     fn check_gate(&self, host: &Host, command: &GateCommand) -> GateCheck {
         let _ = (host, command);
         GateCheck::NoGate
     }
 
     /// Takes away exactly the entries whose command, arguments and timeout
-    /// are AgentSweep's, and names every entry it took away. The default is
-    /// that this Agent has no Gate.
+    /// are AgentSweep's, and names every entry it took away. Where the Agent
+    /// files trust by position, the pins of the groups that moved up are filed
+    /// again under their new position. The default is that this Agent has no
+    /// Gate.
     fn remove_gate(
         &self,
         host: &Host,
         writer: &dyn SurfaceWriter,
         command: &GateCommand,
-    ) -> Result<Vec<GateEntry>, GateError> {
+    ) -> Result<GateWrite, GateError> {
         let _ = (host, writer, command);
         Err(GateError::NoGate)
     }

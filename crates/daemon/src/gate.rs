@@ -21,7 +21,9 @@ use std::path::Path;
 use agentsweep_core::adapter::SurfaceAdapter;
 use agentsweep_core::chain::ChainError;
 use agentsweep_core::eventlog::{Action, Actor, Event};
-use agentsweep_core::gate_registration::{AtomicWriter, GateCommand, GateEntry, GateError};
+use agentsweep_core::gate_registration::{
+    AtomicWriter, GateCommand, GateEntry, GateError, GateWrite,
+};
 use agentsweep_core::host::Host;
 use agentsweep_core::item::Kind;
 use agentsweep_core::keychain::KeySource;
@@ -56,33 +58,37 @@ pub fn bundled_command() -> Option<GateCommand> {
     GateCommand::beside(&std::env::current_exe().ok()?)
 }
 
-/// Writes the Gate's entries for one Agent and records every entry written.
+/// Writes the Gate's entries for one Agent, takes away its entries under
+/// another command line interface path, and records every entry written or
+/// taken away.
 pub fn register(
     adapter: &dyn SurfaceAdapter,
     host: &Host,
     directory: &DataDirectory,
     keys: &dyn KeySource,
     command: &GateCommand,
-) -> Result<Vec<GateEntry>, GateWriteError> {
-    let written = adapter
+) -> Result<GateWrite, GateWriteError> {
+    let write = adapter
         .register_gate(host, &AtomicWriter, command)
         .map_err(GateWriteError::Gate)?;
-    record(
-        Action::GateRegistered,
-        adapter.descriptor().agent,
-        &written,
-        directory,
-        keys,
-    )?;
-    if !written.is_empty() {
+    record(adapter.descriptor().agent, &write, directory, keys)?;
+    if !write.written.is_empty() {
         say!(
             "the Gate was registered with {}: {} entries in {}",
             adapter.descriptor().agent,
-            written.len(),
-            shown(&written)
+            write.written.len(),
+            shown(&write.written)
         );
     }
-    Ok(written)
+    if !write.removed.is_empty() {
+        say!(
+            "the Gate's entries under another path were replaced in {}: {} entries in {}",
+            adapter.descriptor().agent,
+            write.removed.len(),
+            shown(&write.removed)
+        );
+    }
+    Ok(write)
 }
 
 /// Takes the Gate's entries away from one Agent and records every entry taken
@@ -93,46 +99,54 @@ pub fn remove(
     directory: &DataDirectory,
     keys: &dyn KeySource,
     command: &GateCommand,
-) -> Result<Vec<GateEntry>, GateWriteError> {
-    let removed = adapter
+) -> Result<GateWrite, GateWriteError> {
+    let write = adapter
         .remove_gate(host, &AtomicWriter, command)
         .map_err(GateWriteError::Gate)?;
-    record(
-        Action::GateRemoved,
-        adapter.descriptor().agent,
-        &removed,
-        directory,
-        keys,
-    )?;
-    if !removed.is_empty() {
+    record(adapter.descriptor().agent, &write, directory, keys)?;
+    if !write.removed.is_empty() {
         say!(
             "the Gate was removed from {}: {} entries in {}",
             adapter.descriptor().agent,
-            removed.len(),
-            shown(&removed)
+            write.removed.len(),
+            shown(&write.removed)
         );
     }
-    Ok(removed)
+    Ok(write)
 }
 
-/// One event per entry, naming the Agent, the entry locator and the Hook
-/// Item's content hash.
+/// One `gate-removed` event per entry taken away, then one `gate-registered`
+/// event per entry written, each naming the Agent, the entry locator and the
+/// Hook Item's content hash. Pins filed again under a new position are noted
+/// on the first event of the write; a pin is never an Item.
 fn record(
-    action: Action,
     agent: &str,
-    entries: &[GateEntry],
+    write: &GateWrite,
     directory: &DataDirectory,
     keys: &dyn KeySource,
 ) -> Result<(), GateWriteError> {
-    if entries.is_empty() {
+    if write.written.is_empty() && write.removed.is_empty() {
         return Ok(());
     }
     let (mut writer, _) = open_the_event_log(directory, keys).map_err(GateWriteError::Log)?;
-    for entry in entries {
-        let event = Event::new(action, Actor::Auto)
+    let entries = write
+        .removed
+        .iter()
+        .map(|entry| (Action::GateRemoved, entry))
+        .chain(
+            write
+                .written
+                .iter()
+                .map(|entry| (Action::GateRegistered, entry)),
+        );
+    for (index, (action, entry)) in entries.enumerate() {
+        let mut event = Event::new(action, Actor::Auto)
             .about(&entry.item_id, Kind::Hook, &entry.content_hash)
             .noting("agent", agent)
             .noting("locator", entry.locator.as_str());
+        if index == 0 && write.pins_rekeyed > 0 {
+            event = event.noting("pins_rekeyed", write.pins_rekeyed.to_string().as_str());
+        }
         writer.append(&event).map_err(GateWriteError::Log)?;
     }
     Ok(())

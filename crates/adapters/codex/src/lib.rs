@@ -54,7 +54,7 @@ use agentsweep_core::adapter::{
     Surface, SurfaceAdapter, WatchRoots,
 };
 use agentsweep_core::gate_registration::{
-    GateCheck, GateCommand, GateEntry, GateError, SurfaceWriter,
+    GateCheck, GateCommand, GateError, GateWrite, SurfaceWriter,
 };
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{
@@ -1139,7 +1139,7 @@ impl SurfaceAdapter for Codex {
         host: &Host,
         writer: &dyn SurfaceWriter,
         command: &GateCommand,
-    ) -> Result<Vec<GateEntry>, GateError> {
+    ) -> Result<GateWrite, GateError> {
         gate::register(self, host, writer, command)
     }
 
@@ -1152,7 +1152,7 @@ impl SurfaceAdapter for Codex {
         host: &Host,
         writer: &dyn SurfaceWriter,
         command: &GateCommand,
-    ) -> Result<Vec<GateEntry>, GateError> {
+    ) -> Result<GateWrite, GateError> {
         gate::remove(self, host, writer, command)
     }
 }

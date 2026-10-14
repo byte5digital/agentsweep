@@ -126,6 +126,7 @@ impl Sandbox {
             &GateCommand::at(CLI),
         )
         .expect("the Gate registered")
+        .written
     }
 
     fn remove(&self) -> Vec<GateEntry> {
@@ -137,6 +138,7 @@ impl Sandbox {
             &GateCommand::at(CLI),
         )
         .expect("the Gate removed")
+        .removed
     }
 
     /// The Gate events in the Event Log, in order.

@@ -408,6 +408,16 @@ mod login_keychain {
                 account: super::CLAUDE_KEY_ACCOUNT.to_string(),
             }
         }
+
+        /// An item under a name of the caller's choosing. The one sanctioned
+        /// use is the hand check of a live Claude API call, which must not go
+        /// near the daemon's own item.
+        pub fn named(service: &str, account: &str) -> LoginKeychainClaudeKey {
+            LoginKeychainClaudeKey {
+                service: service.to_string(),
+                account: account.to_string(),
+            }
+        }
     }
 
     impl super::ClaudeKeyStore for LoginKeychainClaudeKey {

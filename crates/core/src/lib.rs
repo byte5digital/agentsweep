@@ -29,6 +29,8 @@ pub mod adapter;
 pub mod allowlist;
 pub mod baseline;
 pub mod chain;
+#[cfg(feature = "daemon")]
+pub mod claude_engine;
 pub mod composite;
 pub mod coverage;
 pub mod derived;

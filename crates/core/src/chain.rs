@@ -1127,7 +1127,7 @@ mod tests {
     fn the_daemon_is_the_only_crate_that_can_write_a_chain() {
         let core = include_str!("../Cargo.toml");
         assert!(
-            core.contains("daemon = [\"dep:security-framework\"]"),
+            core.contains("daemon = [\"dep:security-framework\", \"dep:ureq\"]"),
             "the core must gate the write side and the Keychain behind one feature"
         );
 

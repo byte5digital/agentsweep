@@ -76,34 +76,43 @@ jobs:
 
   app-bundle:
     name: App bundle
-    # The menu bar app is built into a bundle the way the release builds it,
-    # with the daemon and the command line interface as external binaries and
-    # the launch agent's plist inside, and signed ad hoc. No notarization and
-    # no secret: that is the release pipeline's, behind its own environment.
+    # The menu bar app is built into a bundle the way the release builds it:
+    # universal (arm64 plus x86_64), with the daemon and the command line
+    # interface as external binaries and the launch agent's plist inside, and
+    # signed ad hoc. No notarization and no secret: that is the release
+    # pipeline's, behind its own environment.
     runs-on: macos-latest
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install the pinned toolchain
-        run: .github/scripts/install-toolchain.sh
+      - name: Install the pinned toolchain with both Apple targets
+        run: .github/scripts/install-toolchain.sh aarch64-apple-darwin x86_64-apple-darwin
 
-      # Debug sidecars, because a debug daemon admits a peer of the same user
-      # and a release daemon admits nobody until the Team ID is filled in.
-      - name: Build the sidecars
-        run: apps/menubar/build-sidecars.sh debug
+      # Built from crates.io with the pinned toolchain, as in the build job.
+      - name: Install cargo-auditable
+        run: cargo install --locked cargo-auditable
+
+      # Release sidecars, so the bundle carries what a release ships: each one
+      # built for both Apple triples through cargo auditable and joined with
+      # lipo. Nothing here runs the daemon, so the empty Team ID that makes a
+      # release daemon admit nobody does not matter.
+      - name: Build the universal sidecars
+        env:
+          TARGET: universal-apple-darwin
+        run: apps/menubar/build-sidecars.sh release
 
       # The Tauri command line interface from npm, pinned to the exact version
-      # of the tauri crate the workspace locks.
-      - name: Build the bundle
+      # of the tauri crate the workspace locks. What follows `--` goes to cargo.
+      - name: Build the universal bundle
         working-directory: apps/menubar
         env:
           APPLE_SIGNING_IDENTITY: "-"
-        run: npx --yes @tauri-apps/cli@2.11.5 build --debug --config tauri.bundle.conf.json
+        run: npx --yes @tauri-apps/cli@2.11.5 build --target universal-apple-darwin --config tauri.bundle.conf.json -- --locked
 
       - name: Check what the bundle carries
         run: |
-          app=target/debug/bundle/macos/AgentSweep.app
+          app=target/universal-apple-darwin/release/bundle/macos/AgentSweep.app
           test -x "$app/Contents/MacOS/agentsweep-menubar"
           test -x "$app/Contents/MacOS/agentsweepd"
           test -x "$app/Contents/MacOS/agentsweep"
@@ -111,6 +120,30 @@ jobs:
           test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = "14.0"
           test "$(plutil -extract LSUIElement raw "$app/Contents/Info.plist")" = "true"
           codesign --verify --deep --strict "$app"
+
+      # Release checklist item 16, and the dependency list cargo auditable
+      # embeds, checked in each architecture of each sidecar.
+      - name: Check that every executable is universal and every sidecar auditable
+        run: |
+          macos=target/universal-apple-darwin/release/bundle/macos/AgentSweep.app/Contents/MacOS
+          for binary in agentsweep-menubar agentsweepd agentsweep; do
+            archs="$(lipo -archs "$macos/$binary")"
+            echo "$binary: $archs"
+            for arch in arm64 x86_64; do
+              case " $archs " in
+                *" $arch "*) ;;
+                *) echo "$binary lacks $arch" >&2; exit 1 ;;
+              esac
+            done
+          done
+          for binary in agentsweepd agentsweep; do
+            for arch in arm64 x86_64; do
+              if ! otool -arch "$arch" -l "$macos/$binary" | grep -q 'sectname .dep-v0'; then
+                echo "$binary ($arch) carries no .dep-v0 dependency list" >&2
+                exit 1
+              fi
+            done
+          done
 
   benign-corpus:
     name: Benign corpus

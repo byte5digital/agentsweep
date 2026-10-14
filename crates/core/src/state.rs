@@ -34,6 +34,7 @@ use crate::finding_facts::FindingFacts;
 use crate::gate_facts::GateRecord;
 use crate::item::{ItemId, Kind};
 use crate::keychain::{KeyError, KeySource};
+use crate::overview::Overview;
 use crate::paths::DataDirectory;
 use crate::scan_pass::ScanKind;
 
@@ -443,6 +444,11 @@ pub struct State {
     /// Gate facts existed, which the Gate reads as state unavailable until the
     /// next Full Scan writes it (spec section 7.3).
     pub gate: Option<GateRecord>,
+    /// What the Overview names beside the Findings: the Agents and pooled
+    /// project roots the last Full Scan found, and the Items in the Ambiguous
+    /// Band (spec section 8.1). Additive: a state file written before it
+    /// reads as nothing known until the next Full Scan.
+    pub overview: Overview,
 }
 
 /// A newer Rule Pack that was ignored because it needs a newer AgentSweep.
@@ -646,6 +652,7 @@ impl State {
                     .unwrap_or_default(),
             ),
         );
+        map.insert("overview".to_string(), self.overview.to_value());
         map.insert(
             "readable_classes".to_string(),
             Value::Array(
@@ -706,6 +713,10 @@ impl State {
             None => None,
             Some(gate) => Some(GateRecord::from_value(gate)?),
         };
+        let overview = match value.get("overview") {
+            None => Overview::default(),
+            Some(overview) => Overview::read_from(overview)?,
+        };
         Some(State {
             findings,
             scans,
@@ -714,6 +725,7 @@ impl State {
             feed,
             legacy_rule_feed,
             gate,
+            overview,
         })
     }
 }
@@ -1118,6 +1130,34 @@ mod tests {
 
         let read = file.read(&keys).expect("an older sealed state file reads");
         assert_eq!(read.legacy_rule_feed, Some(false));
+    }
+
+    #[test]
+    fn the_overview_round_trips_and_an_older_state_file_reads_as_none_known() {
+        use crate::overview::{AgentRecord, ProjectCheck, ProjectRecord};
+
+        let mut state = a_state();
+        state.overview.agents.push(AgentRecord {
+            agent: "codex".to_string(),
+            display_name: "Codex".to_string(),
+            installed: true,
+            version: None,
+            config_dir: "/home/.codex".to_string(),
+            projects: 1,
+            items: 3,
+            layers_not_read: vec!["the MDM managed preference".to_string()],
+        });
+        state.overview.projects.push(ProjectRecord {
+            root: "/work/app".to_string(),
+            agents: Vec::new(),
+            check: ProjectCheck::Checked,
+        });
+        assert_eq!(State::from_value(&state.to_value()), Some(state.clone()));
+
+        let mut older = state.to_value();
+        older.as_object_mut().expect("an object").remove("overview");
+        let read = State::from_value(&older).expect("an older state file reads");
+        assert_eq!(read.overview, Overview::default());
     }
 
     #[test]

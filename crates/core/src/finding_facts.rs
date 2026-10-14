@@ -141,7 +141,7 @@ impl HeuristicLine {
         }
     }
 
-    fn to_value(&self) -> Value {
+    pub(crate) fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert("excerpt".to_string(), Value::from(self.excerpt.as_str()));
         map.insert("id".to_string(), Value::from(self.id));
@@ -150,7 +150,7 @@ impl HeuristicLine {
         Value::Object(map)
     }
 
-    fn from_value(value: &Value) -> Option<HeuristicLine> {
+    pub(crate) fn from_value(value: &Value) -> Option<HeuristicLine> {
         Some(HeuristicLine {
             id: value.get("id")?.as_i64()?,
             weight: value.get("weight")?.as_i64()?,

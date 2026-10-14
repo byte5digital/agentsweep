@@ -397,6 +397,42 @@ pub fn drop_json(
     json::drop_matching(text, list, drops)
 }
 
+/// Writes one table into a TOML layer, creating the tables above it where
+/// they are not there yet, and replacing a table already at the key path.
+///
+/// What the Gate's Codex pin is written with: a `[hooks.state."<key>"]`
+/// record (spec section 7.2). A table this creates on the way is implicit, so
+/// it carries no header of its own, and the new table goes after the last of
+/// its siblings, or at the end when it has none; no table already written
+/// moves. Comments, blank lines, key order and every untouched value
+/// come out as they went in. Something other than a table in the way is
+/// refused rather than written over.
+pub fn insert_toml(text: &str, path: &EntryPath, value: &Value) -> Result<String, EditError> {
+    toml::insert(text, path, value)
+}
+
+/// Takes one key out of a TOML layer, and every table above it that this left
+/// empty, and says whether anything went.
+///
+/// A key that is not there is no error: the text is returned as it was. A
+/// table that still holds something stays, and so does everything outside the
+/// key, comments and blank lines included.
+pub fn drop_toml(text: &str, path: &EntryPath) -> Result<(String, bool), EditError> {
+    toml::drop_key(text, path)
+}
+
+/// Whether a file parses as the format it is read as, which is asked before a
+/// write that spans two files, so that the second file refusing cannot leave
+/// the first one half done.
+pub fn parses(format: Format, text: &str) -> Result<(), EditError> {
+    match format {
+        Format::Json => serde_json::from_str::<Value>(text)
+            .map(|_| ())
+            .map_err(|error| EditError::Unparseable(error.to_string())),
+        Format::Toml => toml::parse_only(text),
+    }
+}
+
 /// The comment that marks a line one Quarantine switched off.
 fn banner(receipt_id: &str) -> String {
     format!("# agentsweep: quarantined {receipt_id} ")
@@ -732,7 +768,7 @@ mod toml {
     use super::{Edit, EditError, EntryPath, Format, Kept, Splice};
 
     use serde_json::{Map, Value};
-    use toml_edit::{DocumentMut, Item, Key, Table, Value as TomlValue};
+    use toml_edit::{DocumentMut, Item, Key, Table, TableLike, Value as TomlValue};
 
     fn parse(text: &str) -> Result<DocumentMut, EditError> {
         text.parse::<DocumentMut>()
@@ -899,6 +935,49 @@ mod toml {
             },
             text: written,
         })
+    }
+
+    pub(super) fn parse_only(text: &str) -> Result<(), EditError> {
+        parse(text).map(|_| ())
+    }
+
+    pub(super) fn insert(text: &str, path: &EntryPath, value: &Value) -> Result<String, EditError> {
+        let mut document = parse(text)?;
+        let taken = || EditError::Taken(path.pointer());
+        let (last, above) = path.segments().split_last().ok_or_else(taken)?;
+        let mut current: &mut dyn TableLike = document.as_table_mut();
+        for segment in above {
+            if !current.contains_key(segment) {
+                let mut table = Table::new();
+                table.set_implicit(true);
+                current.insert(segment, Item::Table(table));
+            }
+            current = current
+                .get_mut(segment)
+                .and_then(Item::as_table_like_mut)
+                .ok_or_else(taken)?;
+        }
+        current.insert(last, item_of(value));
+        Ok(document.to_string())
+    }
+
+    pub(super) fn drop_key(text: &str, path: &EntryPath) -> Result<(String, bool), EditError> {
+        let mut document = parse(text)?;
+        if at(&document, path).is_none() {
+            return Ok((text.to_string(), false));
+        }
+        let mut path = path.clone();
+        // The key goes, then every table above it this left empty, from the
+        // key upwards; the first one that still holds something stops it.
+        while let Some(table) = parent_of(&mut document, &path).and_then(Item::as_table_like_mut) {
+            table.remove(path.last());
+            let emptied = table.is_empty();
+            path = path.parent();
+            if !emptied || path.is_empty() {
+                break;
+            }
+        }
+        Ok((document.to_string(), true))
     }
 
     pub(super) fn put_back(text: &str, kept: &Kept, replace: bool) -> Result<String, EditError> {
@@ -1562,5 +1641,77 @@ trust_level = "trusted"
     fn a_file_without_a_trailing_newline_keeps_its_last_line() {
         let text = "A=1\nB=2";
         assert_eq!(switch_back(&comment_out(text, "q-1", &[1]), "q-1").0, text);
+    }
+
+    /// A pin record with no siblings goes at the end, the tables above
+    /// it carry no header of their own, and taking it out again gives the
+    /// layer back byte for byte.
+    #[test]
+    fn a_toml_record_is_written_after_everything_and_taken_out_to_the_byte() {
+        let record = path(&["hooks", "state", "/h/.codex/hooks.json:stop:0:0"]);
+        let written =
+            insert_toml(LAYER, &record, &json!({"trusted_hash": "sha256:00"})).expect("written");
+        assert!(written.starts_with(LAYER), "{written}");
+        assert_eq!(
+            &written[LAYER.len()..],
+            "\n[hooks.state.\"/h/.codex/hooks.json:stop:0:0\"]\ntrusted_hash = \"sha256:00\"\n"
+        );
+        let (back, dropped) = drop_toml(&written, &record).expect("dropped");
+        assert!(dropped);
+        assert_eq!(back, LAYER);
+
+        let created = insert_toml("", &record, &json!({"trusted_hash": "sha256:00"}))
+            .expect("written into an empty layer");
+        assert_eq!(
+            created,
+            "[hooks.state.\"/h/.codex/hooks.json:stop:0:0\"]\ntrusted_hash = \"sha256:00\"\n"
+        );
+        assert_eq!(drop_toml(&created, &record).expect("dropped").0, "");
+    }
+
+    /// A record beside other records goes after them and leaves them, their
+    /// comments and every table's order as they were.
+    #[test]
+    fn a_toml_record_beside_others_moves_none_of_them() {
+        let layer = format!(
+            "{LAYER}\n# Pinned by the user.\n[hooks.state.\"/h/.codex/hooks.json:stop:0:0\"]\ntrusted_hash = \"sha256:11\"\n\n[tui]\nnotifications = true\n"
+        );
+        let one = path(&["hooks", "state", "/h/.codex/hooks.json:stop:1:0"]);
+        let two = path(&["hooks", "state", "/h/.codex/hooks.json:stop:2:0"]);
+        let written =
+            insert_toml(&layer, &one, &json!({"trusted_hash": "sha256:22"})).expect("written");
+        let written =
+            insert_toml(&written, &two, &json!({"trusted_hash": "sha256:33"})).expect("written");
+        let at = |needle: &str| written.find(needle).expect(needle);
+        assert!(at("[projects.") < at(":0:0"));
+        assert!(at(":0:0") < at(":1:0"), "{written}");
+        assert!(at(":1:0") < at(":2:0"));
+        assert!(
+            at(":2:0") < at("[tui]"),
+            "the tables already there keep their order"
+        );
+        let state = read_entry(Format::Toml, &written, &path(&["hooks", "state"])).expect("state");
+        assert_eq!(state.as_object().expect("records").len(), 3);
+
+        let (back, _) = drop_toml(&written, &two).expect("dropped");
+        let (back, _) = drop_toml(&back, &one).expect("dropped");
+        assert_eq!(back, layer);
+        let (same, dropped) = drop_toml(&layer, &two).expect("nothing to drop");
+        assert_eq!((same.as_str(), dropped), (layer.as_str(), false));
+    }
+
+    #[test]
+    fn a_toml_record_refuses_an_unparseable_layer_and_a_key_in_the_way() {
+        let record = path(&["model", "state", "x"]);
+        let refused = insert_toml(LAYER, &record, &json!({"trusted_hash": "sha256:00"}));
+        assert!(matches!(refused, Err(EditError::Taken(_))), "{refused:?}");
+        let refused = insert_toml("model = ", &record, &json!({}));
+        assert!(
+            matches!(refused, Err(EditError::Unparseable(_))),
+            "{refused:?}"
+        );
+        assert!(parses(Format::Toml, LAYER).is_ok());
+        assert!(parses(Format::Toml, "model = ").is_err());
+        assert!(parses(Format::Json, "{ not json").is_err());
     }
 }

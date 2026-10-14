@@ -7,11 +7,11 @@
 //! machine.
 //!
 //! The states of that list answered so far are Protection off, the two chain
-//! states, the projects that need permission, a Scan in flight, the open
-//! Findings that need the user's decision, the two Rule Pack notices and all
-//! clear. The Gate lines arrive with their own milestone; their place in the
-//! order is kept here so that adding one is a field and a line rather than a
-//! rewrite.
+//! states, the projects that need permission, the Gate lines each Full Scan's
+//! registration check leaves, a Scan in flight, the open Findings that need
+//! the user's decision, the two Rule Pack notices and all clear. The Gate
+//! lines are the ones of spec section 6.6 that come in a pair, a sentence for
+//! the Simple Posture and one for the Developer Posture.
 //!
 //! Beside the states, Health says which Rule Pack is in force and when it was
 //! released, which is the "Rules updated <date>" line: the date is read off the
@@ -24,6 +24,7 @@ use crate::envelope::Timestamp;
 use crate::finding::Category;
 use crate::pack::released_day;
 use crate::packs::PackOrigin;
+use crate::settings::Posture;
 use crate::state::{IgnoredPack, State};
 
 /// The note a reset nobody answered leaves while an open Threat holds the
@@ -118,6 +119,80 @@ impl StateFileHealth {
     }
 }
 
+/// Why the Gate cannot stand in one Agent, as the registration check of a
+/// Full Scan found it (spec sections 6.6 and 7.6).
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum GateTrouble {
+    /// The daemon could not write the Gate's entries: the file kept changing,
+    /// could not be written, or does not parse and is never written over.
+    RegistrationFailed,
+    /// Managed policy drops the user's hooks, so nothing is written.
+    ManagedPolicy,
+    /// The user switched the Agent's hooks off in their own settings, which
+    /// AgentSweep never writes back (spec section 7.6 as amended on
+    /// 2026-10-14).
+    SwitchedOffByUser,
+}
+
+impl GateTrouble {
+    /// The spelling the wire carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GateTrouble::RegistrationFailed => "registration-failed",
+            GateTrouble::ManagedPolicy => "managed-policy",
+            GateTrouble::SwitchedOffByUser => "switched-off-by-user",
+        }
+    }
+
+    /// Reads back that spelling.
+    pub fn parse(text: &str) -> Option<GateTrouble> {
+        match text {
+            "registration-failed" => Some(GateTrouble::RegistrationFailed),
+            "managed-policy" => Some(GateTrouble::ManagedPolicy),
+            "switched-off-by-user" => Some(GateTrouble::SwitchedOffByUser),
+            _ => None,
+        }
+    }
+}
+
+/// One Gate line: an Agent and why the Gate cannot stand there.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GateLine {
+    /// The Agent, by adapter id.
+    pub agent: String,
+    /// The Agent's name as a person reads it, such as "Claude Code".
+    pub name: String,
+    /// Why the Gate cannot stand there.
+    pub trouble: GateTrouble,
+}
+
+impl GateLine {
+    /// The line in one Posture: the wording pairs of spec section 6.6.
+    pub fn wording(&self, posture: Posture) -> String {
+        let name = &self.name;
+        match (self.trouble, posture) {
+            (GateTrouble::RegistrationFailed, Posture::Simple) => {
+                format!("The check could not be added to {name}.")
+            }
+            (GateTrouble::RegistrationFailed, Posture::Developer) => {
+                format!("Gate registration failed: {name}.")
+            }
+            (GateTrouble::ManagedPolicy, Posture::Simple) => {
+                "Your organisation's policy blocks the check.".to_string()
+            }
+            (GateTrouble::ManagedPolicy, Posture::Developer) => {
+                "Gate blocked by managed policy.".to_string()
+            }
+            (GateTrouble::SwitchedOffByUser, Posture::Simple) => format!(
+                "Hooks are switched off in your {name} settings, so the check cannot run there."
+            ),
+            (GateTrouble::SwitchedOffByUser, Posture::Developer) => {
+                format!("Gate off: hooks disabled in the {name} user settings.")
+            }
+        }
+    }
+}
+
 /// The rungs of the Health precedence (spec section 6.6), the worst first:
 /// a rung compares below every rung it outranks.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -130,6 +205,9 @@ pub enum Rung {
     StateReset,
     /// Registered projects the operating system will not let AgentSweep read.
     NeedsPermission,
+    /// The Gate cannot stand in a detected Agent: its registration failed,
+    /// managed policy blocks it, or the user switched hooks off there.
+    GateLine,
     /// A Scan is running.
     CheckingNow,
     /// Open Threat or Exposure Findings wait for the user's decision.
@@ -154,6 +232,10 @@ pub struct Health {
     /// How many registered projects the operating system will not let
     /// AgentSweep read.
     pub projects_need_permission: usize,
+    /// The Gate lines the last Full Scan's registration check left, one per
+    /// detected Agent where the Gate cannot stand, worst first. Empty when
+    /// every check passed.
+    pub gate_lines: Vec<GateLine>,
     /// What the state file was found to be.
     pub state_file: StateFileHealth,
     /// True when the settings file is there and cannot be read back: the
@@ -195,6 +277,7 @@ impl Default for Health {
             events: ChainState::Intact,
             baseline: ChainState::Intact,
             projects_need_permission: 0,
+            gate_lines: Vec::new(),
             state_file: StateFileHealth::Loaded,
             settings_unreadable: false,
             scanning: false,
@@ -270,8 +353,8 @@ impl Health {
     ///
     /// The order is Protection off, records tampered, protection state reset
     /// (unless a Threat Finding is open: the reset ranks below every Threat
-    /// rung and is a note meanwhile), projects that need permission, then the Gate lines once they exist,
-    /// then a Scan in flight, then the open Findings that need the user's
+    /// rung and is a note meanwhile), projects that need permission, then the
+    /// Gate lines, then a Scan in flight, then the open Findings that need the user's
     /// decision, then the Rule Pack notices (a newer pack ignored because it
     /// needs a newer AgentSweep, the Rule Feed unreachable for over thirty
     /// days), then all clear with the last-checked time.
@@ -284,6 +367,8 @@ impl Health {
             Rung::StateReset
         } else if self.projects_need_permission > 0 {
             Rung::NeedsPermission
+        } else if !self.gate_lines.is_empty() {
+            Rung::GateLine
         } else if self.scanning {
             Rung::CheckingNow
         } else if self.open_findings() > 0 {
@@ -297,10 +382,23 @@ impl Health {
         }
     }
 
-    /// The one sentence a person is shown, by the precedence of spec section
-    /// 6.6 (see [`Health::rung`]).
+    /// The one sentence a person is shown in the Simple Posture, by the
+    /// precedence of spec section 6.6 (see [`Health::rung`]).
     pub fn headline(&self) -> String {
+        self.headline_in(Posture::Simple)
+    }
+
+    /// The one sentence in a Posture. Only the Gate lines have a sentence of
+    /// their own in each Posture; every other rung reads the same in both.
+    /// The command line interface is a developer surface and prints the
+    /// Developer one (the owner's decision of 2026-10-14).
+    pub fn headline_in(&self, posture: Posture) -> String {
         match self.rung() {
+            Rung::GateLine => self
+                .gate_lines
+                .first()
+                .map(|line| line.wording(posture))
+                .unwrap_or_default(),
             Rung::ProtectionOff => "Protection is off.".to_string(),
             Rung::RecordsTampered => "Records tampered.".to_string(),
             Rung::StateReset => "Protection state was reset.".to_string(),
@@ -343,15 +441,31 @@ impl Health {
         format!("{total}: {}.", parts.join(" and "))
     }
 
-    /// What is said under the headline: the reason Protection is off, the note
-    /// a rebuilt state file leaves, the notice an unreadable settings file
+    /// What is said under the headline in the Simple Posture: the reason
+    /// Protection is off, the Gate lines the headline does not say, the note a
+    /// rebuilt state file leaves, the notice an unreadable settings file
     /// raises, and how many Findings are open.
     pub fn notes(&self) -> Vec<String> {
+        self.notes_in(Posture::Simple)
+    }
+
+    /// The same, in a Posture.
+    pub fn notes_in(&self, posture: Posture) -> Vec<String> {
         let mut notes = Vec::new();
         if let Protection::Off(reason) = &self.protection
             && !reason.is_empty()
         {
             notes.push(reason.clone());
+        }
+        // Every Gate line is said once: the first is the headline while the
+        // Gate rung holds it, and the rest, or all of them under a worse
+        // rung, are notes.
+        let headline = self.headline_in(posture);
+        for line in &self.gate_lines {
+            let line = line.wording(posture);
+            if line != headline && !notes.contains(&line) {
+                notes.push(line);
+            }
         }
         let rebuilt = self.state_file.note();
         if !rebuilt.is_empty() {
@@ -603,6 +717,98 @@ mod tests {
         health.events = ChainState::Intact;
         health.scanning = false;
         assert_eq!(health.headline(), "1 thing needs your decision: 1 Threat.");
+    }
+
+    fn line(agent: &str, name: &str, trouble: GateTrouble) -> GateLine {
+        GateLine {
+            agent: agent.to_string(),
+            name: name.to_string(),
+            trouble,
+        }
+    }
+
+    /// Spec section 6.6, rung 5: the Gate lines sit below the projects that
+    /// need permission and above a Scan in flight and the open Findings.
+    #[test]
+    fn the_gate_lines_sit_between_permission_and_checking_now() {
+        let mut health = Health::running();
+        health.gate_lines = vec![line(
+            "claude-code",
+            "Claude Code",
+            GateTrouble::RegistrationFailed,
+        )];
+        health.scanning = true;
+        health.open_threats = 1;
+        health.projects_need_permission = 1;
+        assert_eq!(health.rung(), Rung::NeedsPermission);
+        assert!(
+            health
+                .notes()
+                .contains(&"The check could not be added to Claude Code.".to_string()),
+            "{:?}",
+            health.notes()
+        );
+
+        health.projects_need_permission = 0;
+        assert_eq!(health.rung(), Rung::GateLine);
+        assert_eq!(
+            health.headline(),
+            "The check could not be added to Claude Code."
+        );
+        assert_eq!(
+            health.headline_in(Posture::Developer),
+            "Gate registration failed: Claude Code."
+        );
+        assert!(health.notes().contains(&"1 Finding is open.".to_string()));
+
+        health.gate_lines.clear();
+        assert_eq!(health.headline(), "Checking now.");
+    }
+
+    /// Every line has its pair of sentences, and a second line is a note.
+    #[test]
+    fn each_gate_line_reads_in_both_postures_and_the_second_is_a_note() {
+        let mut health = Health::running();
+        health.gate_lines = vec![
+            line("claude-code", "Claude Code", GateTrouble::ManagedPolicy),
+            line("codex", "Codex", GateTrouble::SwitchedOffByUser),
+        ];
+        assert_eq!(
+            health.headline(),
+            "Your organisation's policy blocks the check."
+        );
+        assert_eq!(
+            health.headline_in(Posture::Developer),
+            "Gate blocked by managed policy."
+        );
+        assert!(
+            health.notes().contains(
+                &"Hooks are switched off in your Codex settings, so the check cannot run there."
+                    .to_string()
+            ),
+            "{:?}",
+            health.notes()
+        );
+        assert!(
+            health
+                .notes_in(Posture::Developer)
+                .contains(&"Gate off: hooks disabled in the Codex user settings.".to_string()),
+            "{:?}",
+            health.notes_in(Posture::Developer)
+        );
+        assert!(
+            !health
+                .notes()
+                .contains(&"Your organisation's policy blocks the check.".to_string()),
+            "the headline is not said twice"
+        );
+        for trouble in [
+            GateTrouble::RegistrationFailed,
+            GateTrouble::ManagedPolicy,
+            GateTrouble::SwitchedOffByUser,
+        ] {
+            assert_eq!(GateTrouble::parse(trouble.as_str()), Some(trouble));
+        }
     }
 
     #[test]

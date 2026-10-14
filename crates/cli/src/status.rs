@@ -13,6 +13,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use agentsweep_core::finding::FindingState;
+use agentsweep_core::settings::Posture;
 use agentsweep_core::state::{RecordedFinding, ScanSummary};
 use agentsweep_ipc::Client;
 use agentsweep_ipc::protocol::{Role, Status, offers};
@@ -55,11 +56,13 @@ pub fn socket_argument(arguments: &[String]) -> Result<Option<PathBuf>, String> 
     }
 }
 
-/// One status, as the terminal prints it.
+/// One status, as the terminal prints it. The command line interface is a
+/// developer surface, so a Health line that comes in a pair prints its
+/// Developer sentence (the owner's decision of 2026-10-14).
 pub fn render(status: &Status) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "{}", status.health.headline());
-    for note in status.health.notes() {
+    let _ = writeln!(out, "{}", status.health.headline_in(Posture::Developer));
+    for note in status.health.notes_in(Posture::Developer) {
         let _ = writeln!(out, "  {note}");
     }
 
@@ -208,7 +211,7 @@ mod tests {
 
     use agentsweep_core::envelope::Timestamp;
     use agentsweep_core::finding::{Category, FindingId, FindingState, RuleStatus, Severity, Tier};
-    use agentsweep_core::health::{Health, Protection, StateFileHealth};
+    use agentsweep_core::health::{GateLine, GateTrouble, Health, Protection, StateFileHealth};
     use agentsweep_core::item::{ItemId, Kind};
     use agentsweep_core::scan_pass::ScanKind;
     use agentsweep_core::state::Trigger;
@@ -270,6 +273,42 @@ mod tests {
         assert!(rendered.starts_with("Protection is off.\n"), "{rendered}");
         assert!(rendered.contains("no daemon answered"), "{rendered}");
         assert!(!rendered.contains("All clear"), "{rendered}");
+    }
+
+    /// The command line interface is a developer surface: a Gate line prints
+    /// its Developer sentence, a second one as a note (the owner's decision
+    /// of 2026-10-14).
+    #[test]
+    fn a_gate_line_prints_its_developer_sentence() {
+        let mut health = Health::running();
+        health.gate_lines = vec![
+            GateLine {
+                agent: "claude-code".to_string(),
+                name: "Claude Code".to_string(),
+                trouble: GateTrouble::RegistrationFailed,
+            },
+            GateLine {
+                agent: "codex".to_string(),
+                name: "Codex".to_string(),
+                trouble: GateTrouble::ManagedPolicy,
+            },
+        ];
+        let status = Status {
+            health,
+            scan: Some(summary()),
+            findings: Vec::new(),
+            activity: Vec::new(),
+        };
+        let rendered = render(&status);
+        assert!(
+            rendered.starts_with("Gate registration failed: Claude Code.\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("  Gate blocked by managed policy.\n"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("could not be added"), "{rendered}");
     }
 
     #[test]

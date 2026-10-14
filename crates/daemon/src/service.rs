@@ -397,6 +397,8 @@ impl Daemon {
             events: crate::integrity::shown(&events, reset.events),
             baseline: crate::integrity::shown(&baseline, reset.baseline),
             projects_need_permission: crate::permission::needing_permission(&state.overview),
+            projects_need_permission: 0,
+            gate_lines: Vec::new(),
             state_file,
             settings_unreadable,
             scanning: false,

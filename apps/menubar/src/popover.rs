@@ -90,6 +90,7 @@ impl View {
         let asks_something = health.records_tampered()
             || health.state_was_reset()
             || health.projects_need_permission > 0
+            || !health.gate_lines.is_empty()
             || health.ignored_pack.is_some()
             || health.feed_unreachable.is_some()
             || health.open_findings() > 0;

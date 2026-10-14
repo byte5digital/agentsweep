@@ -26,7 +26,7 @@ use agentsweep_core::chain::{BreakReason, ChainState};
 use agentsweep_core::envelope::{ChainId, Timestamp};
 use agentsweep_core::eventlog::{Actor, Outcome, Primitive, ReceiptStep, SessionsRunning};
 use agentsweep_core::finding::{Category, FindingId, FindingState};
-use agentsweep_core::health::{Health, Protection, StateFileHealth};
+use agentsweep_core::health::{GateLine, GateTrouble, Health, Protection, StateFileHealth};
 use agentsweep_core::item::{ItemId, Kind};
 use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::overview::Overview;
@@ -820,6 +820,22 @@ pub fn health_to_value(health: &Health) -> Value {
         chain_state_to_value(&health.baseline),
     );
     map.insert("events".to_string(), chain_state_to_value(&health.events));
+    map.insert(
+        "gate_lines".to_string(),
+        Value::Array(
+            health
+                .gate_lines
+                .iter()
+                .map(|line| {
+                    let mut one = Map::new();
+                    one.insert("agent".to_string(), Value::from(line.agent.as_str()));
+                    one.insert("name".to_string(), Value::from(line.name.as_str()));
+                    one.insert("trouble".to_string(), Value::from(line.trouble.as_str()));
+                    Value::Object(one)
+                })
+                .collect(),
+        ),
+    );
     map.insert("headline".to_string(), Value::from(health.headline()));
     map.insert("items".to_string(), Value::from(health.items as u64));
     map.insert(
@@ -935,11 +951,27 @@ pub fn health_from_value(value: &Value) -> Option<Health> {
             minimum_engine_version: pack.get("minimum_engine_version")?.as_str()?.to_string(),
         }),
     };
+    // A daemon from before the registration check sends no Gate lines.
+    let gate_lines = match value.get("gate_lines") {
+        None => Vec::new(),
+        Some(lines) => lines
+            .as_array()?
+            .iter()
+            .map(|line| {
+                Some(GateLine {
+                    agent: line.get("agent")?.as_str()?.to_string(),
+                    name: line.get("name")?.as_str()?.to_string(),
+                    trouble: GateTrouble::parse(line.get("trouble")?.as_str()?)?,
+                })
+            })
+            .collect::<Option<Vec<GateLine>>>()?,
+    };
     Some(Health {
         protection,
         events: chain_state_from_value(value.get("events")?)?,
         baseline: chain_state_from_value(value.get("baseline")?)?,
         projects_need_permission: count("projects_need_permission")?,
+        gate_lines,
         state_file: StateFileHealth::parse(text("state_file")?)?,
         settings_unreadable: value.get("settings_unreadable")?.as_bool()?,
         scanning: value.get("scanning")?.as_bool()?,
@@ -1842,6 +1874,23 @@ mod tests {
                 scanning: true,
                 open_threats: 2,
                 open_exposures: 1,
+                ..Health::running()
+            }),
+        }));
+        round_trip(Message::Event(StateEvent::HealthChanged {
+            health: Box::new(Health {
+                gate_lines: vec![
+                    GateLine {
+                        agent: "claude-code".to_string(),
+                        name: "Claude Code".to_string(),
+                        trouble: GateTrouble::RegistrationFailed,
+                    },
+                    GateLine {
+                        agent: "codex".to_string(),
+                        name: "Codex".to_string(),
+                        trouble: GateTrouble::ManagedPolicy,
+                    },
+                ],
                 ..Health::running()
             }),
         }));

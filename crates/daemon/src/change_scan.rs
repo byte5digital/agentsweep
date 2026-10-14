@@ -175,6 +175,7 @@ impl ChangeScan<'_> {
             last_compaction: judged.last_compaction,
             acted: judged.acted,
             fixed_versions: judged.fixed_versions,
+            facts: judged.facts,
             switched: judged.switched,
         }))
     }

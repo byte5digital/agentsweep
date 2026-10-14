@@ -32,8 +32,9 @@ use agentsweep_core::eventlog::{Action, EventLog};
 use agentsweep_core::finding::{Category, Decided, Finding, Standing, standing};
 use agentsweep_core::finding::{FindingId, FindingState, RuleStatus, Severity, Source, Tier};
 use agentsweep_core::finding::{RULE_WITHDRAWN_GONE, RULE_WITHDRAWN_STOPPED};
+use agentsweep_core::finding_facts::FindingFacts;
 use agentsweep_core::heuristics::Band;
-use agentsweep_core::item::{ItemId, Kind, Scope};
+use agentsweep_core::item::{Item, ItemId, Kind, Scope};
 use agentsweep_core::keychain::KeySource;
 use agentsweep_core::pack::Manifest;
 use agentsweep_core::packs::LoadedPack;
@@ -109,6 +110,8 @@ pub struct ScanRun {
     /// The Findings whose Quarantine switches the Item off where it stands,
     /// or did, which is what labels its pair of actions.
     pub switched: BTreeSet<FindingId>,
+    /// What a client needs beside each standing Finding, by its id.
+    pub facts: BTreeMap<FindingId, FindingFacts>,
 }
 
 /// What a Scan reports as it goes.
@@ -244,6 +247,7 @@ impl FullScan<'_> {
             acted: judged.acted,
             fixed_versions: judged.fixed_versions,
             switched: judged.switched,
+            facts: judged.facts,
         })
     }
 }
@@ -393,6 +397,8 @@ pub struct Judged {
     pub fixed_versions: BTreeMap<String, String>,
     /// The Findings whose Quarantine is, or was, the Agent's own switch alone.
     pub switched: BTreeSet<FindingId>,
+    /// What a client needs beside each standing Finding, by its id.
+    pub facts: BTreeMap<FindingId, FindingFacts>,
 }
 
 /// Reading the stores, running one pass and writing what it decided.
@@ -560,6 +566,7 @@ impl Judgement<'_> {
         withdrawn(&mut standing, self.pack);
         let fixed_versions = fixed_versions(&quarantined, enumeration, &raised);
         let switched = switched(&standing, &quarantined, enumeration, self.acting);
+        let facts = facts(&standing, &quarantined, enumeration, self.pack);
 
         let bands = count_bands(&outcome);
         let summary = ScanSummary {
@@ -599,6 +606,7 @@ impl Judgement<'_> {
             acted,
             fixed_versions,
             switched,
+            facts,
         })
     }
 }
@@ -631,6 +639,40 @@ fn withdrawn(standing: &mut [Standing], pack: &RulePack) {
             _ => {}
         }
     }
+}
+
+/// What a client needs beside each standing Finding: the facts of the Item it
+/// is about, who took it out when it is stopped, and whether the Rule that
+/// stopped it was withdrawn. Nothing is decided here; it only says what the
+/// Scan already knows.
+fn facts(
+    standing: &[Standing],
+    quarantined: &QuarantineManifest,
+    enumeration: &Enumeration,
+    pack: &RulePack,
+) -> BTreeMap<FindingId, FindingFacts> {
+    let items: BTreeMap<&ItemId, &Item> = enumeration
+        .items
+        .iter()
+        .map(|item| (&item.id, item))
+        .collect();
+    standing
+        .iter()
+        .map(|placed| {
+            let item = items.get(&placed.finding.item_id).copied();
+            let mut facts = FindingFacts::of(&placed.finding, item);
+            if placed.state == FindingState::Stopped {
+                facts.actor = quarantined
+                    .for_receipt(&placed.receipt_id)
+                    .map(|entry| entry.actor);
+                facts.rule_withdrawn = match placed.finding.source {
+                    Source::Rule(id) => id != 0 && !pack.metas().any(|meta| meta.id == id),
+                    _ => false,
+                };
+            }
+            (placed.id.clone(), facts)
+        })
+        .collect()
 }
 
 /// The stopped Finding one Receipt stands for, built from the Event Log and

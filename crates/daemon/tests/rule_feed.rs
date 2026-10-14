@@ -816,6 +816,10 @@ fn a_withdrawn_rule_turns_its_open_finding_gone_and_leaves_a_quarantined_item_in
         .expect("a Quarantine");
     assert_eq!(report.state, "stopped");
     assert!(!sandbox.skill().exists());
+    let before = sandbox.status();
+    let before = rule_0001_on(&before, "skills/setup").expect("the stopped Finding");
+    assert!(!before.facts.rule_withdrawn, "Rule 0001 is still in force");
+    assert_eq!(before.facts.actor, Some(Actor::User));
 
     let mut stream = Client::connect_at(&sandbox.socket, Role::App)
         .expect("a client")
@@ -867,6 +871,9 @@ fn a_withdrawn_rule_turns_its_open_finding_gone_and_leaves_a_quarantined_item_in
     let stopped = rule_0001_on(&status, "skills/setup").expect("the stopped Finding");
     assert_eq!(stopped.state, FindingState::Stopped);
     assert_eq!(stopped.plain, RULE_WITHDRAWN_STOPPED);
+    assert!(stopped.facts.rule_withdrawn, "{:?}", stopped.facts);
+    assert_eq!(stopped.facts.actor, Some(Actor::User));
+    assert!(!gone.facts.rule_withdrawn, "only a stopped Finding says it");
     assert_eq!(offers(stopped).first(), Some(&Offer::Restore));
     assert!(!sandbox.skill().exists(), "it stays in quarantine");
 

@@ -794,6 +794,8 @@ impl Daemon {
                 recorded.state = now;
                 recorded.receipt_id.clear();
                 recorded.fixed_version.clear();
+                recorded.facts.actor = None;
+                recorded.facts.rule_withdrawn = false;
                 true
             });
         }
@@ -1143,6 +1145,9 @@ fn stop(
     }
     recorded.state = FindingState::Stopped;
     recorded.receipt_id = receipt_id.to_string();
+    // Every action that calls this is the user's, which is why a Restore of
+    // it will not grant Trust (spec section 5.4).
+    recorded.facts.actor = Some(Actor::User);
     true
 }
 

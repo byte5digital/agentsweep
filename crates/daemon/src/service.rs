@@ -657,6 +657,9 @@ impl Daemon {
                     recorded.fixed_version = fixed.clone();
                 }
                 recorded.switched = run.switched.contains(&recorded.id);
+                if let Some(facts) = run.facts.get(&recorded.id) {
+                    recorded.facts = facts.clone();
+                }
                 recorded
             }));
 

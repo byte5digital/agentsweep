@@ -472,3 +472,103 @@ fn a_suspicious_finding_lists_its_heuristics_and_redacts_the_sensitive_one() {
         Some(WhyNothingHappened::Exposure)
     );
 }
+
+/// User settings with one environment variable and an HTTP hook that sends a
+/// header. Every value is filler made up for this test.
+const SETTINGS_WITH_SENSITIVE_VALUES: &str = r#"{
+  "env": {"TRACKER_TOKEN": "hunter2hunter2-settings-env"},
+  "hooks": {
+    "PostToolUse": [{
+      "matcher": "Bash",
+      "hooks": [{
+        "type": "http",
+        "url": "https://hooks.example.invalid/notify",
+        "headers": {"Authorization": "Bearer hunter2hunter2-hook-header"}
+      }]
+    }]
+  }
+}
+"#;
+
+/// A Codex MCP table whose header values are filler made up for this test.
+/// The address is a documentation one, so a raw-IP Heuristic fires on a
+/// header value and its excerpt has to be a hash.
+const CODEX_LAYER_WITH_SENSITIVE_HEADERS: &str = r#"[mcp_servers.tracker]
+url = "https://tracker.example.invalid/mcp"
+http_headers = { Authorization = "Bearer hunter2hunter2-codex-header", X-Upstream = "http://192.0.2.10/hunter2hunter2-upstream" }
+env_http_headers = { X-Tenant = "HUNTER2HUNTER2_TENANT_VARIABLE" }
+bearer_token_env_var = "HUNTER2HUNTER2_BEARER_VARIABLE"
+"#;
+
+/// Every file under a directory, read whole.
+fn every_file_under(directory: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(every_file_under(&path));
+        } else if let Ok(bytes) = std::fs::read(&path) {
+            found.push((path, bytes));
+        }
+    }
+    found
+}
+
+/// A Full Scan over a home whose settings entry is one environment variable
+/// and whose Codex server sends headers writes none of the values into any
+/// file of the data directory, the Baseline, the state file and the Event Log
+/// included, and none into the status (spec section 3.3).
+#[test]
+fn a_full_scan_writes_no_sensitive_value_into_the_data_directory_or_the_status() {
+    let sandbox = Sandbox::empty("sensitive");
+    std::fs::write(
+        sandbox.home.join(".claude/settings.json"),
+        SETTINGS_WITH_SENSITIVE_VALUES,
+    )
+    .expect("user settings");
+    std::fs::create_dir_all(sandbox.home.join(".codex")).expect("an installed Codex");
+    std::fs::write(
+        sandbox.home.join(".codex/config.toml"),
+        CODEX_LAYER_WITH_SENSITIVE_HEADERS,
+    )
+    .expect("a Codex layer");
+    let values = [
+        "hunter2hunter2",
+        "HUNTER2HUNTER2",
+        "192.0.2.10",
+        "TENANT_VARIABLE",
+        "BEARER_VARIABLE",
+    ];
+
+    let status = {
+        let _daemon = sandbox.start();
+        let status = sandbox.status();
+        format!("{status:?}")
+    };
+    for value in values {
+        assert!(!status.contains(value), "{value} in the status: {status}");
+    }
+
+    let files = every_file_under(&sandbox.root.join("data"));
+    let baseline = files
+        .iter()
+        .find(|(path, _)| path.ends_with("baseline.jsonl"))
+        .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+        .expect("a Baseline");
+    // The Items were scanned and remembered: the Baseline names them.
+    assert!(baseline.contains("TRACKER_TOKEN"), "{baseline}");
+    assert!(baseline.contains("tracker.example.invalid"), "{baseline}");
+    for (path, bytes) in &files {
+        let text = String::from_utf8_lossy(bytes);
+        for value in values {
+            assert!(
+                !text.contains(value),
+                "{value} in {}: {text}",
+                path.display()
+            );
+        }
+    }
+}

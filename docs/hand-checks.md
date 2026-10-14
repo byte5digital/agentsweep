@@ -217,6 +217,22 @@ The grant given later in System Settings instead of in the alert. The research m
 Clean up with the section below, and also remove `~/Documents/agentsweep-permission-check`, its entry in `~/.claude.json` (through Claude Code or by hand), and AgentSweep's Files and Folders entry with the `tccutil reset` line above.
 
 Seams in the suite: `permission::tests` in the daemon (the classifier for every class, including iCloud Drive, a File Provider under `~/Library/CloudStorage`, a volume under `/Volumes` and the unprotected `~/Developer`; a class never read is not touched; `EPERM` on a class read before is Needs Permission again; the classes a Baseline proves readable) and the daemon's `permission` integration tests (nothing opened in a stand-in Documents project, Health and the all-clear rung, Check now reading once and remembering across a restart and a rebuilt state file, a denial without Drift, a status answered while the first read is held).
+## 9. Ollama judges an Item on its loopback address
+
+This check needs no hand install and nothing of AgentSweep runs: an ignored test of the core asks a real Ollama on this Mac for one judgement of a defanged Fixture, an instruction file that pipes a download from a `.invalid` host into `sh`. It needs Ollama already running at the default address, 127.0.0.1 port 11434, with a model of 4B or more already pulled by the person running the check. AgentSweep never pulls a model and never starts Ollama, and the test does not either. The suite covers everything else against a fixture server on a loopback port of its own (the core's `ollama` and `ollama_environment` tests and the daemon's engine tests), because no automated test may reach a real Ollama.
+
+```sh
+ollama list
+AGENTSWEEP_HAND_CHECK_OLLAMA_MODEL=qwen3:8b cargo test -p agentsweep-core --locked --test ollama -- --ignored --nocapture hand_check
+```
+
+Name a model `ollama list` shows. The variable only tells the test which model to ask for; the engine reads no environment, `OLLAMA_HOST` above all.
+
+- [ ] The presence line says Ollama is running with its version, and lists the pulled models with their parameter sizes; any model under 4B is marked as not large enough.
+- [ ] The model id is the tag and the digest `ollama list` shows for it (the short digest there is the start of the one printed).
+- [ ] The outcome is a Verdict, most likely malicious with the `curl ... | sh` line quoted exactly, within a minute or so on Apple silicon; a malicious Verdict with a quote that is not in the Fixture would have been discarded as no Verdict.
+- [ ] The prompt evaluation count is printed as a number and stays under 8192; note it beside the request bytes, so the eval report can check the estimate of three bytes a token.
+- [ ] `ollama ps` shows the model loaded with about five minutes until it is unloaded.
 
 ## Dogfooding: one day with the app
 

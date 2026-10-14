@@ -464,3 +464,29 @@ fn neither_the_prompt_nor_the_content_appears_in_an_engine_error() {
     assert!(!text.contains("payload.invalid"), "{text}");
     assert!(!text.contains(prompt.nonce()), "{text}");
 }
+
+/// The hand check of docs/hand-checks.md, section 9: a real judgement by a
+/// model already pulled into a real Ollama on this Mac, at the default
+/// loopback address. Never part of the automated suite: it is ignored, and it
+/// runs only when a person names the model in
+/// `AGENTSWEEP_HAND_CHECK_OLLAMA_MODEL`. The engine itself reads no
+/// environment; only this test does, to learn which model to ask for.
+#[test]
+#[ignore = "a hand check against a real Ollama; see docs/hand-checks.md"]
+fn hand_check_a_pulled_model_judges_a_defanged_item_on_loopback() {
+    let model = std::env::var("AGENTSWEEP_HAND_CHECK_OLLAMA_MODEL")
+        .expect("name the pulled model in AGENTSWEEP_HAND_CHECK_OLLAMA_MODEL");
+    let client = OllamaClient::new(&OllamaAddress::default());
+    println!("presence: {:?}", client.presence());
+    let engine = OllamaEngine::for_model(client, &model).expect("the model is pulled");
+    println!("model id: {}", engine.model_id());
+    let (request, fired) = a_request();
+    let started = Instant::now();
+    let outcome = judge(&engine, &request, &fired);
+    println!("outcome after {:?}: {outcome:?}", started.elapsed());
+    println!(
+        "prompt evaluation count: {:?}, request bytes: {}",
+        engine.last_prompt_eval_count(),
+        request.serialised().len()
+    );
+}

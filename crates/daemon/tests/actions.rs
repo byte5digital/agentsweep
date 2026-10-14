@@ -1297,14 +1297,16 @@ fn the_sessions_request_says_what_detection_found_and_acts_on_nothing() {
 
 /// ADR 0008 still holds with a second request that takes a path: a path on
 /// any other request is not a message the daemon reads, and the connection
-/// that sent it is closed without an answer.
+/// that sent it is closed without an answer. That covers the two actions that
+/// address ids only and came later, purge and untrust, with a target beside
+/// the path.
 #[test]
 fn a_path_on_a_request_that_takes_none_is_never_answered() {
     use std::io::Write as _;
 
     let sandbox = Sandbox::empty("path-elsewhere");
     let _daemon = sandbox.start();
-    for request in ["status", "sessions", "scan-now"] {
+    for request in ["status", "sessions", "scan-now", "purge", "untrust"] {
         let mut stream =
             std::os::unix::net::UnixStream::connect(&sandbox.socket).expect("a connection");
         stream
@@ -1322,7 +1324,13 @@ fn a_path_on_a_request_that_takes_none_is_never_answered() {
         );
         agentsweep_ipc::write_frame(
             &mut stream,
-            &serde_json::json!({"type": "request", "id": "1", "request": request, "path": "/etc"}),
+            &serde_json::json!({
+                "type": "request",
+                "id": "1",
+                "request": request,
+                "target": "claude-code/user/skill/~/.claude/skills/setup",
+                "path": "/etc",
+            }),
         )
         .expect("a request");
         stream.flush().expect("sent");
@@ -1334,4 +1342,224 @@ fn a_path_on_a_request_that_takes_none_is_never_answered() {
     }
     // The daemon is still there for a request that is one.
     assert!(!sandbox.status().health.protection.is_off());
+}
+
+/// The `purge` records of the Event Log, in the order written.
+fn purges(sandbox: &Sandbox) -> Vec<agentsweep_core::eventlog::RecordedEvent> {
+    sandbox
+        .events()
+        .events
+        .into_iter()
+        .filter(|recorded| recorded.event.action == Action::Purge)
+        .collect()
+}
+
+/// "Delete permanently" through the daemon (spec section 5.1): refused for a
+/// Finding that is not in quarantine; for a quarantined skill it deletes the
+/// payload for good, writes one `purge` record, takes the Item out of the
+/// quarantine manifest and turns its Finding gone with an Activity line, which
+/// a restart reads back from the Event Log.
+#[test]
+fn purge_deletes_a_quarantined_skill_for_good_and_its_finding_goes_with_an_activity_line() {
+    use agentsweep_ipc::protocol::StateEvent;
+
+    let sandbox = Sandbox::with_a_planted_skill("purge");
+    let daemon = sandbox.start();
+    let planted = finding_on(&sandbox.status(), "skills/setup").clone();
+    assert_eq!(planted.state, FindingState::Open);
+
+    // Not in quarantine: refused with one sentence, and nothing changes.
+    for target in [planted.id.as_str(), planted.item_id.as_str()] {
+        let refusal = sandbox
+            .client()
+            .purge(target)
+            .expect_err("nothing to delete");
+        let sentence = refusal.to_string();
+        assert!(sentence.contains("not in quarantine"), "{sentence}");
+        assert_eq!(
+            sentence.matches(". ").count(),
+            0,
+            "one sentence: {sentence}"
+        );
+    }
+    assert!(sandbox.events().events.is_empty(), "nothing recorded");
+    assert!(sandbox.skill().join("SKILL.md").is_file(), "nothing moved");
+    assert_eq!(
+        finding_on(&sandbox.status(), "skills/setup").state,
+        FindingState::Open
+    );
+
+    let report = sandbox
+        .client()
+        .quarantine(planted.id.as_str())
+        .expect("a Quarantine");
+    let kept = sandbox.data().quarantine().join(&report.receipt_id);
+    assert!(kept.join("payload").exists(), "the payload is in the store");
+
+    let mut stream = Client::connect_at(&sandbox.socket, Role::App)
+        .expect("a client")
+        .subscribe()
+        .expect("a subscription");
+
+    let purged = sandbox.client().purge(&report.receipt_id).expect("a purge");
+    assert_eq!(purged.action, "purge");
+    assert_eq!(purged.state, "gone");
+    assert_eq!(purged.receipt_id, report.receipt_id);
+    assert_eq!(purged.finding_id, planted.id.as_str());
+    assert!(!kept.exists(), "the payload is deleted for good");
+    assert!(!sandbox.skill().exists(), "nothing was put back");
+
+    let recorded = purges(&sandbox);
+    assert_eq!(recorded.len(), 1, "one purge record");
+    let record = recorded[0].clone();
+    assert_eq!(record.event.actor, Actor::User);
+    assert_eq!(record.event.receipt_id, report.receipt_id);
+    assert_eq!(record.event.item_id.as_ref(), Some(&planted.item_id));
+    assert!(sandbox.events().quarantine_manifest().is_empty());
+    assert!(
+        sandbox
+            .client()
+            .reveal_receipts(None)
+            .expect("the Receipts")
+            .is_empty()
+    );
+
+    let status = sandbox.status();
+    let gone = finding_on(&status, "skills/setup");
+    assert_eq!(gone.id, planted.id);
+    assert_eq!(gone.state, FindingState::Gone);
+    assert!(gone.receipt_id.is_empty(), "{gone:?}");
+    assert_eq!(status.health.open_findings(), 0);
+    let line = status
+        .activity
+        .iter()
+        .find(|line| line.sequence == record.sequence)
+        .expect("an Activity line for the purge");
+    assert!(
+        line.line.contains("setup") && line.line.contains(&report.receipt_id),
+        "{line:?}"
+    );
+    assert!(!line.line.contains("curl"), "no content in the line");
+
+    // Every subscriber is told the Finding is gone and gets the line.
+    let (mut told_gone, mut told_line) = (false, false);
+    while !(told_gone && told_line) {
+        match stream.next_event().expect("an event") {
+            Some(StateEvent::FindingChanged { id, state }) if id == planted.id => {
+                assert_eq!(state, "gone");
+                told_gone = true;
+            }
+            Some(StateEvent::Activity { line, sequence }) => {
+                assert_eq!(sequence, Some(record.sequence), "{line}");
+                told_line = true;
+            }
+            Some(_) => {}
+            None => panic!("the stream ended before the purge was told"),
+        }
+    }
+
+    // A Full Scan later there is nothing to raise and nothing to restore:
+    // whatever it still says about the Item says it is gone.
+    scan_again(&sandbox, &daemon);
+    let status = sandbox.status();
+    assert!(
+        status
+            .findings
+            .iter()
+            .filter(|finding| finding.item_id == planted.item_id)
+            .all(|finding| finding.state == FindingState::Gone),
+        "{:?}",
+        status.findings
+    );
+    let refusal = sandbox
+        .client()
+        .restore(&report.receipt_id, Conflict::Refuse)
+        .expect_err("nothing left to restore");
+    assert!(refusal.to_string().contains("knows no"), "{refusal}");
+
+    // After a restart the line is read from the Event Log.
+    drop(daemon);
+    let _daemon = sandbox.start();
+    assert!(
+        sandbox
+            .status()
+            .activity
+            .iter()
+            .any(|line| line.sequence == record.sequence && line.line.contains("setup"))
+    );
+    assert_eq!(purges(&sandbox).len(), 1);
+}
+
+/// Untrust through the daemon (spec section 5.4): the restore-and-trust of a
+/// skill a stable Rule took out is withdrawn by the Item's id, one `untrust`
+/// record says so, and the next Full Scan judges the content again and takes
+/// it out again, as it does any untrusted content. A daemon that started
+/// while the Trust stood has the allowlist's clearance in its evaluation
+/// cache, which the untrust has to see past.
+#[test]
+fn untrust_of_a_trusted_skill_is_recorded_and_the_next_full_scan_quarantines_it_again() {
+    let sandbox = Sandbox::with_a_planted_skill("untrust");
+    let planted = {
+        let _daemon = sandbox.start_with_a_stable_rule();
+        let stopped = finding_on(&sandbox.status(), "skills/setup").clone();
+        assert_eq!(stopped.state, FindingState::Stopped);
+        let restored = sandbox
+            .client()
+            .restore(&stopped.receipt_id, Conflict::Refuse)
+            .expect("a Restore");
+        assert!(restored.trusted);
+        stopped
+    };
+
+    // The next daemon's start is a Full Scan with the Trust standing, and it
+    // leaves the skill where it is.
+    let daemon = sandbox.start_with_a_stable_rule();
+    assert!(sandbox.skill().join("SKILL.md").is_file(), "trusted");
+    let quarantines = |sandbox: &Sandbox| {
+        sandbox
+            .events()
+            .events
+            .iter()
+            .filter(|recorded| recorded.event.action == Action::Quarantine)
+            .count()
+    };
+    assert_eq!(quarantines(&sandbox), 1);
+
+    let report = sandbox
+        .client()
+        .untrust(planted.item_id.as_str(), None)
+        .expect("an untrust");
+    assert_eq!(report.action, "untrust");
+    assert!(!report.trusted);
+    let untrusts: Vec<_> = sandbox
+        .events()
+        .events
+        .into_iter()
+        .filter(|recorded| recorded.event.action == Action::Untrust)
+        .collect();
+    assert_eq!(untrusts.len(), 1, "one untrust record");
+    assert_eq!(untrusts[0].event.actor, Actor::User);
+    assert_eq!(untrusts[0].event.content_hash, planted.content_hash);
+    assert!(sandbox.events().trust_table().is_empty());
+
+    scan_again(&sandbox, &daemon);
+    assert!(!sandbox.skill().exists(), "quarantined again by itself");
+    assert_eq!(quarantines(&sandbox), 2);
+    let stopped = finding_on(&sandbox.status(), "skills/setup").clone();
+    assert_eq!(stopped.state, FindingState::Stopped);
+
+    // Nothing carries Trust any more, so untrusting it again is refused and
+    // records nothing.
+    let refusal = sandbox
+        .client()
+        .untrust(stopped.id.as_str(), None)
+        .expect_err("no Trust left");
+    assert!(refusal.to_string().contains("no Trust"), "{refusal}");
+    let untrusted = sandbox
+        .events()
+        .events
+        .iter()
+        .filter(|recorded| recorded.event.action == Action::Untrust)
+        .count();
+    assert_eq!(untrusted, 1);
 }

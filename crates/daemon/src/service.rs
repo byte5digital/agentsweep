@@ -213,7 +213,7 @@ pub struct Daemon {
     /// with it are the ones the last Scan left.
     pack_change: Mutex<Option<PendingPackChange>>,
     /// The Activity lines the Event Log keeps, read once at start and
-    /// extended by every `rule-pack` record this daemon writes.
+    /// extended by every `rule-pack` and `purge` record this daemon writes.
     activity: Mutex<Vec<ActivityLine>>,
     /// True while a fetch is waiting out its jitter or running.
     fetch_pending: AtomicBool,
@@ -1242,20 +1242,25 @@ fn rules_of(pack: &RulePack) -> PackRules {
     pack.metas().map(|meta| (meta.id, meta.status)).collect()
 }
 
-/// The Activity lines the Event Log keeps: every `rule-pack` record, each
-/// with its sequence. A log that cannot be read has none to show; its state
-/// is the Health's to report.
+/// The Activity lines the Event Log keeps: every `rule-pack` record and
+/// every `purge`, each with its sequence, in the order written. A log that
+/// cannot be read has none to show; its state is the Health's to report.
 fn activity_in_the_event_log(directory: &DataDirectory, keys: &dyn KeySource) -> Vec<ActivityLine> {
     match EventLog::in_data_directory(directory).read(keys) {
-        Ok(view) => view
-            .pack_activity()
-            .into_iter()
-            .map(|(sequence, recorded_at, line)| ActivityLine {
-                sequence,
-                recorded_at,
-                line,
-            })
-            .collect(),
+        Ok(view) => {
+            let mut lines: Vec<ActivityLine> = view
+                .pack_activity()
+                .into_iter()
+                .map(|(sequence, recorded_at, line)| ActivityLine {
+                    sequence,
+                    recorded_at,
+                    line,
+                })
+                .collect();
+            lines.extend(crate::actions::purge_activity(&view));
+            lines.sort_by_key(|line| (line.recorded_at, line.sequence));
+            lines
+        }
         Err(error) => {
             say!("the Activity could not be read from the Event Log: {error}");
             Vec::new()
@@ -1695,6 +1700,20 @@ impl Daemon {
                 sequence: Some(line.sequence),
             });
         }
+    }
+
+    /// Keeps one Activity line an action's record stands for and sends it to
+    /// every subscriber with that record's sequence.
+    pub(crate) fn note_activity(&self, line: ActivityLine) {
+        say!("{}", line.line);
+        self.activity
+            .lock()
+            .expect("the Activity is not poisoned")
+            .push(line.clone());
+        self.publish(StateEvent::Activity {
+            line: line.line,
+            sequence: Some(line.sequence),
+        });
     }
 
     /// Asks for the Full Scan a new pack brings. One that is waiting will run

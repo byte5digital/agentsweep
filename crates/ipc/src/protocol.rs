@@ -218,6 +218,22 @@ pub enum Request {
         /// A Receipt id, or the stopped plugin Finding's or Item's id.
         target: String,
     },
+    /// "Delete permanently": what the quarantine store keeps of one
+    /// quarantined Item is deleted for good (spec section 5.1). Refused for
+    /// anything that is not in quarantine.
+    Purge {
+        /// A Receipt id, or a Finding or Item id that one Receipt stopped.
+        target: String,
+    },
+    /// Withdraw one Trust record, after which the next Scan judges that
+    /// content again (spec section 5.4).
+    Untrust {
+        /// A Finding id, or the id of the Item the Trust was granted on.
+        target: String,
+        /// The content hash that carries the Trust, which tells two records
+        /// granted on the same Item apart. Absent where the target names one.
+        content_hash: Option<String>,
+    },
     /// Every Receipt in the quarantine store with the path its Item was taken
     /// from, or only those taken from at or below one path. The first request
     /// of this list that takes a path (ADR 0008).
@@ -307,7 +323,7 @@ pub enum Request {
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 21] = [
+    pub const NAMES: [&'static str; 23] = [
         "status",
         "scan-now",
         "subscribe",
@@ -317,6 +333,8 @@ impl Request {
         "acknowledge",
         "fix",
         "re-enable",
+        "purge",
+        "untrust",
         "reveal-receipt",
         "rule-feed",
         "sessions",
@@ -343,6 +361,8 @@ impl Request {
             Request::Acknowledge { .. } => "acknowledge",
             Request::Fix { .. } => "fix",
             Request::ReEnable { .. } => "re-enable",
+            Request::Purge { .. } => "purge",
+            Request::Untrust { .. } => "untrust",
             Request::RevealReceipt { .. } => "reveal-receipt",
             Request::RuleFeed { .. } => "rule-feed",
             Request::Sessions => "sessions",
@@ -379,7 +399,9 @@ impl Request {
             | Request::Trust { target }
             | Request::Acknowledge { target }
             | Request::Fix { target }
-            | Request::ReEnable { target } => Some(target),
+            | Request::ReEnable { target }
+            | Request::Purge { target }
+            | Request::Untrust { target, .. } => Some(target),
             _ => None,
         }
     }
@@ -396,6 +418,12 @@ impl Request {
                     "conflict".to_string(),
                     Value::from(conflict_name(*conflict)),
                 );
+            }
+            Request::Untrust {
+                content_hash: Some(hash),
+                ..
+            } => {
+                map.insert("content_hash".to_string(), Value::from(hash.as_str()));
             }
             Request::RevealReceipt { path: Some(path) } | Request::Folder { path } => {
                 map.insert("path".to_string(), Value::from(path.as_str()));
@@ -449,6 +477,14 @@ impl Request {
             "acknowledge" => Request::Acknowledge { target: target()? },
             "fix" => Request::Fix { target: target()? },
             "re-enable" => Request::ReEnable { target: target()? },
+            "purge" => Request::Purge { target: target()? },
+            "untrust" => Request::Untrust {
+                target: target()?,
+                content_hash: match value.get("content_hash") {
+                    None | Some(Value::Null) => None,
+                    Some(hash) => Some(hash.as_str()?.to_string()),
+                },
+            },
             "reveal-receipt" => Request::RevealReceipt {
                 path: match value.get("path") {
                     None | Some(Value::Null) => None,
@@ -634,7 +670,8 @@ pub struct Status {
     /// The Findings the last Scan left standing.
     pub findings: Vec<RecordedFinding>,
     /// The Activity lines the Event Log keeps, oldest first: every change of
-    /// the Rule Pack in force, with what it withdrew.
+    /// the Rule Pack in force, with what it withdrew, and every quarantined
+    /// Item deleted for good.
     pub activity: Vec<ActivityLine>,
 }
 
@@ -1908,6 +1945,17 @@ mod tests {
             },
             Request::ReEnable {
                 target: finding.clone(),
+            },
+            Request::Purge {
+                target: "q-0123456789abcdef0123456789abcdef".to_string(),
+            },
+            Request::Untrust {
+                target: finding.clone(),
+                content_hash: None,
+            },
+            Request::Untrust {
+                target: "claude-code/user/skill/~/.claude/skills/x".to_string(),
+                content_hash: Some("abc".to_string()),
             },
             Request::RevealReceipt {
                 path: Some("/Users/someone/.claude.json".to_string()),

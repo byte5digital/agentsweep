@@ -15,10 +15,10 @@
 //! **On request.** The closed vocabulary of [`Request`]: a manual Quarantine of
 //! any Threat Finding, Restore, Trust, Acknowledge, the one-click fix of
 //! Exposures 0018 and 0019, Re-enable for a plugin whose newer version this
-//! daemon found clean, and revealing where a Receipt's Item came from. Every
-//! request names a Finding, an Item or a Receipt by id and the daemon resolves
-//! it against what it knows; an id it does not know is refused and nothing is
-//! read. Revealing a Receipt is the one request with a path, and the path is
+//! daemon found clean, "Delete permanently" for a quarantined Item, Untrust,
+//! and revealing where a Receipt's Item came from. Every request names a
+//! Finding, an Item or a Receipt by id and the daemon resolves it against what
+//! it knows; an id it does not know is refused and nothing is read. Revealing a Receipt is the one request with a path, and the path is
 //! compared with what the Event Log says, never opened.
 //!
 //! Every action states whether Agent sessions appear to be running
@@ -37,8 +37,12 @@ use agentsweep_core::derived::{QuarantineEntry, QuarantineManifest};
 use agentsweep_core::drift::{AcknowledgeError, Acknowledgement};
 use agentsweep_core::enforcement::{Cause, Enforcement, FIXABLE_EXPOSURES, may_quarantine};
 use agentsweep_core::envelope::Timestamp;
-use agentsweep_core::eventlog::{Actor, EventLog, Outcome, Primitive, ReceiptStep};
-use agentsweep_core::finding::{Category, Finding, FindingState, RuleStatus, Severity, Source};
+use agentsweep_core::eventlog::{
+    Action, Actor, EventLog, EventLogView, Outcome, Primitive, ReceiptStep,
+};
+use agentsweep_core::finding::{
+    Category, Finding, FindingId, FindingState, RuleStatus, Severity, Source,
+};
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{Activation, InactiveReason, Item, ItemId, Kind, Scope, Shape};
 use agentsweep_core::keychain::KeySource;
@@ -46,7 +50,8 @@ use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::quarantine::{Conflict, EnforcementError, Receipt, ReceiptId};
 use agentsweep_core::state::{RecordedFinding, StateFile, StateWriter};
 use agentsweep_ipc::protocol::{
-    ActionReport, Request, RequestError, RevealedReceipt, Sessions, StateEvent, receipts_to_value,
+    ActionReport, ActivityLine, Request, RequestError, RevealedReceipt, Sessions, StateEvent,
+    receipts_to_value,
 };
 
 use crate::full_scan::{Covering, survey};
@@ -440,6 +445,38 @@ fn named(kind: Option<Kind>, item_id: &str) -> String {
 const PROJECT_LINE: &str =
     "This file belongs to a project, so git will show the change. Restore undoes it.";
 
+/// The Activity line one `purge` record stands for. It names the Item and the
+/// Receipt, never what the Item held.
+fn purge_line(kind: Option<Kind>, item_id: &str, receipt_id: &str) -> String {
+    format!(
+        "Deleted the {} from quarantine for good ({receipt_id}).",
+        named(kind, item_id)
+    )
+}
+
+/// The Activity lines the `purge` records of the Event Log stand for, each
+/// with the sequence and the moment of its record, in the order written.
+pub fn purge_activity(view: &EventLogView) -> Vec<ActivityLine> {
+    view.events
+        .iter()
+        .filter(|recorded| recorded.event.action == Action::Purge)
+        .map(|recorded| ActivityLine {
+            sequence: recorded.sequence,
+            recorded_at: recorded.recorded_at,
+            line: purge_line(
+                recorded.event.kind,
+                recorded
+                    .event
+                    .item_id
+                    .as_ref()
+                    .map(ItemId::as_str)
+                    .unwrap_or_default(),
+                &recorded.event.receipt_id,
+            ),
+        })
+        .collect()
+}
+
 impl Daemon {
     /// Carries out one action request.
     pub(crate) fn act(self: &Arc<Daemon>, request: &Request) -> Result<Value, RequestError> {
@@ -450,6 +487,11 @@ impl Daemon {
             Request::Acknowledge { target } => self.acknowledge(target),
             Request::Fix { target } => self.fix(target),
             Request::ReEnable { target } => self.re_enable(target),
+            Request::Purge { target } => self.purge(target),
+            Request::Untrust {
+                target,
+                content_hash,
+            } => self.untrust(target, content_hash.as_deref()),
             Request::RevealReceipt { path } => self.reveal(path.as_deref()),
             Request::Status
             | Request::ScanNow
@@ -922,6 +964,215 @@ impl Daemon {
         ))
     }
 
+    /// "Delete permanently": what the store keeps of one quarantined Item is
+    /// deleted for good (spec section 5.1). Anything not in quarantine is
+    /// refused before anything is written.
+    fn purge(self: &Arc<Daemon>, target: &str) -> Result<Value, RequestError> {
+        let _writing = self.writing.lock().expect("the write lock is not poisoned");
+        let entry = self.receipt_for(target).map_err(|error| {
+            // A Finding or an Item the daemon knows that no Receipt holds is
+            // not in quarantine, which is the one thing worth saying.
+            let known = self
+                .state
+                .lock()
+                .expect("the state is not poisoned")
+                .findings
+                .iter()
+                .any(|finding| finding.id.as_str() == target || finding.item_id.as_str() == target);
+            match (error.code.as_str(), known) {
+                ("not-allowed" | "unknown-target", true) => refused(
+                    "not-allowed",
+                    "only a quarantined Item can be deleted permanently, and that one is not in \
+                     quarantine",
+                ),
+                _ => error,
+            }
+        })?;
+        let sessions = sessions::detect(self.machine.home());
+        let (mut enforcement, _) =
+            Enforcement::open(&self.directory, &*self.keys).map_err(failed)?;
+        let written = enforcement.purge(&entry).map_err(failed)?;
+        drop(enforcement);
+
+        // Nothing of the Item is left to stop or to restore, so the Finding
+        // the Receipt stopped is gone, as a Scan that no longer derives it
+        // says, and the Activity keeps the line.
+        let mut gone: Vec<FindingId> = Vec::new();
+        self.settle(|recorded| {
+            if recorded.receipt_id != entry.receipt_id {
+                return false;
+            }
+            recorded.state = FindingState::Gone;
+            recorded.receipt_id.clear();
+            recorded.fixed_version.clear();
+            recorded.switched = false;
+            gone.push(recorded.id.clone());
+            true
+        });
+        self.note_activity(ActivityLine {
+            sequence: written.sequence,
+            recorded_at: written.recorded_at,
+            line: purge_line(entry.kind, entry.item_id.as_str(), &entry.receipt_id),
+        });
+        Ok(ActionReport {
+            action: "purge".to_string(),
+            finding_id: gone
+                .first()
+                .map(FindingId::to_string)
+                .unwrap_or_else(|| entry.finding_id.clone()),
+            item_id: entry.item_id.to_string(),
+            receipt_id: entry.receipt_id.clone(),
+            state: FindingState::Gone.to_string(),
+            result: Outcome::Ok,
+            steps: Vec::new(),
+            trusted: false,
+            sessions,
+            message: format!(
+                "Deleted the {} for good. It cannot be restored.",
+                named(entry.kind, entry.item_id.as_str())
+            ),
+        }
+        .to_value())
+    }
+
+    /// Untrust: the Trust on one content hash of one kind is withdrawn, and
+    /// the next Scan judges that content again (spec section 5.4).
+    fn untrust(
+        self: &Arc<Daemon>,
+        target: &str,
+        content_hash: Option<&str>,
+    ) -> Result<Value, RequestError> {
+        let _writing = self.writing.lock().expect("the write lock is not poisoned");
+        let (item_id, kind, hash) = self.trust_for(target, content_hash)?;
+        let sessions = sessions::detect(self.machine.home());
+        let (mut enforcement, _) =
+            Enforcement::open(&self.directory, &*self.keys).map_err(failed)?;
+        enforcement.untrust(&item_id, kind, &hash).map_err(failed)?;
+        drop(enforcement);
+        // A Tier outcome cached while the content carried Trust is the
+        // allowlist's clearance, and the next Scan has to run the Tiers.
+        self.forget_evaluations();
+
+        let mut settled: Option<FindingId> = None;
+        self.settle(|recorded| {
+            if recorded.state != FindingState::Trusted
+                || recorded.kind != kind
+                || recorded.content_hash != hash
+            {
+                return false;
+            }
+            recorded.state = FindingState::Open;
+            if settled.is_none() || recorded.item_id == item_id {
+                settled = Some(recorded.id.clone());
+            }
+            true
+        });
+        say!("withdrew Trust on request ({item_id})");
+        Ok(ActionReport {
+            action: "untrust".to_string(),
+            finding_id: settled.map(|id| id.to_string()).unwrap_or_default(),
+            item_id: item_id.to_string(),
+            receipt_id: String::new(),
+            state: FindingState::Open.to_string(),
+            result: Outcome::Ok,
+            steps: Vec::new(),
+            trusted: false,
+            sessions,
+            message: format!(
+                "Withdrew the Trust in this exact version of the {}. The next Scan checks it \
+                 again.",
+                named(Some(kind), item_id.as_str())
+            ),
+        }
+        .to_value())
+    }
+
+    /// The Trust record a target names: the content of a Finding, or a record
+    /// granted on an Item, told apart by its hash where there is more than
+    /// one.
+    fn trust_for(
+        &self,
+        target: &str,
+        content_hash: Option<&str>,
+    ) -> Result<(ItemId, Kind, String), RequestError> {
+        let trusted = EventLog::in_data_directory(&self.directory)
+            .read(&*self.keys)
+            .map(|view| view.trust_table())
+            .map_err(|error| refused("failed", format!("the Event Log: {error}")))?;
+        let untrusted = || refused("not-allowed", "that content carries no Trust to withdraw");
+        let state = self.state.lock().expect("the state is not poisoned");
+
+        if target.contains('|') {
+            let finding = state
+                .findings
+                .iter()
+                .find(|finding| finding.id.as_str() == target)
+                .ok_or_else(|| unknown(target))?;
+            if content_hash.is_some_and(|hash| hash != finding.content_hash) {
+                return Err(refused(
+                    "not-allowed",
+                    "that Finding is about other content than the hash named",
+                ));
+            }
+            if !trusted.trusts(finding.kind, &finding.content_hash) {
+                return Err(untrusted());
+            }
+            return Ok((
+                finding.item_id.clone(),
+                finding.kind,
+                finding.content_hash.clone(),
+            ));
+        }
+
+        // The records granted on the Item, and the content of a Finding on it
+        // that carries Trust wherever the Trust was granted.
+        let granted_on_it = |record: &&agentsweep_core::derived::TrustRecord| {
+            record.granted_on.as_ref().map(ItemId::as_str) == Some(target)
+        };
+        let mut found: Vec<(Kind, String)> = trusted
+            .records()
+            .filter(granted_on_it)
+            .map(|record| (record.kind, record.content_hash.clone()))
+            .collect();
+        found.extend(
+            state
+                .findings
+                .iter()
+                .filter(|finding| finding.item_id.as_str() == target)
+                .filter(|finding| trusted.trusts(finding.kind, &finding.content_hash))
+                .map(|finding| (finding.kind, finding.content_hash.clone())),
+        );
+        found.sort();
+        found.dedup();
+        if let Some(hash) = content_hash {
+            found.retain(|(_, held)| held == hash);
+        }
+        let known = trusted.records().any(|record| granted_on_it(&record))
+            || state
+                .findings
+                .iter()
+                .any(|finding| finding.item_id.as_str() == target);
+        match found.len() {
+            0 if known => Err(untrusted()),
+            0 => Err(unknown(target)),
+            1 => {
+                let (kind, hash) = found.remove(0);
+                Ok((ItemId::from_recorded(target), kind, hash))
+            }
+            _ => Err(refused(
+                "ambiguous",
+                format!(
+                    "more than one version of that Item carries Trust; name one of {}",
+                    found
+                        .iter()
+                        .map(|(_, hash)| hash.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )),
+        }
+    }
+
     /// Trust: this exact content of this kind is safe, wherever it appears.
     fn trust(self: &Arc<Daemon>, target: &str) -> Result<Value, RequestError> {
         let _writing = self.writing.lock().expect("the write lock is not poisoned");
@@ -1223,6 +1474,69 @@ mod tests {
             ..sample()
         };
         assert!(priority(&rule) < priority(&drift));
+    }
+
+    /// Spec section 6.4: an action waits for a running Scan to finish. A Scan
+    /// holds the write lock from start to end, so holding it here is a Scan
+    /// in progress as far as an action can tell; purge and untrust answer
+    /// only once it is let go.
+    #[test]
+    fn purge_and_untrust_wait_for_a_running_scan() {
+        use crate::options::{KeySourceChoice, LogChoice, Options};
+        use agentsweep_core::keychain::MemoryKeySource;
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+
+        let temporary = tempfile::TempDir::new().expect("a temporary directory");
+        let home = temporary.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).expect("an installed Agent");
+        let options = Options {
+            data_dir: DataDirectory::at(temporary.path().join("data")),
+            socket: temporary.path().join("never-bound.sock"),
+            home: Some(home),
+            key_source: KeySourceChoice::Memory,
+            log: LogChoice::Stderr,
+        };
+        let daemon = Daemon::open_tuned(
+            &options,
+            Arc::new(agentsweep_ipc::peer::SameUser),
+            Box::new(MemoryKeySource::empty()),
+            crate::Tuning::default(),
+        )
+        .expect("an open daemon");
+
+        for request in [
+            Request::Purge {
+                target: "q-0123456789abcdef0123456789abcdef".to_string(),
+            },
+            Request::Untrust {
+                target: "claude-code/user/skill/~/.claude/skills/setup".to_string(),
+                content_hash: None,
+            },
+        ] {
+            let scanning = daemon.writing.lock().expect("the write lock");
+            let (answered, answer) = channel();
+            let acting = Arc::clone(&daemon);
+            let name = request.as_str();
+            let asked = std::thread::spawn(move || {
+                let result = acting.act(&request);
+                let _ = answered.send(());
+                result
+            });
+            assert!(
+                answer.recv_timeout(Duration::from_millis(500)).is_err(),
+                "{name} was answered while a Scan ran"
+            );
+            drop(scanning);
+            answer
+                .recv_timeout(Duration::from_secs(60))
+                .unwrap_or_else(|_| panic!("{name} was answered once the Scan ended"));
+            let refusal = asked
+                .join()
+                .expect("the request thread")
+                .expect_err("an id this daemon does not know");
+            assert_eq!(refusal.code, "unknown-target", "{name}");
+        }
     }
 
     fn sample() -> RecordedFinding {

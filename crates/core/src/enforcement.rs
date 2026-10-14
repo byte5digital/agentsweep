@@ -586,6 +586,44 @@ mod writer {
             Ok(report)
         }
 
+        /// Deletes what the store keeps of one quarantined Item for good, the
+        /// "Delete permanently" of spec section 5.1, and records it.
+        ///
+        /// The record is written first and the Receipt's directory thrown away
+        /// after: a store that keeps one directory too many is untidy, a
+        /// deletion without a record is an action nobody can account for. An
+        /// Item the Agent's own switch turned off was never taken into the
+        /// store, so there is nothing to delete and the purge is refused.
+        ///
+        /// Answers with the record it wrote, which the Activity line about it
+        /// names.
+        pub fn purge(
+            &mut self,
+            entry: &QuarantineEntry,
+        ) -> Result<crate::envelope::Envelope, EnforcementError> {
+            let refuse = |reason: &str| EnforcementError::NotEligible {
+                reason: reason.to_string(),
+            };
+            if entry.switched_in_place() {
+                return Err(refuse(
+                    "this Item was switched off where it stands, so the quarantine store keeps \
+                     nothing of it to delete",
+                ));
+            }
+            let receipt = Receipt::from_entry(entry).ok_or_else(|| {
+                refuse("the Event Log does not describe a Receipt that can be deleted")
+            })?;
+            let mut event = Event::new(Action::Purge, Actor::User)
+                .about(&receipt.item_id, receipt.kind, &receipt.content_hash)
+                .because_of(&entry.finding_id, cause_tier(entry), entry.rule_id);
+            event.receipt_id = receipt.id.to_string();
+            let written = self.writer.append(&event)?;
+            self.store
+                .discard(&receipt.id)
+                .map_err(EnforcementError::Store)?;
+            Ok(written)
+        }
+
         /// Records that this content of this kind is safe, wherever it
         /// appears. Trust is bound to the hash and never expires by itself.
         pub fn trust(
@@ -1044,6 +1082,95 @@ mod tests {
             "{:?}",
             recorded.steps[0]
         );
+    }
+
+    /// "Delete permanently" (spec section 5.1): the payload goes from the
+    /// store for good, one `purge` record says so, and the manifest rebuilt
+    /// from the log no longer holds the Item.
+    #[test]
+    fn a_purge_deletes_the_payload_records_it_and_empties_the_manifest() {
+        let bench = Bench::new();
+        let mut enforcement = bench.enforcement();
+        let item = bench.item("CLAUDE.md", "# demo\n");
+        let receipt = enforcement
+            .quarantine(&Moves, &bench.host, &item, &cause(Actor::Auto))
+            .expect("a Quarantine");
+        let entry = only_entry(&enforcement);
+        let kept = bench.directory.quarantine().join(receipt.id.as_str());
+        assert!(kept.join("payload").exists());
+
+        enforcement.purge(&entry).expect("a purge");
+
+        assert!(!kept.exists(), "the Receipt's directory is gone");
+        assert!(enforcement.manifest().expect("a readable log").is_empty());
+        let view = enforcement.read().expect("a readable log");
+        let purges: Vec<_> = view
+            .events
+            .iter()
+            .filter(|recorded| recorded.event.action == crate::eventlog::Action::Purge)
+            .collect();
+        assert_eq!(purges.len(), 1);
+        let recorded = &purges[0].event;
+        assert_eq!(recorded.actor, Actor::User);
+        assert_eq!(recorded.receipt_id, receipt.id.to_string());
+        assert_eq!(recorded.item_id, Some(item.id.clone()));
+        assert_eq!(recorded.content_hash, item.content_hash);
+        assert_eq!(recorded.finding_id, entry.finding_id);
+        assert!(!item.path.exists(), "nothing was put back");
+    }
+
+    /// A switched Item was never taken into the store: the Agent's own switch
+    /// is the whole Quarantine. There is nothing to delete, so the purge is
+    /// refused and nothing is written.
+    #[test]
+    fn a_purge_of_an_item_switched_off_in_place_is_refused() {
+        let bench = Bench::new();
+        let mut enforcement = bench.enforcement();
+        let item = bench.item("CLAUDE.md", "# demo\n");
+        enforcement
+            .quarantine(&Moves, &bench.host, &item, &cause(Actor::Auto))
+            .expect("a Quarantine");
+        let mut entry = only_entry(&enforcement);
+        entry.steps = vec![crate::eventlog::ReceiptStep::new(
+            crate::eventlog::Primitive::NativeDisable,
+            item.path.display().to_string(),
+        )];
+        let before = enforcement.read().expect("a readable log").events.len();
+
+        let refused = enforcement.purge(&entry);
+
+        assert!(
+            matches!(refused, Err(EnforcementError::NotEligible { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(
+            enforcement.read().expect("a readable log").events.len(),
+            before
+        );
+    }
+
+    /// Untrust is an event (spec section 5.4): the Trust table rebuilt from
+    /// the log no longer holds the content.
+    #[test]
+    fn untrust_withdraws_the_trust_record() {
+        let bench = Bench::new();
+        let mut enforcement = bench.enforcement();
+        let item = bench.item("CLAUDE.md", "# demo\n");
+        enforcement
+            .trust(&item.id, item.kind, &item.content_hash, Actor::User)
+            .expect("a Trust");
+        assert!(
+            enforcement
+                .trusted()
+                .expect("a readable log")
+                .trusts(item.kind, &item.content_hash)
+        );
+
+        enforcement
+            .untrust(&item.id, item.kind, &item.content_hash)
+            .expect("an untrust");
+
+        assert!(enforcement.trusted().expect("a readable log").is_empty());
     }
 
     /// Drift alone never quarantines by itself: a change with nothing known

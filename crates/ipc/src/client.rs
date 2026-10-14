@@ -188,6 +188,29 @@ impl Client {
         })
     }
 
+    /// Deletes what the quarantine store keeps of one quarantined Item for
+    /// good. The target is a Receipt id, or the id of a Finding or an Item
+    /// that one Receipt stopped.
+    pub fn purge(&mut self, target: &str) -> Result<ActionReport, ClientError> {
+        self.act(Request::Purge {
+            target: target.to_string(),
+        })
+    }
+
+    /// Withdraws one Trust record. The target is a Finding id, or the id of
+    /// the Item the Trust was granted on, with the content hash where more
+    /// than one record was granted on it.
+    pub fn untrust(
+        &mut self,
+        target: &str,
+        content_hash: Option<&str>,
+    ) -> Result<ActionReport, ClientError> {
+        self.act(Request::Untrust {
+            target: target.to_string(),
+            content_hash: content_hash.map(str::to_string),
+        })
+    }
+
     /// Every Receipt in the quarantine store with the path its Item was taken
     /// from, or only those taken from at or below one path.
     pub fn reveal_receipts(

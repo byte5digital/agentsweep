@@ -23,6 +23,16 @@ mkdir -p ~/agentsweep-hand-check
 cp -R target/debug/bundle/macos/AgentSweep.app ~/agentsweep-hand-check/
 ```
 
+A release-like bundle, the one CI builds, is universal (arm64 plus x86_64) and has release sidecars built through `cargo auditable`. It needs both Apple targets and cargo-auditable installed once (`rustup target add aarch64-apple-darwin x86_64-apple-darwin` and `cargo install --locked cargo-auditable`):
+
+```sh
+TARGET=universal-apple-darwin apps/menubar/build-sidecars.sh release
+cd apps/menubar
+APPLE_SIGNING_IDENTITY="-" npx --yes @tauri-apps/cli@2.11.5 build --target universal-apple-darwin --config tauri.bundle.conf.json -- --locked
+```
+
+It lands in `target/universal-apple-darwin/release/bundle/macos/AgentSweep.app`. Its release daemon admits nobody, so it is for looking at what a release ships (`lipo -archs` on each executable), not for the checks below.
+
 ## Before: nothing of AgentSweep on the machine
 
 ```sh

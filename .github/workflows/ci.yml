@@ -93,6 +93,20 @@ jobs:
       - name: Install cargo-auditable
         run: cargo install --locked cargo-auditable
 
+      # The Apple judgement helper is Swift against Foundation Models, which
+      # needs a macOS 26 SDK to build; its own minimum stays macOS 14. Its
+      # tests never reach the model, so they pass on a runner without Apple
+      # Intelligence.
+      - name: Test the Apple judgement helper
+        run: |
+          sdk="$(xcrun --show-sdk-path)"
+          echo "SDK: $(xcrun --show-sdk-version)"
+          test -d "$sdk/System/Library/Frameworks/FoundationModels.framework" || {
+            echo "the selected SDK has no Foundation Models; the helper needs macOS 26 or later" >&2
+            exit 1
+          }
+          apps/apple-judge/test.sh
+
       # Release sidecars, so the bundle carries what a release ships: each one
       # built for both Apple triples through cargo auditable and joined with
       # lipo. Nothing here runs the daemon, so the empty Team ID that makes a
@@ -116,6 +130,7 @@ jobs:
           test -x "$app/Contents/MacOS/agentsweep-menubar"
           test -x "$app/Contents/MacOS/agentsweepd"
           test -x "$app/Contents/MacOS/agentsweep"
+          test -x "$app/Contents/MacOS/agentsweep-apple-judge"
           plutil -lint "$app/Contents/Library/LaunchAgents/de.byte5.agentsweep.daemon.plist"
           test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = "14.0"
           test "$(plutil -extract LSUIElement raw "$app/Contents/Info.plist")" = "true"
@@ -139,7 +154,7 @@ jobs:
       - name: Check that every executable is universal and every sidecar auditable
         run: |
           macos=target/universal-apple-darwin/release/bundle/macos/AgentSweep.app/Contents/MacOS
-          for binary in agentsweep-menubar agentsweepd agentsweep; do
+          for binary in agentsweep-menubar agentsweepd agentsweep agentsweep-apple-judge; do
             archs="$(lipo -archs "$macos/$binary")"
             echo "$binary: $archs"
             for arch in arm64 x86_64; do
@@ -157,6 +172,26 @@ jobs:
               fi
             done
           done
+
+      # The Apple judgement helper as the bundle carries it: signed with the
+      # hardened runtime, Foundation Models linked weakly so it loads on macOS
+      # 14, and answering on stdout without a crash. A runner has no Apple
+      # Intelligence, so the check is held to its shape, not its value.
+      - name: Check the Apple judgement helper in the bundle
+        run: |
+          judge=target/universal-apple-darwin/release/bundle/macos/AgentSweep.app/Contents/MacOS/agentsweep-apple-judge
+          codesign -dvv "$judge" 2>&1 | grep 'flags=.*runtime'
+          for arch in arm64 x86_64; do
+            otool -arch "$arch" -L "$judge" | grep 'FoundationModels.*weak'
+          done
+          check="$(echo '{"command":"check"}' | "$judge")"
+          echo "check: $check"
+          echo "$check" | grep -q '"available":'
+          echo "$check" | grep -q '"model_version":'
+          status=0
+          malformed="$(echo 'not json' | "$judge")" || status=$?
+          test "$status" -eq 1
+          test "$malformed" = '{"error":"malformed_request"}'
 
   benign-corpus:
     name: Benign corpus

@@ -18,10 +18,11 @@
 //! puts them in the order of spec section 6.4 and answers with what to write.
 //! On top of it sits Drift: the question "was that you?" where spec section
 //! 4.6.5 says to ask it, the Acknowledge that answers it, and the compaction
-//! that keeps the Baseline chain from growing for ever. The Verdict cache has
-//! its envelope, and the Judgement Request it keys on is built and redacted
-//! here, the same for every Judgement Engine; the engines arrive with their
-//! milestone.
+//! that keeps the Baseline chain from growing for ever. The Judgement Request
+//! is built and redacted here, the same for every Judgement Engine, and the
+//! Verdict cache it keys is read inside a Scan, where a cached Verdict is
+//! applied to an Item that awaits judgement, and compacted behind a Full
+//! Scan; the engines arrive with their milestone.
 
 #![warn(missing_docs)]
 
@@ -50,6 +51,7 @@ pub mod hits;
 pub mod host;
 pub mod integrity;
 pub mod item;
+pub mod judged;
 pub mod judgement;
 pub mod judgement_request;
 pub mod keychain;

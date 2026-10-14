@@ -17,10 +17,10 @@
 
 use serde_json::{Map, Value};
 
-use crate::baseline::sensitive_fields;
+use crate::baseline::{SensitiveValues, sensitive_values};
 use crate::eventlog::Actor;
 use crate::finding::{Category, Finding, FiredHeuristic, RuleStatus, Source, Tier};
-use crate::item::{Item, ItemId, Kind, Scope, Shape, sha256_hex};
+use crate::item::{Item, ItemId, Kind, Scope, sha256_hex};
 
 /// The longest excerpt a Heuristic line carries, in characters. A match is
 /// evidence to read, not content to reproduce.
@@ -333,10 +333,10 @@ impl FindingFacts {
 ///
 /// A match is redacted when the Heuristic says its matches can land on
 /// sensitive fields, when the Item is an env file (every value in one is
-/// sensitive), and when it lands inside a sensitive field of an entry (MCP
-/// `env` and `headers`) or the entry is a credential block itself. The hash is
-/// the same short form the parsed views and the stores use, so a person can
-/// tell two values apart and never read one.
+/// sensitive), and when it lands inside a sensitive field of an entry (an
+/// `env` value, a header, a bearer-token target, at any depth) or the entry
+/// is one itself. The hash is the same short form the parsed views and the
+/// stores use, so a person can tell two values apart and never read one.
 pub fn excerpt(item: &Item, heuristic: &FiredHeuristic) -> String {
     let Some(first) = heuristic
         .matches
@@ -372,52 +372,16 @@ pub fn excerpt(item: &Item, heuristic: &FiredHeuristic) -> String {
 }
 
 /// True when a byte range of an entry's canonical form overlaps one of its
-/// sensitive fields, or the entry is a sensitive field as a whole.
-///
-/// The canonical form writes every top-level field as its quoted name, a
-/// colon and the field's own canonical form, so the span of a field is found
-/// exactly. Where it cannot be found, the range counts as sensitive: a value
-/// that might be a secret is redacted rather than guessed about.
+/// sensitive fields, or the entry is a sensitive field as a whole. Which
+/// fields those are is decided once, in [`sensitive_values`], so an excerpt
+/// and the Baseline's previous form never disagree.
 fn lands_on_a_sensitive_field(item: &Item, range: std::ops::Range<usize>) -> bool {
-    if item.shape != Shape::Entry {
-        return false;
+    match sensitive_values(item) {
+        SensitiveValues::Whole => true,
+        SensitiveValues::At(spans) => spans
+            .iter()
+            .any(|span| range.start < span.end && span.start < range.end),
     }
-    let sensitive = sensitive_fields(item.kind);
-    if sensitive.is_empty() {
-        return false;
-    }
-    let key = item.inside_file().rsplit(['/', '.']).next().unwrap_or("");
-    if sensitive.contains(&key) {
-        return true;
-    }
-    let Ok(Value::Object(fields)) = serde_json::from_slice::<Value>(&item.content) else {
-        return true;
-    };
-    for name in sensitive {
-        let Some(field) = fields.get(*name) else {
-            continue;
-        };
-        let mut written = crate::item::canonical_entry(&Value::String(name.to_string()));
-        written.push(b':');
-        written.extend(crate::item::canonical_entry(field));
-        let Some(start) = find(&item.content, &written) else {
-            return true;
-        };
-        let end = start + written.len();
-        if range.start < end && start < range.end {
-            return true;
-        }
-    }
-    false
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 /// The Scope and project root an Item id names, for an Item that is not at
@@ -676,6 +640,80 @@ mod tests {
         let command = text.find("curl").expect("the command");
         let outside = fired(511, false, "", command..command + 4);
         assert_eq!(super::excerpt(&item, &outside), "curl");
+    }
+
+    fn entry(agent: &str, kind: Kind, locator: &str, content: &str) -> Item {
+        Item::entry(
+            agent,
+            Scope::User,
+            kind,
+            locator,
+            PathBuf::from("/home/u/config"),
+            Provenance::Manual,
+            Activation::Active,
+            crate::item::canonical_entry(&serde_json::from_str(content).expect("json")),
+        )
+    }
+
+    fn excerpt_of(item: &Item, text: &str) -> String {
+        let content = String::from_utf8(item.content.clone()).expect("utf-8");
+        let start = content.find(text).expect("the text");
+        excerpt(item, &fired(512, false, "", start..start + text.len()))
+    }
+
+    /// A Claude Code settings entry for one environment variable holds the
+    /// value itself: a match on it shows only a hash.
+    #[test]
+    fn a_match_in_a_settings_entry_for_one_environment_variable_is_redacted() {
+        let item = entry(
+            "claude-code",
+            Kind::SettingsEntry,
+            "~/.claude/settings.json#/env/TRACKER_TOKEN",
+            r#"{"env.TRACKER_TOKEN": "hunter2hunter2"}"#,
+        );
+        let excerpt = excerpt_of(&item, "hunter2hunter2");
+        assert!(excerpt.starts_with("sha256:"), "{excerpt}");
+    }
+
+    /// A match inside a Codex server's `http_headers` or `env_http_headers`
+    /// shows only a hash, and one on its URL shows the text.
+    #[test]
+    fn a_match_inside_a_codex_server_header_is_redacted_and_one_on_its_url_is_not() {
+        let item = entry(
+            "codex",
+            Kind::McpServer,
+            "~/.codex/config.toml#tracker",
+            r#"{"url": "https://tracker.example.invalid/mcp",
+                "http_headers": {"Authorization": "Bearer hunter2hunter2"},
+                "env_http_headers": {"X-Tenant": "TRACKER_TENANT_VARIABLE"}}"#,
+        );
+        for value in ["hunter2hunter2", "TRACKER_TENANT_VARIABLE"] {
+            let excerpt = excerpt_of(&item, value);
+            assert!(excerpt.starts_with("sha256:"), "{value}: {excerpt}");
+        }
+        assert_eq!(
+            excerpt_of(&item, "tracker.example.invalid"),
+            "tracker.example.invalid"
+        );
+    }
+
+    /// A sensitive field below the top level, here the headers of an HTTP
+    /// hook, is found where the canonical form writes it.
+    #[test]
+    fn a_match_inside_a_nested_sensitive_field_is_redacted() {
+        let item = entry(
+            "claude-code",
+            Kind::Hook,
+            "~/.claude/settings.json#PostToolUse/Bash/0123456789ab",
+            r#"{"event_name": "PostToolUse", "matcher": "Bash", "hooks": [{
+                "type": "http", "url": "https://hooks.example.invalid",
+                "headers": {"Authorization": "Bearer hunter2hunter2"}}]}"#,
+        );
+        assert!(excerpt_of(&item, "hunter2hunter2").starts_with("sha256:"));
+        assert_eq!(
+            excerpt_of(&item, "hooks.example.invalid"),
+            "hooks.example.invalid"
+        );
     }
 
     #[test]

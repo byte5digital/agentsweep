@@ -210,17 +210,183 @@ impl ManifestFile {
     }
 }
 
-/// The top-level fields of an entry whose values never leave the machine in
-/// the clear (spec section 3.3).
+/// The fields of an entry whose values never leave the machine in the clear
+/// (spec section 3.3): MCP `env` values, headers and bearer-token targets, as
+/// both Agents spell them.
+///
+/// A field counts wherever it sits: as any segment of the entry's locator
+/// (Claude Code's settings entry `env.<NAME>` is the value itself), or at any
+/// depth of the entry's content (the headers of a Codex telemetry exporter,
+/// those of an HTTP hook). A name with a dot is a run of segments, so
+/// `shell_environment_policy.set` is sensitive and a lone `set` is not.
 ///
 /// The Baseline keeps a hash per field for every field alike, so a swapped
-/// credential still moves the Item's hash; what these names govern is the one
-/// place a value could be written out, which is
-/// [`BaselineRecord::previous_form`].
+/// credential still moves the Item's hash; what these names govern is where a
+/// value could be written out: [`BaselineRecord::previous_form`] through
+/// [`redacted_form`], and a Heuristic excerpt through [`sensitive_values`].
 pub fn sensitive_fields(kind: Kind) -> &'static [&'static str] {
     match kind {
-        Kind::McpServer | Kind::SettingsEntry => &["env", "headers"],
+        Kind::McpServer => &[
+            "env",
+            "headers",
+            "http_headers",
+            "env_http_headers",
+            "bearer_token_env_var",
+        ],
+        Kind::SettingsEntry => &[
+            "env",
+            "headers",
+            "http_headers",
+            "env_http_headers",
+            "bearer_token_env_var",
+            "experimental_bearer_token",
+            "shell_environment_policy.set",
+        ],
+        Kind::Hook => &["headers"],
         _ => &[],
+    }
+}
+
+/// True when a path, as its segments, names a sensitive field of this kind
+/// anywhere along it.
+pub fn names_a_sensitive_field(kind: Kind, segments: &[&str]) -> bool {
+    sensitive_fields(kind).iter().any(|name| {
+        let run: Vec<&str> = name.split('.').collect();
+        segments
+            .windows(run.len())
+            .any(|window| window == run.as_slice())
+    })
+}
+
+/// Where the sensitive values of an entry sit in its content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SensitiveValues {
+    /// The byte ranges of the content, each one a sensitive field written as
+    /// its quoted name, a colon and its value. Empty when nothing is.
+    At(Vec<std::ops::Range<usize>>),
+    /// All of it: the locator names a sensitive field, or the content cannot
+    /// be read field by field and a value that might be a secret is treated
+    /// as one rather than guessed about.
+    Whole,
+}
+
+/// Where an Item's sensitive values are. A file or a tree has none in this
+/// sense: an env file is sensitive as a kind, and its callers say so.
+pub fn sensitive_values(item: &Item) -> SensitiveValues {
+    if item.shape != Shape::Entry || sensitive_fields(item.kind).is_empty() {
+        return SensitiveValues::At(Vec::new());
+    }
+    if locator_is_sensitive(item) {
+        return SensitiveValues::Whole;
+    }
+    let Ok(parsed) = serde_json::from_slice::<Value>(&item.content) else {
+        return SensitiveValues::Whole;
+    };
+    if crate::item::canonical_entry(&parsed) != item.content {
+        return SensitiveValues::Whole;
+    }
+    let mut spans = Vec::new();
+    spans_of(item.kind, &parsed, 0, &mut Vec::new(), &mut spans);
+    SensitiveValues::At(spans)
+}
+
+fn locator_is_sensitive(item: &Item) -> bool {
+    let segments: Vec<&str> = item
+        .inside_file()
+        .split(['/', '.'])
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    names_a_sensitive_field(item.kind, &segments)
+}
+
+/// The segments a key of an entry adds to the path: Claude Code and Codex
+/// both write a settings entry under its dotted key path.
+fn key_segments(key: &str) -> impl Iterator<Item = String> + '_ {
+    key.split('.').map(str::to_string)
+}
+
+/// Collects the sensitive pairs of a value whose canonical form starts at
+/// `at`. The offsets follow the canonical form exactly: braces and brackets,
+/// a comma between members, every key quoted and followed by a colon.
+fn spans_of(
+    kind: Kind,
+    value: &Value,
+    at: usize,
+    path: &mut Vec<String>,
+    spans: &mut Vec<std::ops::Range<usize>>,
+) {
+    let canonical = crate::item::canonical_entry;
+    let mut offset = at + 1;
+    match value {
+        Value::Object(fields) => {
+            let mut keys: Vec<&String> = fields.keys().collect();
+            keys.sort();
+            for (index, key) in keys.into_iter().enumerate() {
+                if index > 0 {
+                    offset += 1;
+                }
+                let name = canonical(&Value::String(key.clone())).len();
+                let field = &fields[key];
+                let end = offset + name + 1 + canonical(field).len();
+                let depth = path.len();
+                path.extend(key_segments(key));
+                let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+                if names_a_sensitive_field(kind, &segments) {
+                    spans.push(offset..end);
+                } else {
+                    spans_of(kind, field, offset + name + 1, path, spans);
+                }
+                path.truncate(depth);
+                offset = end;
+            }
+        }
+        Value::Array(items) => {
+            for (index, member) in items.iter().enumerate() {
+                if index > 0 {
+                    offset += 1;
+                }
+                path.push(index.to_string());
+                spans_of(kind, member, offset, path, spans);
+                path.pop();
+                offset += canonical(member).len();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A value with every sensitive field left out, at any depth.
+fn without_sensitive(kind: Kind, value: &Value, path: &mut Vec<String>) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .filter_map(|(key, field)| {
+                    let depth = path.len();
+                    path.extend(key_segments(key));
+                    let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+                    let kept = match names_a_sensitive_field(kind, &segments) {
+                        true => None,
+                        false => Some((key.clone(), without_sensitive(kind, field, path))),
+                    };
+                    path.truncate(depth);
+                    kept
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .enumerate()
+                .map(|(index, member)| {
+                    path.push(index.to_string());
+                    let kept = without_sensitive(kind, member, path);
+                    path.pop();
+                    kept
+                })
+                .collect(),
+        ),
+        scalar => scalar.clone(),
     }
 }
 
@@ -250,30 +416,18 @@ pub fn field_hashes(item: &Item) -> BTreeMap<String, String> {
 /// The canonical form of an entry with its sensitive fields left out, which is
 /// the only content the Baseline ever holds.
 ///
-/// Empty for a file or a tree, and empty for an entry whose own key names a
-/// sensitive field: an entry that *is* a credential block is remembered by its
-/// field hashes alone.
+/// Empty for a file or a tree, and empty for an entry whose locator names a
+/// sensitive field in any segment: an entry that *is* a credential block, or
+/// one credential, is remembered by its field hashes alone. A sensitive field
+/// at any depth of the content is left out (see [`sensitive_fields`]).
 pub fn redacted_form(item: &Item) -> String {
-    if item.shape != Shape::Entry {
-        return String::new();
-    }
-    let sensitive = sensitive_fields(item.kind);
-    let key = item.inside_file().rsplit(['/', '.']).next().unwrap_or("");
-    if sensitive.contains(&key) {
+    if item.shape != Shape::Entry || locator_is_sensitive(item) {
         return String::new();
     }
     let Ok(parsed) = serde_json::from_slice::<Value>(&item.content) else {
         return String::new();
     };
-    let value = match parsed {
-        Value::Object(fields) => Value::Object(
-            fields
-                .into_iter()
-                .filter(|(name, _)| !sensitive.contains(&name.as_str()))
-                .collect(),
-        ),
-        other => other,
-    };
+    let value = without_sensitive(item.kind, &parsed, &mut Vec::new());
     String::from_utf8_lossy(&crate::item::canonical_entry(&value)).to_string()
 }
 
@@ -1155,6 +1309,123 @@ mod tests {
         // still moves the Item.
         assert!(record.accepted_fields.contains_key("env"));
         assert!(record.accepted_fields.contains_key("headers"));
+    }
+
+    fn entry(agent: &str, kind: Kind, locator: &str, body: &Value) -> Item {
+        Item::entry(
+            agent,
+            Scope::User,
+            kind,
+            locator,
+            PathBuf::from("/nowhere/config"),
+            Provenance::Manual,
+            Activation::Active,
+            canonical_entry(body),
+        )
+    }
+
+    /// A Claude Code settings entry for one environment variable is the value
+    /// itself under a key path that starts with `env`: the locator names the
+    /// sensitive field, not its last segment.
+    #[test]
+    fn a_settings_entry_for_one_environment_variable_keeps_no_value() {
+        let item = entry(
+            "claude-code",
+            Kind::SettingsEntry,
+            "~/.claude/settings.json#/env/TRACKER_TOKEN",
+            &serde_json::json!({"env.TRACKER_TOKEN": "hunter2hunter2"}),
+        );
+        assert_eq!(redacted_form(&item), "");
+        let record = BaselineRecord::accepting(
+            &item,
+            moment("2026-09-24T09:00:00.000Z"),
+            AcceptedBy::CleanScan,
+        );
+        let written = String::from_utf8(crate::item::canonical_entry(&record.to_payload()))
+            .expect("the payload is text");
+        assert!(!written.contains("hunter2"), "{written}");
+    }
+
+    /// A Codex MCP table writes its headers as `http_headers` and the
+    /// variables that fill them as `env_http_headers`; neither value is kept.
+    #[test]
+    fn a_codex_server_keeps_none_of_its_header_values() {
+        let item = entry(
+            "codex",
+            Kind::McpServer,
+            "~/.codex/config.toml#tracker",
+            &serde_json::json!({
+                "url": "https://tracker.example.invalid/mcp",
+                "http_headers": {"Authorization": "Bearer hunter2hunter2"},
+                "env_http_headers": {"X-Tenant": "TRACKER_TENANT_VARIABLE"},
+                "bearer_token_env_var": "TRACKER_BEARER_VARIABLE",
+            }),
+        );
+        let form = redacted_form(&item);
+        assert!(form.contains("tracker.example.invalid"), "{form}");
+        assert!(!form.contains("hunter2"), "{form}");
+        assert!(!form.contains("TRACKER_TENANT_VARIABLE"), "{form}");
+        assert!(!form.contains("TRACKER_BEARER_VARIABLE"), "{form}");
+    }
+
+    /// A sensitive field below the top level is left out too: a provider's
+    /// literal bearer token, the headers of a telemetry exporter, the
+    /// variables a shell environment policy sets, and the headers of an HTTP
+    /// hook.
+    #[test]
+    fn a_sensitive_field_at_any_depth_is_left_out() {
+        let cases = [
+            entry(
+                "codex",
+                Kind::SettingsEntry,
+                "~/.codex/config.toml#/model_providers/proxy/experimental_bearer_token",
+                &serde_json::json!({"model_providers.proxy.experimental_bearer_token": "hunter2hunter2"}),
+            ),
+            entry(
+                "codex",
+                Kind::SettingsEntry,
+                "~/.codex/config.toml#/otel",
+                &serde_json::json!({"otel": {"exporter": {"otlp-http": {
+                    "endpoint": "https://otel.example.invalid",
+                    "headers": {"x-api-key": "hunter2hunter2"},
+                }}}}),
+            ),
+            entry(
+                "codex",
+                Kind::SettingsEntry,
+                "~/.codex/config.toml#/shell_environment_policy/set",
+                &serde_json::json!({"shell_environment_policy.set": {"TOKEN": "hunter2hunter2"}}),
+            ),
+            entry(
+                "claude-code",
+                Kind::Hook,
+                "~/.claude/settings.json#PostToolUse/Bash/0123456789ab",
+                &serde_json::json!({
+                    "event_name": "PostToolUse",
+                    "matcher": "Bash",
+                    "hooks": [{
+                        "type": "http",
+                        "url": "https://hooks.example.invalid",
+                        "headers": {"Authorization": "Bearer hunter2hunter2"},
+                    }],
+                }),
+            ),
+        ];
+        for item in cases {
+            let form = redacted_form(&item);
+            assert!(!form.contains("hunter2"), "{}: {form}", item.locator());
+        }
+        // What is not sensitive stays, so a Drift Finding still has a before.
+        let otel = entry(
+            "codex",
+            Kind::SettingsEntry,
+            "~/.codex/config.toml#/otel",
+            &serde_json::json!({"otel": {"exporter": {"otlp-http": {
+                "endpoint": "https://otel.example.invalid",
+                "headers": {"x-api-key": "hunter2hunter2"},
+            }}}}),
+        );
+        assert!(redacted_form(&otel).contains("otel.example.invalid"));
     }
 
     #[test]

@@ -54,7 +54,8 @@ use agentsweep_core::adapter::{
 };
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{
-    Activation, FileFacts, InactiveReason, Item, ItemId, Kind, Provenance, Scope, canonical_entry,
+    Activation, FileFacts, InactiveReason, Invocation, Item, ItemId, Kind, Provenance, Scope,
+    canonical_entry,
 };
 use agentsweep_core::quarantine::{
     self, Conflict, EnforcementError, Receipt, RestoreReport, Store,
@@ -668,7 +669,9 @@ impl Codex {
             activation,
             canonical_entry(table),
         )
-        .with_view(ParsedView::Mcp(view));
+        .with_view(ParsedView::Mcp(view))
+        // Codex reports no source class beside a server's name.
+        .invoked_as(Invocation::mcp_server(name, ""));
         item.registered = registered;
         self.note_link(host, &mut item);
         item
@@ -816,7 +819,7 @@ impl Codex {
                 file_provenance(scope)
             };
             let view = ParsedView::Skill(SkillView {
-                name,
+                name: name.clone(),
                 ..SkillView::default()
             });
             match self.file_item(
@@ -829,7 +832,15 @@ impl Codex {
                 activation,
                 registered,
             ) {
-                Ok(item) => enumeration.items.push(item.with_view(view)),
+                Ok(item) => {
+                    // A `$name` mention uses the name the frontmatter
+                    // declares, and the directory name where it declares
+                    // none.
+                    let mention = SkillView::of(&name, &item.content).name;
+                    enumeration
+                        .items
+                        .push(item.with_view(view).invoked_as(Invocation::skill(mention)));
+                }
                 Err(problem) => enumeration.problems.push(problem),
             }
         }
@@ -1854,5 +1865,39 @@ mod tests {
         let mapped = Codex::new().items_for_path(&enumeration, &script);
         assert_eq!(mapped.len(), 1, "{mapped:?}");
         assert!(mapped[0].as_str().contains("SessionStart"));
+    }
+
+    /// A skill is invoked by the name a `$name` mention uses, which is the one
+    /// its frontmatter declares, and an MCP server by its name alone: Codex
+    /// reports no source class beside it.
+    #[test]
+    fn a_skill_and_a_server_carry_the_names_codex_invokes_them_by() {
+        let machine = Machine::new("invocations");
+        machine.write(
+            "home/.codex/skills/demo/SKILL.md",
+            "---\nname: demo-skill\ndescription: nothing\n---\n",
+        );
+        machine.write(
+            "home/.codex/skills/plain/SKILL.md",
+            "---\ndescription: nothing\n---\n",
+        );
+        machine.write(
+            "home/.codex/config.toml",
+            "[mcp_servers.tracker]\ncommand = \"/opt/t\"\n",
+        );
+
+        let enumeration = machine.enumerate();
+        assert_eq!(
+            found(&enumeration, "skill/~/.codex/skills/demo").invocations,
+            [Invocation::skill("demo-skill")]
+        );
+        assert_eq!(
+            found(&enumeration, "skill/~/.codex/skills/plain").invocations,
+            [Invocation::skill("plain")]
+        );
+        assert_eq!(
+            found(&enumeration, "#tracker").invocations,
+            [Invocation::mcp_server("tracker", "")]
+        );
     }
 }

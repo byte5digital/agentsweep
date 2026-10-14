@@ -42,8 +42,8 @@ use agentsweep_core::adapter::{
 };
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{
-    Activation, FileFacts, InactiveReason, Item, ItemId, Kind, Provenance, Scope, Shape, TreeCaps,
-    canonical_entry,
+    Activation, FileFacts, InactiveReason, Invocation, Item, ItemId, Kind, Provenance, Scope,
+    Shape, TreeCaps, canonical_entry,
 };
 use agentsweep_core::quarantine::{
     self, Conflict, EnforcementError, Receipt, RestoreReport, Store,
@@ -1022,6 +1022,7 @@ impl ClaudeCode {
         let locator = format!("{}#{name}", document.surface);
         let mut view = McpView::of(name, server);
         mcp::attach_command_facts(&mut view, host, base.or_else(|| scope.root()));
+        let invocation = server_invocation(document, &scope, &provenance, name);
         let mut item = Item::entry(
             AGENT_ID,
             scope,
@@ -1032,7 +1033,8 @@ impl ClaudeCode {
             activation,
             canonical_entry(server),
         )
-        .with_view(ParsedView::Mcp(view));
+        .with_view(ParsedView::Mcp(view))
+        .invoked_as(invocation);
         item.registered = registered;
         self.note_link(host, &mut item);
         item
@@ -1259,6 +1261,35 @@ pub(crate) fn config_directory_of(path: &Path) -> Option<PathBuf> {
         current = directory.parent();
     }
     None
+}
+
+/// The name and source class Claude Code reports for one MCP server, which is
+/// what a `PreToolUse` call carries as `mcp_server.name` and
+/// `mcp_server.source` (spec section 7.2): a server in the user's own registry
+/// is `user`, one in a project's record of that registry is `local`, one in a
+/// project's `.mcp.json` is `project`, and a plugin's server is `plugin` under
+/// its plugin form. A managed server's source class is not documented, so it
+/// carries none.
+fn server_invocation(
+    document: &Document,
+    scope: &Scope,
+    provenance: &Provenance,
+    name: &str,
+) -> Invocation {
+    if let Provenance::Plugin { id } = provenance {
+        let plugin = id.split('@').next().unwrap_or_default();
+        return Invocation::mcp_server(
+            skills::plugin_server_name(plugin, name),
+            skills::SOURCE_PLUGIN,
+        );
+    }
+    let source = match scope {
+        Scope::Managed => "",
+        Scope::User => "user",
+        Scope::Project(_) if document.surface == PROJECT_MCP_FILE => "project",
+        Scope::Project(_) => "local",
+    };
+    Invocation::mcp_server(name, source)
 }
 
 /// The file an Item would really run, when it is the kind of Item that runs
@@ -2480,5 +2511,93 @@ mod tests {
             assert!(!source.contains(&spawns), "a process is spawned");
             assert!(!source.contains(&imports), "a process is spawned");
         }
+    }
+
+    /// The names Claude Code invokes an Item by are this adapter's to work
+    /// out: a skill and a command by the name they declare, a plugin's skills
+    /// and servers under their plugin forms, and an MCP server with the source
+    /// class Claude Code reports for where it was declared.
+    #[test]
+    fn every_item_invoked_by_name_carries_the_names_claude_code_uses() {
+        let machine = Machine::new("invocations");
+        machine.write(
+            "home/.claude/skills/setup/SKILL.md",
+            "---\nname: project-setup\ndescription: d\n---\n",
+        );
+        machine.write("home/.claude/commands/ship.md", "Ship it.\n");
+        let cache = "home/.claude/plugins/cache/demo-marketplace/notes/1.2.0";
+        machine.write(
+            &format!("{cache}/.claude-plugin/plugin.json"),
+            "{\"name\": \"notes\", \"version\": \"1.2.0\"}",
+        );
+        machine.write(
+            &format!("{cache}/skills/jot/SKILL.md"),
+            "---\nname: jot\ndescription: d\n---\n",
+        );
+        machine.write(&format!("{cache}/commands/recall.md"), "Recall.\n");
+        machine.write(
+            &format!("{cache}/.mcp.json"),
+            "{\"mcpServers\": {\"store\": {\"command\": \"node\", \"args\": [\"./s.js\"]}}}",
+        );
+        machine.write(
+            "home/.claude/plugins/installed_plugins.json",
+            &format!(
+                "{{\"version\": 2, \"plugins\": {{\"notes@demo-marketplace\": [\
+                  {{\"scope\": \"user\", \"version\": \"1.2.0\", \
+                    \"installPath\": \"{}/{cache}\"}}]}}}}",
+                machine.root.display()
+            ),
+        );
+        machine.write(
+            "home/.claude/settings.json",
+            "{\"enabledPlugins\": {\"notes@demo-marketplace\": true}}",
+        );
+        machine.write(
+            "home/.claude.json",
+            &format!(
+                "{{\"mcpServers\": {{\"tracker\": {{\"command\": \"/opt/t\"}}}}, \
+                  \"projects\": {{\"{}\": {{\"mcpServers\": {{\"mine\": {{\"command\": \"/opt/m\"}}}}}}}}}}",
+                machine.project().display()
+            ),
+        );
+        machine.write(
+            "project/.mcp.json",
+            "{\"mcpServers\": {\"shared\": {\"command\": \"/opt/s\"}}}",
+        );
+
+        let enumeration = machine.enumerate();
+        let names = |ends_with: &str| item(&enumeration, ends_with).invocations.clone();
+
+        assert_eq!(
+            names("/skill/~/.claude/skills/setup"),
+            [Invocation::skill("project-setup")]
+        );
+        assert_eq!(
+            names("/skill/~/.claude/commands/ship.md"),
+            [Invocation::skill("ship")]
+        );
+        assert_eq!(
+            names("/plugin/notes@demo-marketplace"),
+            [
+                Invocation::skill("notes:jot"),
+                Invocation::skill("notes:recall"),
+                Invocation::mcp_server("plugin:notes:store", "plugin"),
+            ]
+        );
+        assert_eq!(
+            names("#store"),
+            [Invocation::mcp_server("plugin:notes:store", "plugin")]
+        );
+        assert_eq!(
+            names("#tracker"),
+            [Invocation::mcp_server("tracker", "user")]
+        );
+        assert_eq!(names("#mine"), [Invocation::mcp_server("mine", "local")]);
+        assert_eq!(
+            names("#shared"),
+            [Invocation::mcp_server("shared", "project")]
+        );
+        // A kind nothing is invoked as by name carries none.
+        assert!(names("#/enabledPlugins/notes@demo-marketplace").is_empty());
     }
 }

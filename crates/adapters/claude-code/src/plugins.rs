@@ -318,6 +318,7 @@ fn version_item(
         &record.install_path,
     );
     let view = skills::plugin_view(&item, record.name());
+    let item = skills::invoked_through(item, record.name());
     // The three facts of spec section 4.6.1. A registry record that moved as a
     // whole is an update and raises no question; a tree that moved under a
     // record that did not is the question.

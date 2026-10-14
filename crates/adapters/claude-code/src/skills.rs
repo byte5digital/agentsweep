@@ -19,7 +19,7 @@ use std::path::Path;
 
 use agentsweep_core::adapter::Enumeration;
 use agentsweep_core::host::Host;
-use agentsweep_core::item::{Item, Kind, TreeCaps};
+use agentsweep_core::item::{Invocation, Item, Kind, TreeCaps};
 use agentsweep_core::views::{MarketplaceView, ParsedView, PluginView, SkillView};
 use serde_json::Value;
 
@@ -88,6 +88,7 @@ fn skill_at(
         let id = format!("{name}@{SKILLS_DIRECTORY_MARKETPLACE}");
         let plugin = tree::read(host, caps, placement, Kind::Plugin, path);
         let view = plugin_view(&plugin, &id);
+        let plugin = invoked_through(plugin, &name);
         tree::yielded(host, enumeration, plugin.with_view(view));
         return;
     }
@@ -96,6 +97,7 @@ fn skill_at(
     }
     let item = tree::read(host, caps, placement, Kind::Skill, path);
     let view = SkillView::of(&name, item.tree.content_of(SKILL_FILE));
+    let item = item.invoked_as(Invocation::skill(view.name.clone()));
     tree::yielded(host, enumeration, item.with_view(ParsedView::Skill(view)));
 }
 
@@ -115,6 +117,7 @@ pub fn commands_in(
             Ok(item) => {
                 let name = path.file_stem().unwrap_or_default().to_string_lossy();
                 let view = SkillView::of(&name, &item.content);
+                let item = item.invoked_as(Invocation::skill(view.name.clone()));
                 enumeration
                     .items
                     .push(item.with_view(ParsedView::Skill(view)));
@@ -131,6 +134,59 @@ pub fn plugin_view(item: &Item, id: &str) -> ParsedView {
     let mut view = PluginView::of(id, &manifest, item.tree.names_in("bin"));
     view.has_monitors |= item.tree.holds("monitors/monitors.json");
     ParsedView::Plugin(view)
+}
+
+/// The directory of a plugin tree its skills sit in, one folder each.
+const PLUGIN_SKILLS: &str = "skills";
+
+/// The directory of a plugin tree its command files sit in.
+const PLUGIN_COMMANDS: &str = "commands";
+
+/// The file a plugin tree declares its MCP servers in.
+const PLUGIN_SERVERS: &str = ".mcp.json";
+
+/// One plugin tree with the names Claude Code invokes what it brings by:
+/// every skill and command as `<plugin>:<name>`, and every MCP server as
+/// `plugin:<plugin>:<server>` with the source class `plugin`
+/// (`docs/research/claude-code-surfaces.md`).
+pub fn invoked_through(mut item: Item, plugin: &str) -> Item {
+    let mut skills: Vec<String> = Vec::new();
+    for file in &item.tree.files {
+        let parts: Vec<&str> = file.path.split('/').collect();
+        match parts.as_slice() {
+            [PLUGIN_SKILLS, folder, SKILL_FILE] => {
+                skills.push(SkillView::of(folder, &file.content).name);
+            }
+            [PLUGIN_COMMANDS, name] if name.ends_with(".md") => {
+                let stem = name.trim_end_matches(".md");
+                skills.push(SkillView::of(stem, &file.content).name);
+            }
+            _ => {}
+        }
+    }
+    skills.sort();
+    for skill in skills {
+        item = item.invoked_as(Invocation::skill(format!("{plugin}:{skill}")));
+    }
+    let servers = manifest_of(&item, PLUGIN_SERVERS);
+    if let Some(servers) = servers.get("mcpServers").and_then(Value::as_object) {
+        let names: Vec<String> = servers.keys().cloned().collect();
+        for server in names {
+            item = item.invoked_as(Invocation::mcp_server(
+                plugin_server_name(plugin, &server),
+                SOURCE_PLUGIN,
+            ));
+        }
+    }
+    item
+}
+
+/// The source class Claude Code reports for a plugin's MCP server.
+pub const SOURCE_PLUGIN: &str = "plugin";
+
+/// The name Claude Code registers one plugin's MCP server under.
+pub fn plugin_server_name(plugin: &str, server: &str) -> String {
+    format!("plugin:{plugin}:{server}")
 }
 
 /// The `marketplace` view of one marketplace clone.

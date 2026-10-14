@@ -10,6 +10,7 @@ rule as_0590_editor_extension_install {
     kinds       = "Skill,Plugin"
     status      = "stable"
     plain       = "This installs an add-on into your code editor, which then runs whenever you open the editor."
+    phrase      = "installs an add-on into your code editor"
     description = "A skill or plugin whose text runs code, cursor, windsurf or codium with --install-extension. An extension installed this way runs in the editor on every start, outside anything the Agent can hold back, which is how the Zig dropper campaign spread. Starting the editor for a diff or a file, and prose asking the user to install an extension themselves, stay silent."
     references  = "https://www.aikido.dev/blog/glassworm-zig-dropper-infects-every-ide-on-your-machine https://thehackernews.com/2026/04/researchers-uncover-73-fake-vs-code.html"
     sensitive   = false

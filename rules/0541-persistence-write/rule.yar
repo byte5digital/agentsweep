@@ -10,6 +10,7 @@ rule as_0541_persistence_write {
     kinds       = "Skill,Plugin,Hook,InstructionFile,Subagent,McpServer"
     status      = "stable"
     plain       = "This item installs something that starts again on its own, long after the task it came for is done."
+    phrase      = "installs something that starts on its own"
     description = "A launch agent or launch daemon path, a launchctl load, a crontab written rather than listed, an append to a shell startup file, or a write into /etc. Every one of them outlives the session, which is what an implant needs and what a skill, a hook or an MCP server has no reason to want; the npm packages SafeDep found did exactly this so the payload came back on every session. Reading these places stays silent: listing the cron table, grepping a startup file for an alias, and reading /etc/hosts all name the same paths without changing them."
     references  = "https://safedep.io/malicious-npm-packages-claude-code-hooks/ https://www.stepsecurity.io/blog/supply-chain-security-alert-popular-nx-build-system-package-compromised-with-data-stealing-malware docs/research/attack-catalogue.md#1"
     sensitive   = false

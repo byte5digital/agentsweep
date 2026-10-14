@@ -9,6 +9,7 @@ rule as_0003_invisible_unicode {
     kinds       = "InstructionFile,Skill,Subagent,Plugin,McpServer,Hook,SettingsEntry"
     status      = "probation"
     plain       = "This file contains hidden characters that a person cannot see but the agent will read as instructions."
+    phrase      = "contains hidden instructions"
     description = "Runs of Unicode Tag characters (ASCII smuggling), runs of zero-width characters (bit-encoded payloads), runs of supplementary variation selectors or private-use code points (GlassWorm), bidirectional override or isolate controls in a file with no right-to-left script (Trojan Source), and escaped ANSI control sequences inside config entries (terminal deception). Single zero-width joiners in emoji, a byte-order mark at offset 0, basic variation selectors and isolated private-use icons are excluded because they occur in benign markdown; they are T2 indicators. Only text files are checked."
     references  = "https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents https://embracethered.com/blog/posts/2024/hiding-and-finding-text-with-unicode-tags/ https://trojansource.codes/ https://snyk.io/articles/defending-against-glassworm/ https://blog.trailofbits.com/2025/04/29/deceiving-users-with-ansi-terminal-codes-in-mcp/"
     sensitive   = false

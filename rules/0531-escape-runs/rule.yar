@@ -12,6 +12,7 @@ rule as_0531_escape_runs {
     kinds       = "Skill,Plugin,Hook,McpServer,Subagent"
     status      = "stable"
     plain       = "A command here is spelled out in escape codes, which hides what it actually runs."
+    phrase      = "hides a command in escape codes"
     description = "Eight or more hex, unicode or percent escapes in a row within 300 bytes of a shell, an interpreter or an exec call. Written out, the run is an ordinary command; escaped, it passes a reader and every string search for the command's name, which is why the obfuscated skill and MCP samples carry it. A percent-encoded query inside a web address is how a search term travels and stays silent, and so does a run of escapes with no command anywhere near it, such as a table of box-drawing characters in documentation."
     references  = "https://snyk.io/blog/toxicskills-malicious-ai-agent-skills-clawhub/ https://labs.zenity.io/post/attackers-target-agents-via-the-skill-supply-chain docs/research/attack-catalogue.md#1"
     sensitive   = false

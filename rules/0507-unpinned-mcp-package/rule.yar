@@ -9,6 +9,7 @@ rule as_0507_unpinned_mcp_package {
     kinds       = "McpServer"
     status      = "stable"
     plain       = "This server downloads whatever the latest version of a package happens to be, every time it starts."
+    phrase      = "always downloads the latest version of a package"
     description = "An MCP server entry whose package carries no version, or whose launcher is told to install without asking (`npx -y` and its kin). Whoever can publish that package decides what runs on the machine on the next start, and a compromised release needs no access to anything here. Pinning the version, or installing the server once and naming the installed command, both silence this. Hygiene rather than a finding about the file, so it is an Exposure and never quarantined."
     references  = "https://www.wiz.io/blog/s1ngularity-supply-chain-attack docs/research/attack-catalogue.md#3"
     sensitive   = false

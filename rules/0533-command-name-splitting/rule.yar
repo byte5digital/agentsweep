@@ -12,6 +12,7 @@ rule as_0533_command_name_splitting {
     kinds       = "Skill,Plugin,Hook,McpServer,Subagent,InstructionFile"
     status      = "stable"
     plain       = "A command here is written in pieces, so the name of what runs never appears in the file."
+    phrase      = "writes a command in pieces"
     description = "A word split by an empty or one-fragment quote pair, a name glued together from three or more quoted pieces beside an exec call, a shell word carrying a hex escape for a letter, the field separator written as a brace expansion inside a command, or an indirect variable expansion. Every one of them reconstructs a command at run time while the file itself never contains the name, which defeats a reader and a string search alike. Setting the field separator in the ordinary way, and joining a web address to a variable, look nothing like this and stay silent."
     references  = "https://labs.zenity.io/post/attackers-target-agents-via-the-skill-supply-chain https://snyk.io/blog/toxicskills-malicious-ai-agent-skills-clawhub/ docs/research/attack-catalogue.md#1"
     sensitive   = false

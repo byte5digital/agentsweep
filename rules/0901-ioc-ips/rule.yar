@@ -10,6 +10,7 @@ rule as_0901_ioc_ips {
     kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Workflow,ExecPolicy,Generic"
     status      = "probation"
     plain       = "This file contacts a machine that attackers are known to control."
+    phrase      = "contacts a machine attackers control"
     description = "Exact addresses taken from published incident reports (iocs/ips.txt). An address that only contains an entry, such as one digit longer, is not a whole word and stays silent. Regenerated on every pack build."
     references  = "docs/research/attack-catalogue.md#3"
     sensitive   = false

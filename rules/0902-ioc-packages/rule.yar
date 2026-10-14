@@ -10,6 +10,7 @@ rule as_0902_ioc_packages {
     kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Workflow,ExecPolicy,Generic"
     status      = "probation"
     plain       = "This configuration installs a package that is known to be malicious."
+    phrase      = "installs a known malicious package"
     description = "Package names taken from published incident reports (iocs/packages.txt), matched as a whole word in the bytes under scan and against the package an MCP server entry installs. A longer name that merely starts with an entry is not a whole word and stays silent. Regenerated on every pack build."
     references  = "docs/research/attack-catalogue.md#3"
     sensitive   = false

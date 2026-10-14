@@ -10,6 +10,7 @@ rule as_0554_url_shortener {
     kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Marketplace,Workflow,ExecPolicy,Generic"
     status      = "stable"
     plain       = "This file uses a shortened link, so neither you nor the agent can see where it actually leads."
+    phrase      = "uses a shortened link"
     description = "A host from the public link shorteners. A short link tells a reviewer nothing about the destination, survives the review unchanged and can be re-pointed afterwards, which is why lures and droppers reach for one. People also paste short links out of habit, so this is a Heuristic. The boundary is the whole host: a name that merely ends in one of these, such as orbit.lyric.example.invalid, is not matched, and neither is prose about shortening links. The list lives in the rule because these service names do not rot."
     references  = "https://unit42.paloaltonetworks.com/openclaw-ai-supply-chain-risk/ docs/research/attack-catalogue.md#3"
     sensitive   = false

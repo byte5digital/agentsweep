@@ -10,6 +10,7 @@ rule as_0540_privilege_escalation {
     kinds       = "Skill,Plugin,InstructionFile,Subagent,Hook"
     status      = "stable"
     plain       = "A step here runs as the administrator, or opens a file up to every account on the machine."
+    phrase      = "asks for administrator rights"
     description = "A sudo call in front of a command or a path, a mode that grants everyone write access, or a setuid bit. An agent that is told to work through sudo is an agent whose mistakes and whose planted instructions both land as root, and a world-writable or setuid file is how a later step gets back in. Setting the executable bit on a script the item ships, and a mode that narrows access such as 600 or 755, are ordinary housekeeping and stay silent, as is prose that says no administrator rights are needed. Weight 1: plenty of honest installers ask for sudo, so this counts only in company."
     references  = "https://www.antiy.net/p/clawhavoc-analysis-of-large-scale-poisoning-campaign-targeting-the-openclaw-skill-market-for-ai-agents/ https://labs.reversec.com/posts/2026/05/skill-issues-compromising-claude-code-with-malicious-skills-agents-part-1 docs/research/attack-catalogue.md#1"
     sensitive   = false

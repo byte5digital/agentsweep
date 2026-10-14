@@ -11,6 +11,7 @@ rule as_0523_persona_framing {
     status      = "stable"
     reviewer_directed = true
     plain       = "This file tries to give the agent a new character that is allowed to do anything."
+    phrase      = "gives the agent a character with no rules"
     description = "Jailbreak framing: a persona described as unrestricted, uncensored or jailbroken, a claim that the reader is no longer bound by its guidelines, an order to ignore the safety rules, or an order to stay in character. Nine in ten of the malicious skills Snyk confirmed carried prompt injection of this shape, because a persona survives further turns in a way a single command does not. Giving a skill an ordinary role, such as a careful reviewer or a release manager, is how skills are written and stays silent. Reviewer directed, because the persona is offered to whatever model reads the file next."
     references  = "https://snyk.io/blog/toxicskills-malicious-ai-agent-skills-clawhub/ https://www.hiddenlayer.com/research/how-hidden-prompt-injections-can-hijack-ai-code-assistants-like-cursor docs/research/attack-catalogue.md#3"
     sensitive   = false

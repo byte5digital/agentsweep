@@ -10,6 +10,7 @@ rule as_0535_sibling_file_decoder {
     kinds       = "Skill,Plugin"
     status      = "stable"
     plain       = "This item runs whatever is inside another file it ships, so the part that acts is not the part you read."
+    phrase      = "runs the contents of a hidden file"
     description = "Reading a file out of assets, build, dist, node_modules or a hidden directory of the same item and handing its contents to exec, eval or a shell, sourcing a file out of an asset or hidden directory, or running a data file with an interpreter. The Cloak and Detonate study found the payload moved into exactly the directories a scanner skips, with a harmless looking decoder in the file the reviewer reads, and better than nine in ten scanners missed it. The Heuristic holds to that decoder shape and no wider: starting a program that ships with the item, such as node dist/server.js, stays silent, because it is how nearly every plugin server starts and running a shipped program is not decoding a hidden one. Activating a virtual environment stays silent too."
     references  = "https://arxiv.org/abs/2607.02357 https://thehackernews.com/2026/07/new-skillcloak-technique-lets-malicious.html docs/research/attack-catalogue.md#1"
     sensitive   = false

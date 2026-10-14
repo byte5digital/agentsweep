@@ -10,6 +10,7 @@ rule as_0551_non_standard_port {
     kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Marketplace,Workflow,ExecPolicy,Generic"
     status      = "stable"
     plain       = "This file talks to a machine on the internet on an unusual port, which is what a listener put up for one job looks like."
+    phrase      = "talks to a server on an unusual port"
     description = "An http or https URL carrying an explicit port that is neither 80 nor 443, on a host that is not this machine and not the private network. A collector stood up for one campaign listens wherever it is convenient, and the port is the cheapest thing about it. Ports 80 and 443 are subtracted, and so is every loopback or private host, because a development server on 3000 or 5173 is how the day is spent. Weight 1: plenty of honest services run on 8443 or 9000, so this only means something beside whatever else fired on the same Item."
     references  = "https://github.com/snyk/agent-scan/blob/main/docs/issue-codes.md docs/research/attack-catalogue.md#3"
     sensitive   = false

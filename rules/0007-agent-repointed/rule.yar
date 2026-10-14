@@ -9,6 +9,7 @@ rule as_0007_agent_repointed {
     kinds       = "EnvFile,SettingsEntry"
     status      = "probation"
     plain       = "A file in this project tells the agent to load its configuration from somewhere else or to talk to a different server."
+    phrase      = "points the agent somewhere else"
     description = "CLAUDE_CONFIG_DIR or CODEX_HOME set in any scanned .env file or settings env block (there is no legitimate reason for a project or a settings file to relocate the agent's home; CVE-2025-61260), or a git-tracked .env file setting ANTHROPIC_BASE_URL, OPENAI_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY or NODE_OPTIONS. Untracked .env files with a base URL are common for local model servers and stay T2; a base URL in the user's own settings is an Exposure. EnvFile is a never-auto kind, so this rule flags with a one-click fix."
     references  = "https://research.checkpoint.com/2025/openai-codex-cli-command-injection-vulnerability/ https://github.com/advisories/GHSA-xrxf-jgv3-qmrm https://github.com/advisories/GHSA-jh7p-qr78-84p7"
     sensitive   = true

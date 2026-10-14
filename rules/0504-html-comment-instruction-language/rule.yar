@@ -11,6 +11,7 @@ rule as_0504_html_comment_instruction_language {
     status      = "stable"
     reviewer_directed = true
     plain       = "A comment in this file speaks to the agent, and a person reading the rendered page never sees it."
+    phrase      = "talks to the agent in a hidden comment"
     description = "An HTML comment whose text names an agent, gives it a standing order, or names a command to run. Rendered markdown hides the comment and the model reads it, so a note meant for a human and a note meant for the agent look the same on disk and are not. A comment that carries an actual role or priority tag is rule 0004's and is excluded here, as is any file that carries such a tag; editor pragmas, licence headers and to-do notes carry none of this language."
     references  = "https://www.hiddenlayer.com/research/how-hidden-prompt-injections-can-hijack-ai-code-assistants-like-cursor https://labs.cloudsecurityalliance.org/wp-content/uploads/2026/03/CSA_research_note_readme_instruction_injection_ai_coding_agents_20260317-csa-styled.pdf"
     sensitive   = false

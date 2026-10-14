@@ -127,6 +127,11 @@ pub struct RuleMeta {
     pub status: RuleStatus,
     /// The one sentence the Simple Posture shows.
     pub plain: String,
+    /// The short verdict phrase the Simple Posture builds a Finding's title
+    /// from, together with the Item's kind and name ("contains hidden
+    /// instructions"). Where it holds `{item}`, the kind and name stand there
+    /// instead of in front of it.
+    pub phrase: String,
     /// What fires, what deliberately does not, and why.
     pub description: String,
     /// The primary sources behind the rule.
@@ -138,6 +143,10 @@ pub struct RuleMeta {
     /// True when the heuristic fires on text that addresses a reviewer.
     pub reviewer_directed: bool,
 }
+
+/// Where a Rule's `phrase` wants the Item's kind and name, when they do not
+/// simply stand in front of it ("A password is written out in {item}").
+pub const PHRASE_ITEM: &str = "{item}";
 
 /// A compiled Rule Pack: the meta index plus one compiled rule set per kind.
 pub struct RulePack {
@@ -303,6 +312,7 @@ fn read_index(
             kinds,
             status,
             plain: text(&name, &meta, "plain")?.to_string(),
+            phrase: text(&name, &meta, "phrase")?.to_string(),
             description: text(&name, &meta, "description")?.to_string(),
             references: text(&name, &meta, "references")?.to_string(),
             sensitive: boolean(&name, &meta, "sensitive")?,
@@ -386,6 +396,18 @@ fn lint(
             problem,
         })
     };
+
+    // The phrase finishes a title the Simple Posture builds around the
+    // Item's kind and name, so it is a few words and never a sentence of its
+    // own.
+    if rule.phrase.trim().is_empty() {
+        return reject("`phrase` is empty".to_string());
+    }
+    if rule.phrase.ends_with('.') || rule.phrase.matches(PHRASE_ITEM).count() > 1 {
+        return reject(format!(
+            "`phrase` is a short verdict phrase with no full stop and at most one `{PHRASE_ITEM}`"
+        ));
+    }
 
     if !(1..=6).contains(&rule.class) {
         return reject(format!(
@@ -693,6 +715,7 @@ mod tests {
             ("kinds", "\"Generic\"".to_string()),
             ("status", "\"probation\"".to_string()),
             ("plain", "\"A rule under lint.\"".to_string()),
+            ("phrase", "\"is under lint\"".to_string()),
             ("description", "\"A rule under lint.\"".to_string()),
             ("references", "\"none\"".to_string()),
             ("sensitive", "false".to_string()),
@@ -744,6 +767,7 @@ mod tests {
             "kinds",
             "status",
             "plain",
+            "phrase",
             "description",
             "references",
             "sensitive",
@@ -754,6 +778,35 @@ mod tests {
                 problem.contains(key),
                 "the rejection of a missing `{key}` does not name it: {problem}"
             );
+        }
+    }
+
+    #[test]
+    fn a_phrase_that_is_empty_or_a_sentence_is_rejected() {
+        for phrase in [
+            r#""""#,
+            r#""contains hidden instructions.""#,
+            r#""{item} and {item}""#,
+        ] {
+            let problem = lint_of(meta_variant(&[("phrase", Some(phrase))]))
+                .expect_err("a phrase is a few words");
+            assert!(problem.contains("phrase"), "{problem}");
+        }
+        lint_of(meta_variant(&[(
+            "phrase",
+            Some(r#""A password is written out in {item}""#),
+        )]))
+        .expect("one placeholder is allowed");
+    }
+
+    /// Every Rule and Heuristic of the bundled pack carries its phrase: the
+    /// Simple Posture's titles are built from it.
+    #[test]
+    fn every_rule_of_the_bundled_pack_carries_a_phrase() {
+        let pack = RulePack::bundled().expect("the bundled pack compiles");
+        for meta in pack.metas() {
+            assert!(!meta.phrase.is_empty(), "{} has no phrase", meta.name);
+            assert!(!meta.phrase.contains('\u{2014}'), "{}", meta.name);
         }
     }
 

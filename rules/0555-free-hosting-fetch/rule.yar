@@ -10,6 +10,7 @@ rule as_0555_free_hosting_fetch {
     kinds       = "Skill,Plugin,Hook,McpServer"
     status      = "stable"
     plain       = "This downloads something from a place that costs nothing to set up and nothing to walk away from."
+    phrase      = "downloads from throwaway hosting"
     description = "A transfer command whose address sits on free application hosting, on a dynamic DNS provider, or on one of the registration-free top level domains. Anyone can stand such a host up in a minute and abandon it the same day, which is what the payload servers of the skill campaigns did. Only a fetch counts: the same host named in prose, in a documentation link or in a comment stays silent, because project pages and preview deployments live on exactly these services. Weight 1, since honest install lines point at them too; the list lives in the rule because these service names do not rot."
     references  = "https://thehackernews.com/2026/02/researchers-find-341-malicious-clawhub.html https://blog.trailofbits.com/2026/06/03/the-sorry-state-of-skill-distribution/ docs/research/attack-catalogue.md#3"
     sensitive   = false

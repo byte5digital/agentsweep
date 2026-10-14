@@ -28,6 +28,8 @@ pub struct Generated {
     pub kinds: &'static str,
     /// The one sentence the Simple Posture shows.
     pub plain: &'static str,
+    /// The short verdict phrase the Simple Posture builds a title from.
+    pub phrase: &'static str,
     /// What fires and why.
     pub description: &'static str,
     /// The letter the patterns are named after.
@@ -68,6 +70,7 @@ pub const GENERATED: [Generated; 4] = [
         title: "Known malicious host",
         kinds: "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Marketplace,Workflow,ExecPolicy,Generic",
         plain: "This file contacts a server that is known to distribute malware.",
+        phrase: "contacts a server known to spread malware",
         description: "Exact host names taken from published incident reports (iocs/hosts.txt). Regenerated on every pack build.",
         tag: 'h',
         modifiers: "nocase fullword",
@@ -80,6 +83,7 @@ pub const GENERATED: [Generated; 4] = [
         title: "Known command-and-control address",
         kinds: TEXT_KINDS,
         plain: "This file contacts a machine that attackers are known to control.",
+        phrase: "contacts a machine attackers control",
         description: "Exact addresses taken from published incident reports (iocs/ips.txt). An address that only contains an entry, such as one digit longer, is not a whole word and stays silent. Regenerated on every pack build.",
         tag: 'i',
         modifiers: "fullword",
@@ -92,6 +96,7 @@ pub const GENERATED: [Generated; 4] = [
         title: "Known malicious package",
         kinds: TEXT_KINDS,
         plain: "This configuration installs a package that is known to be malicious.",
+        phrase: "installs a known malicious package",
         description: "Package names taken from published incident reports (iocs/packages.txt), matched as a whole word in the bytes under scan and against the package an MCP server entry installs. A longer name that merely starts with an entry is not a whole word and stays silent. Regenerated on every pack build.",
         tag: 'p',
         modifiers: "fullword",
@@ -104,6 +109,7 @@ pub const GENERATED: [Generated; 4] = [
         title: "File name dropped by a known campaign",
         kinds: TEXT_KINDS,
         plain: "This item carries a file that a known attack campaign drops.",
+        phrase: "carries a file a known attack drops",
         description: "File names taken from published incident reports (iocs/files.txt), matched as the last path component of the file of a tree the scan is on or of the Item's own path, which is what catches a dropped file whose own bytes say nothing. The content is never read: a .gitignore or a README that names a listed file is not that file and stays silent, and so does a longer name that merely ends with an entry, such as tsconfig.tsbuildinfo. Regenerated on every pack build.",
         tag: 'f',
         // No pattern is rendered: the entries are matched against names only.
@@ -183,6 +189,7 @@ impl Generated {
             ("kinds", quoted(self.kinds)),
             ("status", quoted("probation")),
             ("plain", quoted(self.plain)),
+            ("phrase", quoted(self.phrase)),
             ("description", quoted(self.description)),
             ("references", quoted("docs/research/attack-catalogue.md#3")),
             ("sensitive", "false".to_string()),

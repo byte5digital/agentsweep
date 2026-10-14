@@ -9,6 +9,7 @@ rule as_0018_unrestricted_shell_allowed {
     kinds       = "SettingsEntry,ExecPolicy"
     status      = "probation"
     plain       = "Your agent may run whole classes of commands, such as any shell command or any download, without asking you first."
+    phrase      = "lets the agent run commands without asking"
     description = "A permissions.allow entry that grants a whole command class rather than one command: bare Bash, Bash(*), or Bash on a shell, a fetcher or an interpreter with nothing but a wildcard after it; or a Codex prefix_rule with decision allow whose pattern starts with a shell or a fetcher, or with an interpreter run with -c or -e. Both Agents append to these lists on every 'always allow', so the entry is usually the user's own and the Item never carries Drift. Exposure: never quarantined, offered the RemoveEntry fix action, which takes out this one entry and leaves the rest of the list alone. An allow entry scoped to a command or an endpoint (Bash(npm run test:*), Bash(curl https://host/path)) stays silent, and so does a prefix_rule that names a shell in order to prompt for it or forbid it."
     references  = "https://github.com/anthropics/claude-code/security/advisories/GHSA-mmgp-wc2j-qcv7 https://code.claude.com/docs/en/permissions https://learn.chatgpt.com/docs/agent-configuration/rules"
     sensitive   = false

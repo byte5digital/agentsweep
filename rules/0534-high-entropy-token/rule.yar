@@ -12,6 +12,7 @@ rule as_0534_high_entropy_token {
     kinds       = "Skill,Hook"
     status      = "stable"
     plain       = "This file carries a long scrambled string that is not a key, an address or anything else with a name."
+    phrase      = "carries a long scrambled string"
     description = "An unbroken run of 64 printable characters or more whose entropy is above 5.5, which is close to the most a character can carry and far above ordinary text, a path or a command. What is left once the shapes with an honest reason to look random are taken out is usually a packed payload or a key nobody can account for. Encoded runs are excluded, which covers base64, base64url, hex and the digests written in them, and so is anything that turns out to be a web address; a long encoded run on its own is heuristic 0530. Weight 1, because one unexplained string is only worth reading together with whatever else fired."
     references  = "https://arxiv.org/abs/2607.02357 https://blog.gitguardian.com/the-state-of-secrets-sprawl-2026/ docs/research/attack-catalogue.md#1"
     sensitive   = true

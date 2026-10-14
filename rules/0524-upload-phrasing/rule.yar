@@ -12,6 +12,7 @@ rule as_0524_upload_phrasing {
     kinds       = "InstructionFile,Skill,Subagent,Plugin,Workflow"
     status      = "stable"
     plain       = "This file asks the agent to send your files or your conversation to an address on the internet."
+    phrase      = "asks the agent to send your files away"
     description = "A sending verb with what is being sent, within 300 bytes of a web address or of the word endpoint or webhook. Written as prose rather than as a command, so the agent composes the request itself and no shell text gives it away. Scanner evading skills on the public catalogue ask for exactly this. Sending something the project publishes on purpose, such as release notes or a built package, names neither the contents of files nor the transcript and stays silent; a credential path beside a network command is rule 0005 and heuristic 0509."
     references  = "https://unit42.paloaltonetworks.com/openclaw-ai-supply-chain-risk/ https://www.backslash.security/blog/openai-codex-injection-in-agents-md-exfiltrating-credentials docs/research/attack-catalogue.md#3"
     sensitive   = false

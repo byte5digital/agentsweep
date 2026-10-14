@@ -10,6 +10,7 @@ rule as_0552_tunnel_host {
     kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Marketplace,Workflow,ExecPolicy,Generic"
     status      = "stable"
     plain       = "This file names a tunnel service, which gives a machine a public address for a few hours and leaves nothing behind."
+    phrase      = "names a tunnel service"
     description = "A host belonging to one of the tunnel services that hand out a throwaway public name pointing at whatever is listening on the other end: ngrok, Cloudflare quick tunnels, localtunnel, serveo, localhost.run, pinggy and bore. A payload server or a collector run this way needs no domain, no certificate and no hosting, and the name is gone by the time anyone looks. Developers also use them to show work in progress, which is why this is a Heuristic; the list lives in the rule rather than in an Indicator List because these service names do not rot. Cloudflare's and ngrok's own company domains are not on the list."
     references  = "https://unit42.paloaltonetworks.com/openclaw-ai-supply-chain-risk/ docs/research/attack-catalogue.md#3"
     sensitive   = false

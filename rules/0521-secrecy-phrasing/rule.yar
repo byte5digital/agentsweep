@@ -11,6 +11,7 @@ rule as_0521_secrecy_phrasing {
     status      = "stable"
     reviewer_directed = true
     plain       = "This file asks the agent to do something without telling you about it."
+    phrase      = "tells the agent to keep secrets from you"
     description = "An order not to tell, mention or report a step to the user, an instruction to act silently or without asking, or a request to hide a command or its output. The malicious skills Mandiant found and the SANDWORM_MODE packages both carry this sentence beside the step they want unseen, because the user is the last control left once the agent has decided to act. Telling the user what changed, or asking before a destructive step, is the opposite and stays silent. Reviewer directed, because the sentence also asks whatever reads the file afterwards to say nothing."
     references  = "https://cloud.google.com/blog/products/identity-security/beyond-source-code-the-files-ai-coding-agents-trust-and-attackers-exploit https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning docs/research/attack-catalogue.md#3"
     sensitive   = false

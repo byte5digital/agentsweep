@@ -11,6 +11,7 @@ rule as_0520_override_phrasing {
     status      = "stable"
     reviewer_directed = true
     plain       = "This file tells the agent to throw away the instructions it was given and take new ones from here."
+    phrase      = "tells the agent to drop its instructions"
     description = "An order to ignore, forget or override what came before, a claim that the text supersedes the instructions already in force, a new identity handed to the reader, or a mode said to be engaged. Prompt injection lives on these sentences: the file is read as instructions, so one line of it can put the rest of the session under the file's author. Telling the agent to ignore a build directory, or saying it is now ready for the next step, carries none of this. A phrase inside quotation marks or a code span is named rather than given, which is how guidance against prompt injection quotes the sentences it warns about, so it does not count; the same phrase unquoted anywhere in the file still does. Reviewer directed, because whatever model is later asked whether the file is safe reads the same sentence."
     references  = "https://www.hiddenlayer.com/research/how-hidden-prompt-injections-can-hijack-ai-code-assistants-like-cursor https://snyk.io/blog/toxicskills-malicious-ai-agent-skills-clawhub/ docs/research/attack-catalogue.md#3"
     sensitive   = false

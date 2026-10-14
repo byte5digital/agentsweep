@@ -10,6 +10,7 @@ rule as_0508_repository_metadata_exec_keys {
     kinds       = "RepositoryMetadata"
     status      = "stable"
     plain       = "This folder's git settings can run a command of the project's choosing while the agent works in it."
+    phrase      = "can run a command while the agent works"
     description = "A .git/config key that runs a command as an ordinary part of git's work: a hooksPath inside the repository, a clean or smudge filter process that is not git-lfs, a textconv for a diff driver, a credential helper or alias whose value starts with the shell escape, or core.sshCommand. Hook executables in .git/hooks count too. Pre-commit tooling installs several of these on purpose, which is why they are a Heuristic; the keys with no honest use, such as a non-builtin core.fsmonitor or a hooksPath that leaves the repository, are rule 0009's."
     references  = "https://www.manifold.security/blog/ai-coding-agents-git-hijack docs/research/attack-catalogue.md#3"
     sensitive   = false

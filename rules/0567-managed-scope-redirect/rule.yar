@@ -10,6 +10,7 @@ rule as_0567_managed_scope_redirect {
     kinds       = "SettingsEntry,Hook"
     status      = "stable"
     plain       = "Settings your organisation controls send the agent's traffic to another server, or run a command on every session. AgentSweep cannot change them, so contact your administrator if this is news to you."
+    phrase      = "sends traffic elsewhere or runs a command you cannot change"
     description = "Managed Scope is the highest layer of both agents and the one AgentSweep may only read: a managed hook is trusted unconditionally and runs before anything else, and a managed base URL puts a hop of the administrator's choosing between the user and the vendor. That is ordinary in a managed fleet, and also exactly what someone who reached the managed directory would write, and the user cannot tell the two apart from the outside. So the Finding is never a Quarantine and never an instruction to edit the file; it names what is set and says to contact the administrator. A managed base URL on the vendor's own host or on this machine stays silent, and so does the same hook in the user's own settings, which is 0562 and 0563's ground."
     references  = "https://code.claude.com/docs/en/managed-settings docs/research/claude-code-surfaces.md docs/research/codex-surfaces.md"
     sensitive   = true

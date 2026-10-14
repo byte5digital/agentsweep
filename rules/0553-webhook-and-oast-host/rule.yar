@@ -10,6 +10,7 @@ rule as_0553_webhook_and_oast_host {
     kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Marketplace,Workflow,ExecPolicy,Generic"
     status      = "stable"
     plain       = "This file names a drop box that anyone can post to and only its owner can read, which is where taken data usually lands."
+    phrase      = "names a drop box for taken data"
     description = "A catch-all webhook or out-of-band collector: webhook.site, a Discord or Slack incoming webhook path, the Telegram bot API, RequestBin and Pipedream, Beeceptor, and the interaction collectors interact.sh, oast and Burp Collaborator. Each gives an attacker a URL that accepts a POST from anywhere, costs nothing and needs no domain of their own, which is the whole back half of an exfiltration. Teams do post build results to a Slack or Discord webhook, so this is a Heuristic, and a message to a channel is not matched: only the incoming-webhook path is. The list lives in the rule because these service names do not rot."
     references  = "https://www.promptarmor.com/resources/hijacking-claude-code-via-injected-marketplace-plugins https://cloud.google.com/blog/products/identity-security/beyond-source-code-the-files-ai-coding-agents-trust-and-attackers-exploit docs/research/attack-catalogue.md#3"
     sensitive   = false

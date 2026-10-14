@@ -9,6 +9,7 @@ rule as_0012_dynamic_context_network_or_credential {
     kinds       = "Skill"
     status      = "probation"
     plain       = "This skill runs a command that reaches the internet or reads your login details before anyone has read the skill."
+    phrase      = "reaches the internet or your login details as it loads"
     description = "A dynamic-context span in a skill or command file whose command reaches the network (curl, wget, nc, ncat, netcat, socat), encodes or decodes with base64, or reads a credential (gh auth token, security find-generic-password, an SSH private key, the AWS credentials file, the Claude Code or Codex credential file, ~/.claude.json, the GitHub CLI hosts file, ~/.npmrc). A dynamic-context span runs during preprocessing, before the model or the user sees the skill and before workspace trust applies, so the command is the payload. Other dynamic-context commands such as the date or the working tree are documented usage and stay T2; the same command shown in an ordinary code span is not a dynamic-context span and stays silent."
     references  = "https://securitylabs.datadoghq.com/articles/malicious-skills-supply-chain-risks-in-coding-agents-with-dynamic-context/ https://code.claude.com/docs/en/skills"
     sensitive   = false

@@ -9,6 +9,7 @@ rule as_0002_reverse_shell_and_permission_bypass {
     kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Marketplace"
     status      = "probation"
     plain       = "This file tries to open a remote control channel or to run an agent with all safety checks switched off."
+    phrase      = "tries to take remote control or switch off the agent's safety checks"
     description = "Reverse-shell idioms (nc -e, socat exec:, interactive shell redirected to /dev/tcp, mkfifo pipelines, python socket one-liners) in any scanned text, an executable surface that spawns an agent CLI with its permission or sandbox bypass flag, or a third-party subagent definition that declares permissionMode bypassPermissions. Bypass flags are not matched in instruction files, where they can be documented legitimately; unrestricted allowed-tools in skills and bare /dev/tcp port checks are T2 indicators, not part of this rule. Marketplace is one of the kinds, so a marketplace command source carrying one of these primitives is caught here."
     references  = "https://labs.reversec.com/posts/2026/05/skill-issues-compromising-claude-code-with-malicious-skills-agents-part-1 https://www.wiz.io/blog/s1ngularity-supply-chain-attack https://research.jfrog.com/post/3-malicious-mcps-pypi-reverse-shell/"
     sensitive   = false

@@ -10,6 +10,7 @@ rule as_0500_unrestricted_bash_tool {
     kinds       = "Skill,Subagent"
     status      = "stable"
     plain       = "This skill may run any shell command at all, instead of the few it needs."
+    phrase      = "may run any shell command"
     description = "A skill or subagent whose tool list grants Bash with no argument pattern: `allowed-tools: Bash`, `Bash(*)`, or the same as a YAML list item, or the skill view reporting either. A scoped grant such as Bash(git status:*) stays silent, and so does a tool list without Bash. Very common in honest skills, which is why it is weight 1: on its own it says only that nothing narrows what this skill may run."
     references  = "https://labs.reversec.com/posts/2026/05/skill-issues-compromising-claude-code-with-malicious-skills-agents-part-1 docs/research/attack-catalogue.md#3"
     sensitive   = false

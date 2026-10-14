@@ -12,6 +12,7 @@ rule as_0522_run_first_instruction {
     kinds       = "InstructionFile,Skill,Subagent,Plugin"
     status      = "stable"
     plain       = "This file tells the agent to run a command before it does anything you asked for."
+    phrase      = "tells the agent to run a command first"
     description = "Run-first phrasing, such as before you do anything else, before every task or as your first step, within 300 bytes of a shell, fetch or package command. This is how the AGENTS.md credential theft Backslash published reached the machine: the command is attached to the start of every session rather than to a request, so it runs whatever the user came for. Run-first phrasing on its own is ordinary project wording, and a first step that reads a file or runs the project's own build tool is not a command in the list here, so both stay silent."
     references  = "https://www.backslash.security/blog/openai-codex-injection-in-agents-md-exfiltrating-credentials https://cloud.google.com/blog/products/identity-security/beyond-source-code-the-files-ai-coding-agents-trust-and-attackers-exploit docs/research/attack-catalogue.md#3"
     sensitive   = false

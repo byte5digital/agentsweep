@@ -10,6 +10,7 @@ rule as_0591_suppressed_network_hook {
     kinds       = "Hook"
     status      = "stable"
     plain       = "A hook contacts a server every time it runs and hides what it did from the transcript."
+    phrase      = "contacts a server and hides it"
     description = "A command hook entry that declares suppressOutput true while its command reaches the network (curl, wget, nc, ncat, netcat, socat, scp, sftp, an Invoke-WebRequest, or a plain http URL). The pairing is what the injected-marketplace-plugin incident used to keep the beacon out of the transcript; either half alone is ordinary, a quiet formatter as much as a visible build ping."
     references  = "https://www.promptarmor.com/resources/hijacking-claude-code-via-injected-marketplace-plugins https://code.claude.com/docs/en/hooks"
     sensitive   = false

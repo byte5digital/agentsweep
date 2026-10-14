@@ -10,6 +10,7 @@ rule as_0530_encoded_blob {
     kinds       = "Skill,Plugin,InstructionFile,Hook,Subagent"
     status      = "stable"
     plain       = "This file carries a long block of encoded text, so what it really says cannot be read."
+    phrase      = "carries a block of encoded text"
     description = "An unbroken base64 run of 200 characters or more. The ClawHavoc skills carried their stealer this way, and Snyk found the same shape in the ToxicSkills sample set, because encoded text passes a human reading the file and still reaches whatever decodes it later. Three shapes carry a long run for an honest reason and are excluded: a data URI for an inline image or font, the body of a PEM block, and a JSON web token. The decode-and-run chain around a blob is rule 0001's; this notices the blob itself, and it is weight 1 because a blob on its own proves nothing."
     references  = "https://www.antiy.net/p/clawhavoc-analysis-of-large-scale-poisoning-campaign-targeting-the-openclaw-skill-market-for-ai-agents/ https://snyk.io/blog/toxicskills-malicious-ai-agent-skills-clawhub/ docs/research/attack-catalogue.md#1"
     sensitive   = false

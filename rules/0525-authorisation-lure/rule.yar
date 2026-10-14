@@ -11,6 +11,7 @@ rule as_0525_authorisation_lure {
     status      = "stable"
     reviewer_directed = true
     plain       = "This file claims someone already agreed to what it is about to do."
+    phrase      = "claims it is already approved"
     description = "A claim that the user, the owner or the team has already approved what follows and that nothing more need be asked, that the steps below are pre-approved, that this is only a test, or that the file itself is safe and should be reported as such. The claim is unverifiable by construction and is aimed at whoever decides next, the agent or the person reading its summary. Recording a real approval in prose, such as a maintainer signing off a design in an issue, names what was approved and not what to skip, and stays silent. Reviewer directed: this is the wording written to talk a reviewer, a scanner or a judging model round, so a benign verdict on an item carrying it counts as unsure."
     references  = "https://blog.trailofbits.com/2026/06/03/the-sorry-state-of-skill-distribution/ https://snyk.io/blog/toxicskills-malicious-ai-agent-skills-clawhub/ docs/research/attack-catalogue.md#3"
     sensitive   = false

@@ -10,6 +10,7 @@ rule as_0512_paste_site_host {
     kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Marketplace,Workflow,ExecPolicy,Generic"
     status      = "stable"
     plain       = "This file names a paste site, which is where stolen text is usually sent and where payloads are usually kept."
+    phrase      = "names a paste site"
     description = "A host from the paste and shell-paste services that campaigns reach for: anonymous, free, no account, and gone again within a day. Both halves of an attack use them, the payload on the way in and the stolen text on the way out. People also use them to share a log with a colleague, so this is a Heuristic; the list lives in the rule rather than in an Indicator List because these names do not rot."
     references  = "https://unit42.paloaltonetworks.com/malicious-payloads-hosted-on-paste-sites/ docs/research/attack-catalogue.md#3"
     sensitive   = false

@@ -9,6 +9,7 @@ rule as_0016_plugin_bin_shadows_a_real_tool {
     kinds       = "Plugin"
     status      = "probation"
     plain       = "This plugin ships its own copy of an everyday command, and the agent will reach for that copy first."
+    phrase      = "puts its own copy of an everyday command first"
     description = "A plugin whose `bin` directory holds a file named exactly like a tool the Agent or the user runs constantly: git, npm, npx, node, python, python3, pip, claude, codex, sh, bash, zsh, sudo, curl, wget, brew, gh, docker or ssh. The plugin documentation says a plugin's `bin` is added to the PATH of the Bash tool, so from then on every `git commit` the agent runs is the plugin's file, with the plugin's code in front of the real tool and the real tool one exec away to keep the session looking normal. There is no legitimate reason to ship a file under one of those names: a plugin that wants its own helper gives it its own name. The match is on the exact name, so the `git-foo` shape that git itself resolves as a subcommand stays silent, and so does every helper with a name of its own."
     references  = "https://code.claude.com/docs/en/plugins-reference https://code.claude.com/docs/en/plugin-marketplaces docs/research/attack-catalogue.md#3"
     sensitive   = false

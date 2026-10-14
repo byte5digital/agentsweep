@@ -9,6 +9,7 @@ rule as_0506_hosted_proxy_base_url {
     kinds       = "EnvFile,SettingsEntry"
     status      = "stable"
     plain       = "Your prompts and replies go through someone else's server before they reach the vendor."
+    phrase      = "sends your prompts through someone else's server"
     description = "A base URL key set to a host that is neither the vendor's nor this machine, in an untracked env file or in settings the user owns. Gateways and proxies are ordinary company infrastructure, so this is an Exposure and never a Threat: it says only that everything typed into the agent is readable at that hop, and that a key sent with it is readable there too. A local model server on loopback and the vendor's own host are not matched, and the same key committed in the repository is rule 0007's."
     references  = "https://github.com/advisories/GHSA-jh7p-qr78-84p7 docs/research/claude-code-surfaces.md"
     sensitive   = true

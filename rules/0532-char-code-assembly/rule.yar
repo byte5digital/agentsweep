@@ -12,6 +12,7 @@ rule as_0532_char_code_assembly {
     kinds       = "Skill,Plugin,Hook,McpServer"
     status      = "stable"
     plain       = "This file builds a command out of numbers instead of writing it down, which hides what it runs."
+    phrase      = "builds a command out of numbers"
     description = "A chain of six or more character codes handed to fromCharCode, three or more chr calls added together, or a hex, rot13 or reversed-string decode within 200 bytes of an exec, eval or subprocess call. The text the reader sees is arithmetic, and the command only exists once it runs, which is how the obfuscated skill scripts kept their fetch out of every string search. One fromCharCode for a keystroke, a hex colour parsed with fromhex, and a reversed list with no execution anywhere near it are ordinary code and stay silent."
     references  = "https://snyk.io/articles/defending-against-glassworm/ https://snyk.io/blog/toxicskills-malicious-ai-agent-skills-clawhub/ docs/research/attack-catalogue.md#1"
     sensitive   = false

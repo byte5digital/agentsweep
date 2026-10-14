@@ -10,6 +10,7 @@ rule as_0543_agent_config_written {
     kinds       = "Skill,Plugin,InstructionFile,Subagent"
     status      = "stable"
     plain       = "This item changes the agent's own settings or its standing instructions, which outlast the task."
+    phrase      = "changes the agent's own settings"
     description = "A redirect, tee, sed, jq or move whose target is one of the Agent's own files, a write call on one of them, or prose telling the agent to add a line to them: the settings files, ~/.claude.json, the Codex config, and the user's own memory and rule files. What the item asks for once becomes what the Agent does from then on, which is how a permission nobody granted and an instruction nobody wrote get in. Reading the settings to report them stays silent, so does keeping notes in the project's own documents, and a hook that writes the settings is rule 0013."
     references  = "https://www.promptarmor.com/resources/hijacking-claude-code-via-injected-marketplace-plugins https://socket.dev/blog/sandworm-mode-npm-worm-ai-toolchain-poisoning docs/research/attack-catalogue.md#1"
     sensitive   = false

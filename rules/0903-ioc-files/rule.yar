@@ -10,6 +10,7 @@ rule as_0903_ioc_files {
     kinds       = "Skill,InstructionFile,Hook,McpServer,Plugin,Subagent,Workflow,ExecPolicy,Generic"
     status      = "probation"
     plain       = "This item carries a file that a known attack campaign drops."
+    phrase      = "carries a file a known attack drops"
     description = "File names taken from published incident reports (iocs/files.txt), matched as the last path component of the file of a tree the scan is on or of the Item's own path, which is what catches a dropped file whose own bytes say nothing. The content is never read: a .gitignore or a README that names a listed file is not that file and stays silent, and so does a longer name that merely ends with an entry, such as tsconfig.tsbuildinfo. Regenerated on every pack build."
     references  = "docs/research/attack-catalogue.md#3"
     sensitive   = false

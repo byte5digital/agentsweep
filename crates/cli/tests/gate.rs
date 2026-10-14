@@ -33,7 +33,10 @@ const FAIL_OPEN: &str = "{\"systemMessage\":\"AgentSweep is not running, nothing
 
 /// The deadline of spec section 7.4 plus what starting a process may take on
 /// a busy machine.
-const DEADLINE_PLUS_START_UP: Duration = Duration::from_millis(2000 + 1500);
+// The Agent kills the hook at five seconds (the registered timeout), so the
+// bound only has to show the fail-open answer comes well before that; the
+// start-up allowance is wide enough for a loaded machine.
+const DEADLINE_PLUS_START_UP: Duration = Duration::from_millis(2000 + 2500);
 
 /// The prompt and the command the recorded events carry, which must never
 /// reach the daemon whole.

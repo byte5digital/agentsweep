@@ -598,7 +598,7 @@ pub(crate) mod tests {
         ]
     }
 
-    fn status_of(findings: Vec<RecordedFinding>) -> Status {
+    pub(crate) fn status_of(findings: Vec<RecordedFinding>) -> Status {
         Status {
             health: Health {
                 open_threats: findings

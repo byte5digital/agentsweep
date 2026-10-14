@@ -14,19 +14,22 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use agentsweep_core::finding::FindingState;
+use agentsweep_core::finding::{Category, FindingState};
 use agentsweep_core::keychain::MemoryKeySource;
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::quarantine::Conflict;
+use agentsweep_core::settings::Posture;
 use agentsweep_daemon::Tuning;
 use agentsweep_daemon::options::{KeySourceChoice, LogChoice, Options};
 use agentsweep_daemon::service::{self, Background, Daemon};
 use agentsweep_daemon::watcher::Timings;
+use agentsweep_ipc::Client;
 use agentsweep_ipc::peer::SameUser;
-use agentsweep_ipc::protocol::{StateEvent, Status};
+use agentsweep_ipc::protocol::{Role, SettingsChange, StateEvent, Status};
 use agentsweep_menubar::asking::{ActionRequest, Asking};
 use agentsweep_menubar::findings::{Findings, Follow, quarantine_confirmation};
 use agentsweep_menubar::folder::result_view;
+use agentsweep_menubar::frame::Frame;
 use agentsweep_menubar::link::{Link, Socket, Update};
 use agentsweep_menubar::supervision::Unsupervised;
 use serde_json::Value;
@@ -198,6 +201,31 @@ impl Following {
     }
 }
 
+impl Following {
+    /// Applies what the stream says to the window's frame the way the app
+    /// does, until `done` holds. The frame is never loaded again from the
+    /// settings: only the stream may move the Posture here.
+    fn until_frame(
+        &self,
+        frame: &mut Frame,
+        asking: &Asking,
+        what: &str,
+        done: impl Fn(&Frame) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(180);
+        while !done(frame) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "the frame never showed {what}: {frame:?}");
+            let Ok(event) = self.events.recv_timeout(left) else {
+                continue;
+            };
+            if frame.apply(&event) == Follow::Refresh {
+                frame.load(&asking.status().expect("a status"));
+            }
+        }
+    }
+}
+
 impl Drop for Following {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -363,4 +391,113 @@ fn a_folder_scan_from_the_window_answers_and_records_nothing() {
     let after = asking.status().expect("a status");
     assert_eq!(after.findings, before.findings);
     assert_eq!(after.scan, before.scan);
+}
+
+fn labels(frame: &Frame) -> Vec<&'static str> {
+    frame.sidebar().iter().map(|entry| entry.label).collect()
+}
+
+/// The open Findings of the minimal window land in the two Finding panes with
+/// the same ids, and a Posture switched through the `settings` request, here
+/// from a connection of its own as a second window would, re-labels the open
+/// window from the stream alone.
+#[test]
+fn the_window_frame_lands_the_findings_in_their_panes_and_follows_the_posture() {
+    let sandbox = Sandbox::new("frame");
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let following = Following::start(&sandbox);
+
+    let status: Status = asking.status().expect("a status");
+    let settings = asking.settings().expect("the settings");
+    assert_eq!(settings.posture, Posture::Simple, "the default Posture");
+    let mut frame = Frame::new();
+    frame.load(&status);
+    frame.settings(&settings);
+    let view = frame.to_value();
+
+    let of = |category: Category| -> Vec<String> {
+        status
+            .open()
+            .filter(|f| f.category == category)
+            .map(|f| f.id.to_string())
+            .collect()
+    };
+    let threats = ids(&view["panes"]["threats"]);
+    let exposures = ids(&view["panes"]["exposures"]);
+    assert_eq!(threats, of(Category::Threat));
+    assert_eq!(exposures, of(Category::Exposure));
+    assert!(!threats.is_empty() && !exposures.is_empty(), "{view}");
+    // Together they are exactly the open list the minimal window showed.
+    let mut both = [threats.clone(), exposures.clone()].concat();
+    let mut open = ids(&view["open"]);
+    both.sort();
+    open.sort();
+    assert_eq!(both, open);
+    assert_eq!(view["sidebar"][1]["count"], threats.len());
+    assert_eq!(view["sidebar"][2]["count"], exposures.len());
+    assert_eq!(
+        labels(&frame),
+        vec![
+            "Overview",
+            "Needs your decision",
+            "Worth fixing",
+            "Quarantine",
+            "Activity",
+            "Settings"
+        ]
+    );
+
+    // Another connection moves the Posture; the open frame follows.
+    let mut other = Client::connect_at(&sandbox.socket, Role::App).expect("a second connection");
+    let moved = other
+        .change_settings(SettingsChange {
+            posture: Some(Posture::Developer),
+            ..SettingsChange::default()
+        })
+        .expect("the Posture moved");
+    assert_eq!(moved.posture, Posture::Developer);
+    following.until_frame(&mut frame, &asking, "the Developer names", |frame| {
+        frame.posture() == Posture::Developer
+    });
+    assert_eq!(
+        labels(&frame),
+        vec![
+            "Overview",
+            "Threat Findings",
+            "Exposure Findings",
+            "Quarantine",
+            "Event Log",
+            "Settings"
+        ]
+    );
+    assert_eq!(frame.to_value()["posture"], "developer");
+    // The panes hold the same Findings in either Posture.
+    assert_eq!(ids(&frame.to_value()["panes"]["threats"]), threats);
+
+    // And back, again from the stream alone.
+    other
+        .change_settings(SettingsChange {
+            posture: Some(Posture::Simple),
+            ..SettingsChange::default()
+        })
+        .expect("the Posture moved back");
+    following.until_frame(&mut frame, &asking, "the Simple names", |frame| {
+        frame.posture() == Posture::Simple
+    });
+    assert_eq!(labels(&frame)[1], "Needs your decision");
+
+    // A Quarantine moves the skill's count from Needs your decision to
+    // Quarantine, from the stream.
+    let skill = status
+        .open()
+        .find(|finding| finding.item_id.as_str().ends_with("skills/setup"))
+        .expect("the planted skill's Finding")
+        .clone();
+    let quarantined = asking.act(&ActionRequest::Quarantine(skill.id.to_string()));
+    assert_eq!(quarantined["done"], true, "{quarantined}");
+    following.until_frame(&mut frame, &asking, "the skill in Quarantine", |frame| {
+        frame.sidebar()[3].count == Some(1)
+    });
+    assert!(!ids(&frame.to_value()["panes"]["threats"]).contains(&skill.id.to_string()));
 }

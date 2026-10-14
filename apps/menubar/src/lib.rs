@@ -18,6 +18,8 @@
 //! - [`popover`]: the view the popover renders.
 //! - [`findings`]: the Findings window's list, kept from the status and the
 //!   subscribe stream, with the actions the daemon allows on each Finding.
+//! - [`frame`]: the window's sidebar, its counts, the two Finding panes and
+//!   the Posture the window is shown in.
 //! - [`folder`]: the answer of a Folder Scan as the window shows it.
 //! - [`window`]: when the app shows in the Dock.
 //! - [`placement`]: where the popover and the Findings window open.
@@ -30,6 +32,7 @@ pub mod app;
 pub mod asking;
 pub mod findings;
 pub mod folder;
+pub mod frame;
 pub mod glyph;
 pub mod launch_agent;
 pub mod link;

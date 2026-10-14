@@ -1,6 +1,6 @@
 //! The app's requests to the daemon: one shared connection for the status,
-//! the sessions, "Scan now" and every action, and a connection of its own for
-//! each Folder Scan, which answers only once it has finished.
+//! the settings, the sessions, "Scan now" and every action, and a connection
+//! of its own for each Folder Scan, which answers only once it has finished.
 //!
 //! Every action is the request the command line interface sends for it, and
 //! its answer is rendered in the command line interface's words: the
@@ -9,17 +9,17 @@
 //! that does not answer comes back as one sentence saying nothing was done.
 //!
 //! The shared connection is made on first use and made again when the daemon
-//! went away. A request that may be asked twice (the status, the sessions,
-//! "Scan now", which joins a running Full Scan) is asked again once on a new
-//! connection; an action is asked again only when it provably never reached
-//! the daemon, so nothing is ever carried out twice.
+//! went away. A request that may be asked twice (the status, the settings,
+//! the sessions, "Scan now", which joins a running Full Scan) is asked again
+//! once on a new connection; an action is asked again only when it provably
+//! never reached the daemon, so nothing is ever carried out twice.
 
 use std::io::ErrorKind;
 use std::sync::Mutex;
 
 use agentsweep_core::eventlog::Outcome;
 use agentsweep_core::quarantine::{Conflict, RestoreReport};
-use agentsweep_ipc::protocol::{ActionReport, FolderScanResult, Sessions, Status};
+use agentsweep_ipc::protocol::{ActionReport, FolderScanResult, Sessions, SettingsState, Status};
 use agentsweep_ipc::{Client, ClientError};
 use serde_json::{Value, json};
 
@@ -138,6 +138,12 @@ impl Asking {
     /// Health, the last Scan summary and every Finding.
     pub fn status(&self) -> Result<Status, ClientError> {
         self.with(true, Client::status)
+    }
+
+    /// Where every choice the user made stands, the Posture among them. It
+    /// only reads: the app moves no choice yet.
+    pub fn settings(&self) -> Result<SettingsState, ClientError> {
+        self.with(true, Client::settings)
     }
 
     /// Whether Agent sessions appear to be running right now.

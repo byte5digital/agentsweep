@@ -14,7 +14,8 @@
 //!   of its own and does not go with the app.
 //! - `open_window`: opens the Findings window, which makes the app a regular
 //!   app with a Dock icon until the window is closed.
-//! - `findings`: the Findings window's list as it stands.
+//! - `findings`: the Findings window's view as it stands: the list, the
+//!   sidebar with its counts, the two Finding panes and the Posture.
 //! - `folder`: the last Folder Scan's view, for a window that just loaded.
 //! - `sessions`: the Quarantine confirmation for one Finding, with whether
 //!   Agent sessions appear to be running, asked of the daemon just before.
@@ -31,7 +32,8 @@
 //! - `agentsweep://view`: the popover's view, whenever it changes.
 //! - `agentsweep://state-event`: every state event on the daemon's subscribe
 //!   stream, as the wire carries it.
-//! - `agentsweep://findings`: the Findings window's list, whenever it changes.
+//! - `agentsweep://findings`: the Findings window's view, whenever the list,
+//!   a count or the Posture changes.
 //! - `agentsweep://folder`: the Folder Scan in hand: running, done or failed.
 
 use std::sync::{Arc, Mutex};
@@ -47,8 +49,9 @@ use tauri::{
 use agentsweep_ipc::protocol::Message;
 
 use crate::asking::{ActionRequest, Asking, refusal, scan_now_line};
-use crate::findings::{Findings, Follow, quarantine_confirmation};
+use crate::findings::{Follow, quarantine_confirmation};
 use crate::folder;
+use crate::frame::Frame;
 use crate::glyph::{self, Mark};
 use crate::link::{Link, Socket, Update};
 use crate::placement;
@@ -81,7 +84,7 @@ pub const FOLDER_EVENT: &str = "agentsweep://folder";
 struct Shell {
     view: Mutex<View>,
     services: Arc<dyn Services>,
-    findings: Mutex<Findings>,
+    frame: Mutex<Frame>,
     folder: Mutex<Value>,
     asking: Arc<Asking>,
 }
@@ -114,14 +117,15 @@ fn open_window(app: AppHandle) {
     show_window(&app);
 }
 
-/// The Findings window's list, fetched first when it was never loaded.
+/// The Findings window's view, fetched first when it was never loaded.
 #[tauri::command]
 async fn findings(app: AppHandle) -> Result<Value, String> {
     let loaded = app
         .state::<Shell>()
-        .findings
+        .frame
         .lock()
-        .expect("the list is not poisoned")
+        .expect("the frame is not poisoned")
+        .findings()
         .loaded();
     if !loaded {
         let handle = app.clone();
@@ -129,9 +133,9 @@ async fn findings(app: AppHandle) -> Result<Value, String> {
     }
     Ok(app
         .state::<Shell>()
-        .findings
+        .frame
         .lock()
-        .expect("the list is not poisoned")
+        .expect("the frame is not poisoned")
         .to_value())
 }
 
@@ -147,9 +151,10 @@ fn folder(shell: tauri::State<'_, Shell>) -> Value {
 async fn sessions(app: AppHandle, target: String) -> Result<Value, String> {
     let finding = app
         .state::<Shell>()
-        .findings
+        .frame
         .lock()
-        .expect("the list is not poisoned")
+        .expect("the frame is not poisoned")
+        .findings()
         .get(&target)
         .cloned()
         .ok_or_else(|| "That Finding is no longer listed.".to_string())?;
@@ -323,30 +328,38 @@ fn present(app: &AppHandle, presence: Presence) {
     let _ = (app, presence);
 }
 
-/// Asks the daemon for the status and loads the list from it.
+/// Asks the daemon for the status and the settings and loads the list and
+/// the Posture from them. The Posture is read again with every status, so a
+/// choice that moved while no daemon answered shows once one does; between
+/// two statuses the `settings-changed` event keeps it.
 fn refresh(app: &AppHandle) {
     let shell = app.state::<Shell>();
     let status = shell.asking.status();
+    let settings = shell.asking.settings();
     let value = {
-        let mut findings = shell.findings.lock().expect("the list is not poisoned");
+        let mut frame = shell.frame.lock().expect("the frame is not poisoned");
         match status {
-            Ok(status) => findings.load(&status),
+            Ok(status) => frame.load(&status),
             // The link says Protection is off when the daemon is away; a
             // status that failed otherwise leaves the list as it was.
             Err(_) => return,
         }
-        findings.to_value()
+        // Settings that cannot be read leave the Posture as it was.
+        if let Ok(settings) = settings {
+            frame.settings(&settings);
+        }
+        frame.to_value()
     };
     let _ = app.emit(FINDINGS_EVENT, value);
 }
 
-/// Sends the list as it stands.
+/// Sends the window's view as it stands.
 fn render(app: &AppHandle) {
     let value = app
         .state::<Shell>()
-        .findings
+        .frame
         .lock()
-        .expect("the list is not poisoned")
+        .expect("the frame is not poisoned")
         .to_value();
     let _ = app.emit(FINDINGS_EVENT, value);
 }
@@ -357,16 +370,16 @@ fn icon(view: &View) -> Image<'static> {
 }
 
 /// Takes one update from the link: a new view goes to the tray and the
-/// popover, a state event to the Findings list and both windows.
+/// popover, a state event to the window's frame and both windows.
 fn take(app: &AppHandle, update: Update) {
     match update {
         Update::View(view) => {
             let shell = app.state::<Shell>();
             if view.protection_off {
                 let follow = shell
-                    .findings
+                    .frame
                     .lock()
-                    .expect("the list is not poisoned")
+                    .expect("the frame is not poisoned")
                     .off(&view.detail);
                 if follow != Follow::Nothing {
                     render(app);
@@ -393,9 +406,9 @@ fn take(app: &AppHandle, update: Update) {
         Update::Event(event) => {
             let follow = app
                 .state::<Shell>()
-                .findings
+                .frame
                 .lock()
-                .expect("the list is not poisoned")
+                .expect("the frame is not poisoned")
                 .apply(&event);
             let _ = app.emit(STATE_EVENT, Message::Event(event).to_value());
             match follow {
@@ -483,7 +496,7 @@ pub fn run() {
     let shell = Shell {
         view: Mutex::new(View::unknown()),
         services: Arc::clone(&services),
-        findings: Mutex::new(Findings::new()),
+        frame: Mutex::new(Frame::new()),
         folder: Mutex::new(Value::Null),
         asking: Arc::new(Asking::new(socket.clone())),
     };
@@ -548,8 +561,13 @@ pub fn run() {
                 }
             }
 
-            // Closing the Findings window hides it and makes the app menu bar
-            // only again; quitting is the popover's.
+            // Closing the Findings window, with its red button or with Cmd-W
+            // (Close Window in the menu Tauri gives a macOS app by default),
+            // hides it and makes the app menu bar only again. Cmd-Q (Quit in
+            // that menu, shown while the window makes the app a regular one)
+            // quits the app as the popover's Quit does; the daemon is a
+            // launch agent of its own and keeps running. The owner's decision
+            // of 2026-10-14.
             if let Some(window) = app.get_webview_window(WINDOW) {
                 let hide = window.clone();
                 let handle = app.handle().clone();

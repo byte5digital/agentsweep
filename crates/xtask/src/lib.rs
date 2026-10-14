@@ -1,8 +1,9 @@
 //! Build work for the Rule corpus and the Rule Pack.
 //!
-//! Three jobs that nothing in the app ever does: run every Fixture of the
-//! corpus under the Rules it belongs to, render the Indicator Lists into their
-//! generated Rules, and build a Rule Pack manifest. The corpus runner lives
+//! Jobs that nothing in the app ever does: run every Fixture of the corpus
+//! under the Rules it belongs to, render the Indicator Lists into their
+//! generated Rules, build a Rule Pack manifest, and hold every workflow to the
+//! pipeline hardening rules. The corpus runner lives
 //! here rather than in the YARA-X command line tool because a Rule reads the
 //! Item as struct globals and that tool cannot define them (spec section 4.2).
 //!
@@ -15,6 +16,7 @@ pub mod benign;
 pub mod corpus;
 pub mod fixture;
 pub mod iocs;
+pub mod workflows;
 
 use std::path::{Path, PathBuf};
 

@@ -10,7 +10,10 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::quarantine::Conflict;
+
+use crate::engine::{EngineChange, EngineState};
 
 use crate::protocol::{
     ActionReport, FolderScanResult, Hello, Message, Refusal, Request, RequestError,
@@ -224,6 +227,37 @@ impl Client {
         })?;
         FolderScanResult::from_value(&answer).ok_or_else(|| {
             ClientError::Unexpected("the Folder Scan result could not be read".to_string())
+        })
+    }
+
+    /// Where the AI Judgement choices stand.
+    pub fn engine(&mut self) -> Result<EngineState, ClientError> {
+        self.engine_request(Request::Engine {
+            change: EngineChange::default(),
+        })
+    }
+
+    /// Moves some of the AI Judgement choices, and answers with where they
+    /// all stand now. A change the daemon refuses moves nothing.
+    pub fn change_engine(&mut self, change: EngineChange) -> Result<EngineState, ClientError> {
+        self.engine_request(Request::Engine { change })
+    }
+
+    /// Hands the Claude API key to the daemon, which keeps it in the login
+    /// Keychain. The caller drops its copy afterwards and never stores it.
+    pub fn set_claude_key(&mut self, key: ClaudeKey) -> Result<EngineState, ClientError> {
+        self.engine_request(Request::SetClaudeKey { key })
+    }
+
+    /// Removes the Claude API key, which turns an active Claude engine off.
+    pub fn remove_claude_key(&mut self) -> Result<EngineState, ClientError> {
+        self.engine_request(Request::RemoveClaudeKey)
+    }
+
+    fn engine_request(&mut self, request: Request) -> Result<EngineState, ClientError> {
+        let answer = self.ask(request)?;
+        EngineState::from_value(&answer).ok_or_else(|| {
+            ClientError::Unexpected("the engine state could not be read".to_string())
         })
     }
 

@@ -26,9 +26,12 @@ use agentsweep_core::eventlog::{Actor, Outcome, Primitive, ReceiptStep, Sessions
 use agentsweep_core::finding::{Category, FindingId, FindingState};
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
 use agentsweep_core::item::{ItemId, Kind};
+use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::packs::PackOrigin;
 use agentsweep_core::quarantine::Conflict;
 use agentsweep_core::state::{IgnoredPack, RecordedFinding, ScanSummary, Trigger};
+
+pub use crate::engine::{EngineChange, EngineState};
 
 /// Which peer is speaking. The daemon answers both the same way in this
 /// milestone; the role is carried because the notification flow of spec
@@ -237,11 +240,31 @@ pub enum Request {
         /// The folder, as an absolute path.
         path: String,
     },
+    /// Read the AI Judgement choices, or change some of them: the active
+    /// Judgement Engine, the Ollama address and model, the Claude model id
+    /// override and the cloud caps (spec section 4.4). Answers with an
+    /// [`EngineState`]. A change the daemon refuses leaves every choice as it
+    /// was.
+    Engine {
+        /// What to move; nothing to read only.
+        change: EngineChange,
+    },
+    /// Hand the Claude API key to the daemon, which keeps it in the login
+    /// Keychain and nowhere else. The client never stores it (spec section
+    /// 4.4). Answers with an [`EngineState`] naming the key's last four
+    /// characters.
+    SetClaudeKey {
+        /// The key. Its `Debug` is redacted, so the request can be printed.
+        key: ClaudeKey,
+    },
+    /// Remove the Claude API key from the Keychain. An active Claude engine is
+    /// turned off with it. Answers with an [`EngineState`].
+    RemoveClaudeKey,
 }
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 13] = [
+    pub const NAMES: [&'static str; 16] = [
         "status",
         "scan-now",
         "subscribe",
@@ -255,6 +278,9 @@ impl Request {
         "rule-feed",
         "sessions",
         "folder-scan",
+        "engine",
+        "set-claude-key",
+        "remove-claude-key",
     ];
 
     /// The spelling a request carries.
@@ -273,6 +299,9 @@ impl Request {
             Request::RuleFeed { .. } => "rule-feed",
             Request::Sessions => "sessions",
             Request::Folder { .. } => "folder-scan",
+            Request::Engine { .. } => "engine",
+            Request::SetClaudeKey { .. } => "set-claude-key",
+            Request::RemoveClaudeKey => "remove-claude-key",
         }
     }
 
@@ -315,6 +344,10 @@ impl Request {
                 enabled: Some(enabled),
             } => {
                 map.insert("enabled".to_string(), Value::from(*enabled));
+            }
+            Request::Engine { change } => change.write_into(map),
+            Request::SetClaudeKey { key } => {
+                map.insert("key".to_string(), Value::from(key.expose()));
             }
             _ => {}
         }
@@ -362,6 +395,13 @@ impl Request {
             "folder-scan" => Request::Folder {
                 path: text("path")?.to_string(),
             },
+            "engine" => Request::Engine {
+                change: EngineChange::read_from(value)?,
+            },
+            "set-claude-key" => Request::SetClaudeKey {
+                key: ClaudeKey::new(text("key")?).ok()?,
+            },
+            "remove-claude-key" => Request::RemoveClaudeKey,
             _ => return None,
         })
     }
@@ -1766,7 +1806,51 @@ mod tests {
             Request::Folder {
                 path: "/Users/someone/src/demo".to_string(),
             },
+            Request::Engine {
+                change: EngineChange::default(),
+            },
+            Request::Engine {
+                change: EngineChange {
+                    engine: Some(agentsweep_core::settings::JudgementEngine::Ollama),
+                    ollama_address: Some("127.0.0.1:11434".to_string()),
+                    ollama_model: Some("qwen3:8b".to_string()),
+                    claude_model: Some(String::new()),
+                    items_per_scan: Some(25),
+                    items_per_day: Some(200),
+                    cents_per_month: Some(500),
+                },
+            },
+            Request::SetClaudeKey {
+                key: ClaudeKey::new(A_KEY).expect("a key"),
+            },
+            Request::RemoveClaudeKey,
         ]
+    }
+
+    /// A defanged stand-in: the shape of a key, never a real one.
+    const A_KEY: &str = "sk-ant-api03-defanged-wire-test-0000-9c1d";
+
+    /// The key crosses the wire once, to the daemon, and a printed request
+    /// never shows it.
+    #[test]
+    fn the_claude_key_travels_in_its_request_and_is_never_printed() {
+        let request = Request::SetClaudeKey {
+            key: ClaudeKey::new(A_KEY).expect("a key"),
+        };
+        let printed = format!("{request:?}");
+        assert!(!printed.contains(A_KEY), "{printed}");
+        assert!(!printed.contains("9c1d"), "{printed}");
+        let message = Message::Request {
+            id: "1".to_string(),
+            request,
+        };
+        let wire = message.to_value();
+        assert_eq!(wire["key"], A_KEY);
+        assert_eq!(Message::from_value(&wire), Some(message));
+        let implausible = serde_json::json!({
+            "type": "request", "id": "1", "request": "set-claude-key", "key": "short"
+        });
+        assert_eq!(Message::from_value(&implausible), None);
     }
 
     /// ADR 0008: no request takes a path except revealing a Receipt and the

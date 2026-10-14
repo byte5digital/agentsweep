@@ -20,6 +20,9 @@ agentsweep-adapter-codex.workspace = true
 agentsweep-adapter-workspace.workspace = true
 agentsweep-core.workspace = true
 flate2 = "1.1.10"
+# Only the checksum of the index a bad corpus sample's repository is laid out
+# with; no git binary is ever run.
+gix-hash = { version = "0.26.2", features = ["sha1"] }
 # The minisign compatible signer of a Rule Pack release: one detached,
 # prehashed signature over the manifest per Rule Pack secret key the release
 # workflow's environment holds (spec section 9.4). It is built from crates.io

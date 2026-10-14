@@ -12,6 +12,7 @@
 
 #![warn(missing_docs)]
 
+pub mod bad;
 pub mod benign;
 pub mod corpus;
 pub mod fixture;

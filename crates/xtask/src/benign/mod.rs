@@ -214,7 +214,7 @@ fn plant_source(ground: &mut Ground, source: &Source, content: &Content) -> Resu
 ///
 /// No system root is given, so no Managed Surface of the machine this runs on
 /// is ever read, and no search path, so no binary of it is ever looked for.
-fn enumerate(machine: &Machine) -> Enumeration {
+pub(crate) fn enumerate(machine: &Machine) -> Enumeration {
     let host = Host::new(machine.home.clone(), machine.project_roots.clone());
     let roots = host.project_roots();
     let workspace = Workspace::new();

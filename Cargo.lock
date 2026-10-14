@@ -150,6 +150,7 @@ dependencies = [
  "agentsweep-adapter-workspace",
  "agentsweep-core",
  "flate2",
+ "gix-hash",
  "minisign",
  "serde_json",
  "tar",

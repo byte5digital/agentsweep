@@ -6,21 +6,25 @@
 //! does not live there. It lives in `settings.json` beside it, plain JSON
 //! without a MAC, which a rebuilt state file leaves alone.
 //!
-//! The choices are the Rule Feed toggle (spec section 9.4) and the AI
-//! Judgement choices of spec section 4.4: the active Judgement Engine, the
-//! Ollama address and model, the Claude model id override and the three cloud
-//! caps. The app update check, the Gate switch and the Posture join them in
-//! their milestones.
+//! The choices are the Rule Feed toggle and the app update check (spec
+//! section 9.4), the Posture (spec section 8.2), the config-dir override per
+//! Agent (spec section 3.1) and the AI Judgement choices of spec section 4.4:
+//! the active Judgement Engine, the Ollama address and model, the Claude model
+//! id override and the three cloud caps. The Gate switch joins them in its
+//! milestone.
 //!
 //! A missing settings file means every default. A settings file that cannot
 //! be read back is reported rather than repaired: the daemon runs with the
 //! defaults and says so in Health, and it does not write over the file, so a
 //! user's "off" is never silently turned back on by the daemon itself.
 //!
-//! The file holds no sensitive value and no path: nothing but the choices.
-//! The Claude API key above all is never here; it lives in the login Keychain
-//! and only the daemon touches it (spec section 4.4).
+//! The file holds no sensitive value and, with one exception, no path:
+//! nothing but the choices. The exception is the config-dir override per
+//! Agent, a directory the user named, which is the file's only path. The
+//! Claude API key above all is never here; it lives in the login Keychain and
+//! only the daemon touches it (spec section 4.4).
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::net::IpAddr;
@@ -31,7 +35,14 @@ use serde_json::{Map, Value};
 use crate::paths::DataDirectory;
 
 /// The key the Rule Feed toggle is kept under.
-const RULE_FEED: &str = "rule_feed";
+pub const RULE_FEED: &str = "rule_feed";
+/// The key the app update check toggle is kept under.
+pub const UPDATE_CHECK: &str = "update_check";
+/// The key the Posture is kept under.
+pub const POSTURE: &str = "posture";
+/// The key the config-dir overrides are kept under, by Agent id. It is absent
+/// while no Agent has one.
+pub const CONFIG_DIRS: &str = "config_dirs";
 /// The key the active Judgement Engine is kept under.
 pub const JUDGEMENT_ENGINE: &str = "judgement_engine";
 /// The key the Ollama address is kept under.
@@ -58,6 +69,50 @@ pub const DEFAULT_CLAUDE_MODEL: &str = "claude-sonnet-5";
 /// The longest model id the settings take. Real ids are far shorter; the bound
 /// keeps a pasted paragraph out of the file.
 const MODEL_ID_MAX: usize = 128;
+
+/// The longest config-dir override the settings take, in bytes.
+const CONFIG_DIR_MAX: usize = 1024;
+
+/// The longest Agent id the settings take an override for.
+const AGENT_ID_MAX: usize = 64;
+
+/// How much a person is shown: plain sentences, or every technical detail
+/// (spec section 8.2). A Posture changes wording and density, never what is
+/// detected or enforced.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub enum Posture {
+    /// Plain sentences, one clear action, no ids. The default.
+    #[default]
+    Simple,
+    /// Ids, paths, hashes, Scores and the rest, shown permanently.
+    Developer,
+}
+
+impl Posture {
+    /// Both Postures.
+    pub const ALL: [Posture; 2] = [Posture::Simple, Posture::Developer];
+
+    /// The spelling the settings file and the wire carry.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Posture::Simple => "simple",
+            Posture::Developer => "developer",
+        }
+    }
+
+    /// Reads back that spelling.
+    pub fn parse(text: &str) -> Option<Posture> {
+        Posture::ALL
+            .into_iter()
+            .find(|posture| posture.as_str() == text)
+    }
+}
+
+impl fmt::Display for Posture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Which Judgement Engine runs AI Judgement: exactly one, or none at all
 /// (spec section 4.4, ADR 0005). Nothing in the daemon switches it on its own;
@@ -237,6 +292,80 @@ pub fn model_id(choice: &'static str, text: &str) -> Result<String, ChoiceRefuse
     Ok(text.to_string())
 }
 
+/// Checks the id of an Agent a config-dir override is for: a short name of
+/// lowercase letters, digits and `-`, the way a Surface Adapter's descriptor
+/// spells it. Which Agents there are is the daemon's to know, not the file's.
+pub fn agent_id(text: &str) -> Result<String, ChoiceRefused> {
+    let well_formed = !text.is_empty()
+        && text.len() <= AGENT_ID_MAX
+        && text
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    match well_formed {
+        true => Ok(text.to_string()),
+        false => Err(ChoiceRefused::new(
+            CONFIG_DIRS,
+            "an Agent is named by its id, such as claude-code",
+        )),
+    }
+}
+
+/// The config directory AgentSweep reads for one Agent in place of its
+/// default (spec section 3.1). It is an explicit choice of the user's, never
+/// followed from an env file or a settings block, and it is the one path the
+/// settings file holds.
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub struct ConfigDir(String);
+
+impl ConfigDir {
+    /// Takes an absolute directory path written out in full: no `~`, no `.`
+    /// or `..` step, not the root itself, no control character. A trailing
+    /// slash is dropped. The directory need not exist; an Agent that is not
+    /// there is simply not detected.
+    pub fn parse(text: &str) -> Result<ConfigDir, ChoiceRefused> {
+        let refused = |reason: &str| ChoiceRefused::new(CONFIG_DIRS, reason);
+        if text.is_empty() || text.len() > CONFIG_DIR_MAX {
+            return Err(refused(
+                "a config directory is an absolute path of at most 1024 characters",
+            ));
+        }
+        if text.chars().any(char::is_control) {
+            return Err(refused("a config directory holds no control characters"));
+        }
+        let path = Path::new(text);
+        if !path.is_absolute() {
+            return Err(refused(
+                "a config directory is an absolute path, written out in full",
+            ));
+        }
+        // Split by hand: `Path::components` folds an inner `.` away unseen.
+        if text.split('/').any(|step| step == "." || step == "..") {
+            return Err(refused("a config directory holds no . or .. step"));
+        }
+        let trimmed = text.trim_end_matches('/');
+        if trimmed.is_empty() {
+            return Err(refused("the root directory is not a config directory"));
+        }
+        Ok(ConfigDir(trimmed.to_string()))
+    }
+
+    /// The directory.
+    pub fn path(&self) -> &Path {
+        Path::new(&self.0)
+    }
+
+    /// The directory as text, the way the file carries it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ConfigDir {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The three caps on what goes to the Claude API (spec section 4.4).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CloudCaps {
@@ -303,6 +432,14 @@ pub struct Settings {
     /// The Rule Feed toggle (spec section 9.4). On by default; off means no
     /// request at all and the bundled Rule Pack only.
     pub rule_feed: bool,
+    /// The app update check (spec section 9.4). On by default. The app reads
+    /// it from the daemon; the daemon itself never asks for an update.
+    pub update_check: bool,
+    /// The Posture (spec section 8.2), Simple by default.
+    pub posture: Posture,
+    /// The config-dir override per Agent, by Agent id (spec section 3.1).
+    /// Empty by default: every Agent's own default directory.
+    pub config_dirs: BTreeMap<String, ConfigDir>,
     /// The AI Judgement choices (spec section 4.4).
     pub judgement: JudgementSettings,
 }
@@ -311,6 +448,9 @@ impl Default for Settings {
     fn default() -> Settings {
         Settings {
             rule_feed: true,
+            update_check: true,
+            posture: Posture::Simple,
+            config_dirs: BTreeMap::new(),
             judgement: JudgementSettings::default(),
         }
     }
@@ -322,6 +462,16 @@ impl Settings {
         let judgement = &self.judgement;
         let mut map = Map::new();
         map.insert(RULE_FEED.to_string(), Value::from(self.rule_feed));
+        map.insert(UPDATE_CHECK.to_string(), Value::from(self.update_check));
+        map.insert(POSTURE.to_string(), Value::from(self.posture.as_str()));
+        if !self.config_dirs.is_empty() {
+            let overrides: Map<String, Value> = self
+                .config_dirs
+                .iter()
+                .map(|(agent, dir)| (agent.clone(), Value::from(dir.as_str())))
+                .collect();
+            map.insert(CONFIG_DIRS.to_string(), Value::Object(overrides));
+        }
         map.insert(
             JUDGEMENT_ENGINE.to_string(),
             Value::from(judgement.engine.as_str()),
@@ -367,6 +517,19 @@ impl Settings {
         let mut settings = Settings::default();
         if let Some(rule_feed) = map.get(RULE_FEED) {
             settings.rule_feed = rule_feed.as_bool()?;
+        }
+        if let Some(update_check) = map.get(UPDATE_CHECK) {
+            settings.update_check = update_check.as_bool()?;
+        }
+        if let Some(posture) = map.get(POSTURE) {
+            settings.posture = Posture::parse(posture.as_str()?)?;
+        }
+        if let Some(overrides) = map.get(CONFIG_DIRS) {
+            for (agent, dir) in overrides.as_object()? {
+                let agent = agent_id(agent).ok()?;
+                let dir = ConfigDir::parse(dir.as_str()?).ok()?;
+                settings.config_dirs.insert(agent, dir);
+            }
         }
         let judgement = &mut settings.judgement;
         if let Some(engine) = map.get(JUDGEMENT_ENGINE) {
@@ -578,7 +741,9 @@ mod tests {
                 "judgement_engine",
                 "ollama_address",
                 "ollama_model",
+                "posture",
                 "rule_feed",
+                "update_check",
             ])
         );
         for value in written.as_object().expect("an object").values() {
@@ -596,6 +761,9 @@ mod tests {
         let (_temporary, file) = a_file();
         let chosen = Settings {
             rule_feed: false,
+            update_check: false,
+            posture: Posture::Developer,
+            config_dirs: BTreeMap::new(),
             judgement: JudgementSettings {
                 engine: JudgementEngine::Claude,
                 ollama_address: OllamaAddress::parse("localhost:11500").expect("loopback"),
@@ -638,6 +806,128 @@ mod tests {
         assert_eq!(judgement.caps.items_per_scan, 25);
         assert_eq!(judgement.caps.items_per_day, 200);
         assert_eq!(judgement.caps.cents_per_month, 500);
+    }
+
+    #[test]
+    fn the_posture_is_simple_and_the_update_check_on_by_default() {
+        let settings = Settings::default();
+        assert_eq!(settings.posture, Posture::Simple);
+        assert!(settings.update_check);
+        assert!(settings.config_dirs.is_empty());
+        for posture in Posture::ALL {
+            assert_eq!(Posture::parse(posture.as_str()), Some(posture));
+        }
+        assert_eq!(Posture::parse("Developer"), None);
+    }
+
+    /// A settings file written before the Posture and the update check
+    /// existed reads them at their defaults, and keeps what it did name.
+    #[test]
+    fn a_file_from_before_the_posture_reads_it_and_the_update_check_at_their_defaults() {
+        let (_temporary, file) = a_file();
+        std::fs::write(
+            file.path(),
+            b"{\"rule_feed\": false, \"judgement_engine\": \"apple\"}",
+        )
+        .expect("an older file");
+        let read = file.read().expect("a readable settings file");
+        assert!(!read.rule_feed);
+        assert_eq!(read.judgement.engine, JudgementEngine::Apple);
+        assert_eq!(read.posture, Posture::Simple);
+        assert!(read.update_check);
+        assert!(read.config_dirs.is_empty());
+    }
+
+    #[test]
+    fn the_posture_and_the_update_check_round_trip_through_the_file() {
+        let (_temporary, file) = a_file();
+        let chosen = Settings {
+            posture: Posture::Developer,
+            update_check: false,
+            ..Settings::default()
+        };
+        SettingsWriter::write(&file, &chosen).expect("a written settings file");
+        assert_eq!(file.read().expect("a readable settings file"), chosen);
+    }
+
+    /// The config-dir override is the one path the file holds: with one set,
+    /// the key set grows by the override alone, and no other value is a path.
+    #[test]
+    fn the_config_dir_override_is_the_files_only_path() {
+        let (_temporary, file) = a_file();
+        let mut chosen = Settings::default();
+        chosen.config_dirs.insert(
+            "claude-code".to_string(),
+            ConfigDir::parse("/Users/someone/work-claude/").expect("an absolute path"),
+        );
+        SettingsWriter::write(&file, &chosen).expect("a written settings file");
+        let written: Value = serde_json::from_slice(&std::fs::read(file.path()).expect("the file"))
+            .expect("plain JSON");
+        let object = written.as_object().expect("an object");
+        for (key, value) in object {
+            if key == CONFIG_DIRS {
+                assert_eq!(
+                    value,
+                    &serde_json::json!({"claude-code": "/Users/someone/work-claude"})
+                );
+                continue;
+            }
+            let text = value.as_str().unwrap_or_default();
+            assert!(!text.starts_with(['/', '~']), "{key} is a path: {text}");
+        }
+        assert!(object.contains_key(CONFIG_DIRS));
+        let read = file.read().expect("a readable settings file");
+        assert_eq!(read, chosen);
+        assert_eq!(
+            read.config_dirs["claude-code"].path(),
+            Path::new("/Users/someone/work-claude")
+        );
+    }
+
+    #[test]
+    fn a_config_dir_is_an_absolute_path_written_out_in_full() {
+        for typed in [
+            "",
+            "/",
+            "//",
+            "~/.claude-work",
+            "relative/.claude",
+            "/Users/someone/../other/.claude",
+            "/Users/someone/./.claude",
+            "/Users/some\none/.claude",
+        ] {
+            let refused = ConfigDir::parse(typed).expect_err(typed);
+            assert_eq!(refused.choice, CONFIG_DIRS);
+        }
+        assert!(ConfigDir::parse(&format!("/{}", "a".repeat(1024))).is_err());
+        assert_eq!(
+            ConfigDir::parse("/Volumes/Work/.codex")
+                .expect("a path")
+                .as_str(),
+            "/Volumes/Work/.codex"
+        );
+        assert!(agent_id("claude-code").is_ok());
+        for typed in ["", "Claude Code", "../codex", "codex/", &"a".repeat(65)] {
+            assert!(agent_id(typed).is_err(), "{typed}");
+        }
+    }
+
+    /// An override someone wrote into the file by hand is held to the same
+    /// checks as one the daemon took: a relative one, or one under a
+    /// malformed Agent id, makes the whole file unreadable.
+    #[test]
+    fn a_posture_or_override_the_daemon_would_refuse_makes_the_file_malformed() {
+        for document in [
+            serde_json::json!({"posture": "expert"}),
+            serde_json::json!({"posture": true}),
+            serde_json::json!({"update_check": "off"}),
+            serde_json::json!({"config_dirs": {"claude-code": "~/.claude-work"}}),
+            serde_json::json!({"config_dirs": {"Claude Code": "/Users/someone/.claude"}}),
+            serde_json::json!({"config_dirs": {"codex": 1}}),
+            serde_json::json!({"config_dirs": ["/Users/someone/.codex"]}),
+        ] {
+            assert_eq!(Settings::from_value(&document), None, "{document}");
+        }
     }
 
     #[test]

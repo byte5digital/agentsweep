@@ -10,17 +10,24 @@
 //!
 //! Counts are kept from the list of [`Findings`], which is the daemon's
 //! status followed from the stream; nothing is counted twice or worked out
-//! apart from it. Which pane is selected is the window's own business and is
-//! not kept here.
+//! apart from it. The Overview pane is rendered from the Health, the Agent
+//! records and the last Scan's summary the frame keeps beside the list, from
+//! the same status and the same stream ([`crate::overview`]). Which pane is
+//! selected is the window's own business and is not kept here.
 
 use std::collections::BTreeSet;
 
 use agentsweep_core::finding::{Category, FindingState};
+use agentsweep_core::health::Health;
+use agentsweep_core::overview::Overview;
 use agentsweep_core::settings::Posture;
+use agentsweep_core::state::ScanSummary;
 use agentsweep_ipc::protocol::{SettingsState, StateEvent, Status};
 use serde_json::{Value, json};
 
 use crate::findings::{Findings, Follow, card};
+use crate::overview::{self, OverviewView};
+use crate::popover::View;
 
 /// One entry of the sidebar, in the order spec section 8.1 lists them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -116,12 +123,28 @@ pub fn sidebar(findings: &Findings, posture: Posture) -> Vec<Entry> {
         .collect()
 }
 
-/// What the window holds: the list of Findings and the Posture it is shown
-/// in.
+/// What the window holds: the list of Findings, what the Overview names
+/// beside it, and the Posture it is shown in.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Frame {
     findings: Findings,
     posture: Posture,
+    /// The Health as the daemon last said it. Before anything was asked it
+    /// is Protection off, because silence is never an all-clear.
+    health: Health,
+    /// The Agents, the projects and the Ambiguous Items of the last status
+    /// or `overview-changed` event.
+    overview: Overview,
+    /// The most recent Scan's summary.
+    last_scan: Option<ScanSummary>,
+}
+
+/// A follow-up that at least sends the view again.
+fn at_least_render(follow: Follow) -> Follow {
+    match follow {
+        Follow::Nothing => Follow::Render,
+        other => other,
+    }
 }
 
 impl Frame {
@@ -140,9 +163,13 @@ impl Frame {
         self.posture
     }
 
-    /// Takes the list from a status answer.
+    /// Takes the list, the Health, the Agent records and the last Scan from
+    /// a status answer.
     pub fn load(&mut self, status: &Status) {
         self.findings.load(status);
+        self.health = status.health.clone();
+        self.overview = status.overview.clone();
+        self.last_scan = status.scan.clone();
     }
 
     /// Takes the Posture from a `settings` answer or a `settings-changed`
@@ -157,19 +184,76 @@ impl Frame {
         }
     }
 
-    /// No daemon answers: see [`Findings::off`]. The Posture stays as it was
-    /// last read, since the window keeps being shown in it.
+    /// No daemon answers: see [`Findings::off`]. The Overview drops what it
+    /// named with the list, so the pane says "Protection is off." and nothing
+    /// else. The Posture stays as it was last read, since the window keeps
+    /// being shown in it.
     pub fn off(&mut self, reason: &str) -> Follow {
-        self.findings.off(reason)
+        let was = self.clone();
+        self.findings.off(reason);
+        self.health = Health::unreachable(reason);
+        self.overview = Overview::default();
+        self.last_scan = None;
+        match *self == was {
+            true => Follow::Nothing,
+            false => Follow::Render,
+        }
     }
 
-    /// Applies one state event: a moved choice may change the Posture, every
-    /// other event goes to the list.
+    /// Takes the popover's view from the link: one that says Protection is
+    /// off empties the window too, which is how the window hears of a daemon
+    /// that went away. Any other view changes nothing here; the stream says
+    /// the rest.
+    pub fn view(&mut self, view: &View) -> Follow {
+        match view.protection_off {
+            true => self.off(&view.detail),
+            false => Follow::Nothing,
+        }
+    }
+
+    /// Applies one state event: a moved choice may change the Posture, a
+    /// Health or an `overview-changed` event moves the Overview, and every
+    /// event but those two kinds goes to the list.
     pub fn apply(&mut self, event: &StateEvent) -> Follow {
         match event {
             StateEvent::SettingsChanged { settings } => self.settings(settings),
+            StateEvent::HealthChanged { health } if health.protection.is_off() => {
+                self.off(health.protection.reason())
+            }
+            StateEvent::HealthChanged { health } => {
+                let follow = self.findings.apply(event);
+                match self.health == **health {
+                    true => follow,
+                    false => {
+                        self.health = (**health).clone();
+                        at_least_render(follow)
+                    }
+                }
+            }
+            StateEvent::OverviewChanged { overview } => match self.overview == **overview {
+                true => Follow::Nothing,
+                false => {
+                    self.overview = (**overview).clone();
+                    Follow::Render
+                }
+            },
+            StateEvent::ScanFinished { summary } => {
+                self.last_scan = Some((**summary).clone());
+                at_least_render(self.findings.apply(event))
+            }
             other => self.findings.apply(other),
         }
+    }
+
+    /// The Overview pane as it stands.
+    pub fn overview(&self) -> OverviewView {
+        overview::view(
+            &self.health,
+            &self.overview,
+            self.last_scan.as_ref(),
+            self.findings.scan(),
+            self.posture,
+        )
     }
 
     /// The sidebar as it stands.
@@ -178,9 +262,11 @@ impl Frame {
     }
 
     /// The value the window receives: the list as before, the Posture, the
-    /// sidebar, and the open Findings split into the two Finding panes.
+    /// sidebar, the Overview, and the open Findings split into the two
+    /// Finding panes.
     pub fn to_value(&self) -> Value {
         let mut value = self.findings.to_value();
+        value["overview"] = self.overview().to_value();
         let pane = |category: Category| -> Vec<Value> {
             self.findings
                 .open()
@@ -215,11 +301,17 @@ mod tests {
 
     use std::collections::BTreeMap;
 
+    use agentsweep_core::envelope::Timestamp;
     use agentsweep_core::item::Kind;
+    use agentsweep_core::overview::AgentRecord;
+    use agentsweep_core::scan_pass::ScanKind;
     use agentsweep_core::settings::{CloudCaps, JudgementEngine};
+    use agentsweep_core::state::Trigger;
     use agentsweep_ipc::engine::EngineState;
 
     use crate::findings::tests::{recorded, status_of};
+    use crate::overview::summary_line;
+    use crate::popover::Off;
 
     const SKILL: &str = "claude-code/user/skill/~/.claude/skills/setup";
     const MCP: &str = "claude-code/user/mcp-server/~/.claude.json#tracker";
@@ -454,6 +546,163 @@ mod tests {
         assert_eq!(view["posture"], "developer");
         assert_eq!(view["panes"]["threats"], json!([]));
         assert_eq!(view["sidebar"][1]["count"], 0);
+    }
+
+    fn claude_code() -> Overview {
+        Overview {
+            agents: vec![AgentRecord {
+                agent: "claude-code".to_string(),
+                display_name: "Claude Code".to_string(),
+                installed: true,
+                version: Some("2.1.3".to_string()),
+                projects: 1,
+                items: 7,
+                ..AgentRecord::default()
+            }],
+            ..Overview::default()
+        }
+    }
+
+    fn moment() -> Timestamp {
+        Timestamp::parse("2026-10-15T08:00:00.000Z").expect("a moment")
+    }
+
+    fn finished() -> ScanSummary {
+        ScanSummary {
+            kind: ScanKind::Full,
+            trigger: Trigger::ScanNow,
+            started_at: moment(),
+            duration_ms: 40,
+            items: 7,
+            threats: 2,
+            exposures: 1,
+            clear: 7,
+            ambiguous: 0,
+            suspicious: 0,
+            rule_pack: 1,
+            engine: String::new(),
+        }
+    }
+
+    /// The window carries the Overview; the Developer summary line shows only
+    /// in the Developer Posture and the Agent lines in both.
+    #[test]
+    fn the_frame_carries_the_overview_in_each_posture() {
+        let mut status = status();
+        status.overview = claude_code();
+        status.scan = Some(finished());
+        let mut frame = Frame::new();
+        frame.load(&status);
+        let simple = frame.to_value()["overview"].clone();
+        assert_eq!(simple["sentence"], status.health.headline());
+        assert_eq!(
+            simple["agents"][0]["line"],
+            "Claude Code 2.1.3: 1 project, 7 things checked."
+        );
+        assert_eq!(simple["summary"], Value::Null);
+        assert_eq!(simple["actions"], true);
+
+        frame.settings(&settings(Posture::Developer));
+        let developer = frame.to_value()["overview"].clone();
+        assert_eq!(
+            developer["agents"][0]["line"],
+            "Claude Code 2.1.3: 1 project, 7 Items."
+        );
+        assert_eq!(developer["summary"], summary_line(&finished()));
+    }
+
+    /// The Agents, the progress and the last Scan follow the stream, and the
+    /// sentence follows Health on it.
+    #[test]
+    fn the_overview_follows_the_stream() {
+        let mut frame = Frame::new();
+        frame.load(&status());
+        frame.settings(&settings(Posture::Developer));
+        assert!(frame.overview().agents.is_empty());
+
+        let moved = StateEvent::OverviewChanged {
+            overview: Box::new(claude_code()),
+        };
+        assert_eq!(frame.apply(&moved), Follow::Render);
+        assert_eq!(frame.overview().agents.len(), 1);
+        assert_eq!(frame.apply(&moved), Follow::Nothing);
+
+        let started = StateEvent::ScanStarted {
+            trigger: Trigger::ScanNow,
+            at: moment(),
+        };
+        assert_eq!(frame.apply(&started), Follow::Render);
+        let progress = StateEvent::ScanProgress { done: 3, total: 7 };
+        assert_eq!(frame.apply(&progress), Follow::Render);
+        let running = frame.overview();
+        assert!(running.scanning);
+        assert_eq!(running.progress, "Checked 3 of 7 Items.");
+
+        let checking = Health {
+            scanning: true,
+            ..status().health
+        };
+        frame.apply(&StateEvent::HealthChanged {
+            health: Box::new(checking),
+        });
+        assert_eq!(frame.overview().sentence, "Checking now.");
+
+        let summary = finished();
+        let ended = StateEvent::ScanFinished {
+            summary: Box::new(summary.clone()),
+        };
+        assert_eq!(frame.apply(&ended), Follow::Refresh);
+        let done = frame.overview();
+        assert!(!done.scanning);
+        assert_eq!(done.progress, "");
+        assert_eq!(done.summary, Some(summary_line(&summary)));
+        let quiet = StateEvent::HealthChanged {
+            health: Box::new(status().health),
+        };
+        assert_eq!(frame.apply(&quiet), Follow::Render);
+        assert_eq!(frame.overview().sentence, status().health.headline());
+    }
+
+    /// A daemon that stops answering leaves the sentence alone in the
+    /// Overview and no Scan action; a Health on the stream once it answers
+    /// again asks for the status, which fills it once more.
+    #[test]
+    fn the_overview_shows_only_protection_off_and_recovers_from_the_stream() {
+        let mut status = status();
+        status.overview = claude_code();
+        let mut frame = Frame::new();
+        frame.load(&status);
+        assert!(frame.overview().actions);
+
+        let off = View::off(&Off::Unreachable(
+            "the daemon stopped answering".to_string(),
+        ));
+        assert_eq!(frame.view(&off), Follow::Render);
+        let shown = frame.overview();
+        assert!(shown.off);
+        assert_eq!(shown.sentence, "Protection is off.");
+        assert!(shown.agents.is_empty() && !shown.actions);
+        assert_eq!(frame.view(&off), Follow::Nothing, "already off");
+        // A view that says nothing is off leaves the frame to the stream.
+        assert_eq!(frame.view(&View::of(&status.health)), Follow::Nothing);
+        assert!(frame.overview().off);
+
+        let back = StateEvent::HealthChanged {
+            health: Box::new(status.health.clone()),
+        };
+        assert_eq!(frame.apply(&back), Follow::Refresh);
+        frame.load(&status);
+        let shown = frame.overview();
+        assert!(!shown.off && shown.actions);
+        assert_eq!(shown.agents.len(), 1);
+
+        // Off on the stream itself does what the link's view does.
+        let gone = StateEvent::HealthChanged {
+            health: Box::new(Health::unreachable("the daemon stopped answering")),
+        };
+        assert_eq!(frame.apply(&gone), Follow::Render);
+        assert!(frame.overview().off);
+        assert_eq!(frame.to_value()["overview"]["actions"], false);
     }
 
     #[test]

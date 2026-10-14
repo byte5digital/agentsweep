@@ -15,7 +15,8 @@
 //! - `open_window`: opens the Findings window, which makes the app a regular
 //!   app with a Dock icon until the window is closed.
 //! - `findings`: the Findings window's view as it stands: the list, the
-//!   sidebar with its counts, the two Finding panes and the Posture.
+//!   sidebar with its counts, the Overview, the two Finding panes and the
+//!   Posture.
 //! - `folder`: the last Folder Scan's view, for a window that just loaded.
 //! - `sessions`: the Quarantine confirmation for one Finding, with whether
 //!   Agent sessions appear to be running, asked of the daemon just before.
@@ -35,7 +36,7 @@
 //! - `agentsweep://state-event`: every state event on the daemon's subscribe
 //!   stream, as the wire carries it.
 //! - `agentsweep://findings`: the Findings window's view, whenever the list,
-//!   a count or the Posture changes.
+//!   a count, the Overview or the Posture changes.
 //! - `agentsweep://folder`: the Folder Scan in hand: running, done or failed.
 
 use std::sync::{Arc, Mutex};
@@ -419,15 +420,13 @@ fn take(app: &AppHandle, update: Update) {
     match update {
         Update::View(view) => {
             let shell = app.state::<Shell>();
-            if view.protection_off {
-                let follow = shell
-                    .frame
-                    .lock()
-                    .expect("the frame is not poisoned")
-                    .off(&view.detail);
-                if follow != Follow::Nothing {
-                    render(app);
-                }
+            let follow = shell
+                .frame
+                .lock()
+                .expect("the frame is not poisoned")
+                .view(&view);
+            if follow != Follow::Nothing {
+                render(app);
             }
             let changed_glyph = {
                 let mut held = shell.view.lock().expect("the view is not poisoned");

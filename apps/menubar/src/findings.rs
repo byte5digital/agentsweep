@@ -43,6 +43,11 @@ pub struct ScanLine {
     pub running: bool,
     /// Its progress, or the last Scan on one line once none runs.
     pub line: String,
+    /// How many Items the running Scan has checked, zero once none runs.
+    pub done: usize,
+    /// How many Items it found to check, zero while it is still looking and
+    /// once none runs.
+    pub total: usize,
 }
 
 /// The Findings window's list, kept from the status and the stream.
@@ -76,6 +81,7 @@ impl Findings {
                     (Some(summary), false) => scan_line(summary),
                     (None, false) => String::new(),
                 },
+                ..ScanLine::default()
             };
         }
     }
@@ -102,6 +108,7 @@ impl Findings {
                 self.scan = ScanLine {
                     running: true,
                     line: progress_line(0, 0),
+                    ..ScanLine::default()
                 };
                 Follow::Render
             }
@@ -109,6 +116,8 @@ impl Findings {
                 self.scan = ScanLine {
                     running: true,
                     line: progress_line(*done, *total),
+                    done: *done,
+                    total: *total,
                 };
                 Follow::Render
             }
@@ -118,6 +127,7 @@ impl Findings {
                 self.scan = ScanLine {
                     running: false,
                     line: scan_line(summary),
+                    ..ScanLine::default()
                 };
                 Follow::Refresh
             }
@@ -147,8 +157,7 @@ impl Findings {
             }
             StateEvent::HealthChanged { health } => self.health(health),
             StateEvent::Activity { .. } | StateEvent::SettingsChanged { .. } => Follow::Nothing,
-            // The minimal window shows no Overview; the full window's
-            // Overview pane reads it.
+            // The list holds no Overview; the window's frame keeps it.
             StateEvent::OverviewChanged { .. } => Follow::Nothing,
         }
     }

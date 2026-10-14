@@ -20,6 +20,8 @@
 //!   subscribe stream, with the actions the daemon allows on each Finding.
 //! - [`frame`]: the window's sidebar, its counts, the two Finding panes and
 //!   the Posture the window is shown in.
+//! - [`overview`]: the Overview pane: the status sentence, the Agents, the
+//!   last check, the Rule Pack's date and the Scan in hand.
 //! - [`wording`]: how a Finding reads in the Simple Posture, and the
 //!   technical table behind it.
 //! - [`folder`]: the answer of a Folder Scan as the window shows it.
@@ -38,6 +40,7 @@ pub mod frame;
 pub mod glyph;
 pub mod launch_agent;
 pub mod link;
+pub mod overview;
 pub mod placement;
 pub mod popover;
 pub mod supervision;

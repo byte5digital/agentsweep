@@ -30,7 +30,7 @@ use agentsweep_core::eventlog::{EventLog, PackChange, PackRules, RulePackRecord}
 use agentsweep_core::finding::{Finding, FindingId, FindingState};
 use agentsweep_core::health::{Health, Protection, StateFileHealth};
 use agentsweep_core::item::Scope;
-use agentsweep_core::keychain::{KeySource, MemoryKeySource};
+use agentsweep_core::keychain::{ClaudeKeyStore, KeySource, MemoryKeySource};
 use agentsweep_core::packs::{LoadedPack, PackOrigin, PackStore, Verdict, judge};
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::rules::RulePack;
@@ -172,7 +172,10 @@ pub struct Daemon {
     pub(crate) state: Mutex<State>,
     /// The user's choices, as the settings file holds them, or every default
     /// while that file cannot be read.
-    settings: Mutex<Settings>,
+    pub(crate) settings: Mutex<Settings>,
+    /// Where the Claude API key is kept: the second item of the login
+    /// Keychain for the shipped daemon, memory for a test or a hand run.
+    pub(crate) claude_key: Box<dyn ClaudeKeyStore + Send + Sync>,
     /// Every state a client is shown, by the precedence of spec section 6.6.
     pub(crate) health: Mutex<Health>,
     /// Held by whatever writes the Event Log or the Baseline: a Scan from
@@ -380,6 +383,7 @@ impl Daemon {
             tuning,
             state: Mutex::new(state),
             settings: Mutex::new(settings),
+            claude_key: crate::engine::claude_key_store(options.key_source),
             health: Mutex::new(health),
             writing: Mutex::new(()),
             raised: Mutex::new(Vec::new()),
@@ -1041,6 +1045,9 @@ impl Daemon {
                 let pack = self.pack_in_force();
                 crate::folder_scan::folder_scan(&pack, path).map(|result| result.to_value())
             }
+            Request::Engine { change } => self.change_engine(change).map(|state| state.to_value()),
+            Request::SetClaudeKey { key } => self.set_claude_key(key).map(|state| state.to_value()),
+            Request::RemoveClaudeKey => self.remove_claude_key().map(|state| state.to_value()),
             // Everything else acts, and is carried out where acting lives.
             _ => self.act(request),
         }

@@ -50,6 +50,7 @@ pub mod budgets;
 pub mod bundle_watch;
 pub mod change_scan;
 pub mod due;
+pub mod engine;
 pub mod folder_scan;
 pub mod full_scan;
 pub mod log;

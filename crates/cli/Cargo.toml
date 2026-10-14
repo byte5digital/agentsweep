@@ -12,8 +12,9 @@ description = "Scans the local configuration surfaces of Claude Code and Codex a
 #   `cargo install`ed binary is not one of them.
 # - The in-bundle build, feature `bundle`, which the app's build turns on. It
 #   is what the AgentSweep app ships in its bundle: a client of the daemon
-#   (`status`, the action commands, `rule-feed` and a bare `scan`, which asks
-#   the daemon for a Full Scan), and it runs `scan <dir>` in-process as well.
+#   (`status`, the action commands, `rule-feed`, the Gate's `gate` and a bare
+#   `scan`, which asks the daemon for a Full Scan), and it runs `scan <dir>`
+#   in-process as well.
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -29,7 +30,7 @@ path = "src/main.rs"
 default = []
 # The in-bundle build: the daemon client. Everything that reaches the daemon is
 # behind it, and so is the IPC crate.
-bundle = ["dep:agentsweep-ipc"]
+bundle = ["dep:agentsweep-ipc", "dep:serde_json"]
 
 [dependencies]
 agentsweep-adapter-claude-code.workspace = true
@@ -40,6 +41,9 @@ agentsweep-core.workspace = true
 # protocol and the client, never the write side of a store (ADR 0008). Only the
 # in-bundle build links it.
 agentsweep-ipc = { workspace = true, optional = true }
+# The Gate reads the event JSON an Agent hands it and prints the decision the
+# Agent honours. Only the in-bundle build has the Gate.
+serde_json = { version = "1.0.151", optional = true }
 
 [dev-dependencies]
 # The repository the Folder Scan tests point at is written by this builder,

@@ -26,6 +26,7 @@ dependencies = [
  "agentsweep-adapter-workspace",
  "agentsweep-core",
  "agentsweep-ipc",
+ "serde_json",
 ]
 
 [[package]]

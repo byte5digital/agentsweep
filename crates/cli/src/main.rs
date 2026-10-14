@@ -7,8 +7,9 @@
 //! It is a client of the daemon: `status`, which reaches the daemon and does
 //! nothing else; the action commands, each of which is one request to the
 //! daemon, the only process that quarantines, restores or trusts anything;
-//! `rule-feed`; and a bare `scan`, which asks the daemon for a Full Scan and
-//! follows it to the end. It runs `scan <dir>` in-process as well.
+//! `rule-feed`; `gate`, the hook both Agents run as the Gate; and a bare
+//! `scan`, which asks the daemon for a Full Scan and follows it to the end. It
+//! runs `scan <dir>` in-process as well.
 //!
 //! The crates.io build, the default features, is an on-demand scanner:
 //! `scan <dir>` and nothing else. It has no code path to the daemon, because
@@ -17,14 +18,16 @@
 //!
 //! `scan <dir>` is the Folder Scan in both. It runs entirely in this process,
 //! never reaches a daemon, never acts and writes nothing, and it is one module
-//! compiled into both builds, so it prints the same in both. The Gate and
-//! `uninstall` arrive with their own milestones.
+//! compiled into both builds, so it prints the same in both. `uninstall`
+//! arrives with its own milestone.
 
 #[cfg(feature = "bundle")]
 mod actions;
 #[cfg(feature = "bundle")]
 mod developer;
 mod folder_scan;
+#[cfg(feature = "bundle")]
+mod gate;
 #[cfg(feature = "bundle")]
 mod rule_feed;
 #[cfg(feature = "bundle")]
@@ -49,6 +52,10 @@ Usage:
                           follow it to the end.
   agentsweep scan <dir>   Check one folder before you open it with an agent.
                           This runs here, on its own, and records nothing.
+  agentsweep gate --agent <claude-code | codex>
+                          The Gate, which the agents run as a hook: it reads
+                          the event on stdin, asks the running AgentSweep and
+                          answers the agent. It always exits 0.
   agentsweep --version    Print the version.
   agentsweep --help       Print this message.
 
@@ -163,6 +170,7 @@ fn bundled(command: &str, arguments: &[String]) -> ExitCode {
     match command {
         "status" => status(arguments),
         "rule-feed" => rule_feed(arguments),
+        "gate" => gate(arguments),
         command if actions::COMMANDS.contains(&command) => act(command, arguments),
         "--developer-list-items" => developer_list_items(arguments),
         "--developer-scan-items" => developer_scan_items(arguments),
@@ -259,6 +267,20 @@ fn rule_feed(arguments: &[String]) -> ExitCode {
     let (rendered, code) = rule_feed::run(&invocation);
     print!("{rendered}");
     ExitCode::from(code)
+}
+
+/// The Gate: one event on stdin, one verdict from the daemon, the decision the
+/// Agent honours on stdout. It always exits 0, so neither Agent reads a
+/// failure of AgentSweep as a decision (spec section 7.4).
+#[cfg(feature = "bundle")]
+fn gate(arguments: &[String]) -> ExitCode {
+    use std::io::Write as _;
+
+    let answer = gate::run(gate::parse(arguments), std::io::stdin(), gate::DEADLINE);
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.write_all(answer.as_bytes());
+    let _ = stdout.flush();
+    ExitCode::SUCCESS
 }
 
 /// Asks the daemon to act on one Finding, Item or Receipt.
@@ -369,6 +391,18 @@ mod tests {
             assert!(USAGE.contains("exits 3 when no daemon answered"), "{USAGE}");
         }
 
+        /// The Gate has one entry, which says it always exits 0 rather than
+        /// with the codes every other command that reaches the daemon uses.
+        #[test]
+        fn the_usage_names_the_gate_in_one_entry() {
+            assert_eq!(USAGE.matches("agentsweep gate").count(), 1, "{USAGE}");
+            assert!(
+                USAGE.contains("agentsweep gate --agent <claude-code | codex>"),
+                "{USAGE}"
+            );
+            assert!(USAGE.contains("It always exits 0."), "{USAGE}");
+        }
+
         /// A bare `scan` is the daemon's Full Scan and says so.
         #[test]
         fn the_usage_names_the_bare_scan() {
@@ -412,6 +446,7 @@ mod tests {
                 "restore",
                 "trust",
                 "rule-feed",
+                "gate",
                 "--developer",
             ] {
                 assert!(!USAGE.contains(&format!("agentsweep {command}")), "{USAGE}");

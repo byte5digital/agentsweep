@@ -41,6 +41,7 @@
 
 pub mod document;
 pub mod enforce;
+pub mod gate;
 pub mod hooks;
 pub mod mcp;
 pub mod registry;
@@ -51,6 +52,9 @@ use std::path::{Path, PathBuf};
 use agentsweep_core::adapter::{
     Descriptor, Detection, Enumeration, Primitive, Problem, ProblemReason, ProjectRegistration,
     Surface, SurfaceAdapter, WatchRoots,
+};
+use agentsweep_core::gate_registration::{
+    GateCheck, GateCommand, GateEntry, GateError, SurfaceWriter,
 };
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{
@@ -691,11 +695,7 @@ impl Codex {
     ) {
         let base = layer.scope.root().map(Path::to_path_buf);
         for found in hooks::handlers(document, events_path) {
-            let locator = format!(
-                "{}#{}",
-                document.surface,
-                HookView::locator(&found.event, &found.matcher, &found.handler)
-            );
+            let locator = found.locator(document);
             let mut view = HookView::of(&found.event, &found.matcher, &found.handler);
             if let Some(resolved) = host.resolve_command_line(&view.command, base.as_deref()) {
                 view.command_file_type = file_type_of(host, &resolved);
@@ -709,11 +709,7 @@ impl Codex {
                 document.path.clone(),
                 provenance_of(document),
                 hook_activation(layer, document, gates, &found),
-                canonical_entry(&HookView::normal_form(
-                    &found.event,
-                    &found.matcher,
-                    &found.handler,
-                )),
+                found.content(),
             )
             .with_view(ParsedView::Hook(view));
             item.registered = registered;
@@ -1134,6 +1130,30 @@ impl SurfaceAdapter for Codex {
         conflict: Conflict,
     ) -> RestoreReport {
         quarantine::replay_in_reverse(host, store, receipt, conflict)
+    }
+
+    /// The Gate's two groups in the user hooks file of the effective Codex
+    /// home and their pins in its user config layer ([`gate::register`]).
+    fn register_gate(
+        &self,
+        host: &Host,
+        writer: &dyn SurfaceWriter,
+        command: &GateCommand,
+    ) -> Result<Vec<GateEntry>, GateError> {
+        gate::register(self, host, writer, command)
+    }
+
+    fn check_gate(&self, host: &Host, command: &GateCommand) -> GateCheck {
+        gate::check(self, host, command)
+    }
+
+    fn remove_gate(
+        &self,
+        host: &Host,
+        writer: &dyn SurfaceWriter,
+        command: &GateCommand,
+    ) -> Result<Vec<GateEntry>, GateError> {
+        gate::remove(self, host, writer, command)
     }
 }
 

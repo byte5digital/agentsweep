@@ -27,6 +27,7 @@
 use std::path::Path;
 
 use agentsweep_core::item::{canonical_entry, sha256_hex};
+use agentsweep_core::views::HookView;
 use serde_json::{Map, Value, json};
 
 use crate::document::Document;
@@ -59,6 +60,28 @@ pub struct Handler {
     pub handler_index: usize,
     /// The handler itself, as it is written.
     pub handler: Value,
+}
+
+impl Handler {
+    /// The locator of the Hook Item this handler is, in the document it was
+    /// read from: `<file>#<event>/<matcher>/<hash prefix>` (spec section
+    /// 4.6.1). The enumeration and the Gate's own writes name it the same way.
+    pub fn locator(&self, document: &Document) -> String {
+        format!(
+            "{}#{}",
+            document.surface,
+            HookView::locator(&self.event, &self.matcher, &self.handler)
+        )
+    }
+
+    /// The content the Hook Item is hashed over: the canonical normal form.
+    pub fn content(&self) -> Vec<u8> {
+        canonical_entry(&HookView::normal_form(
+            &self.event,
+            &self.matcher,
+            &self.handler,
+        ))
+    }
 }
 
 /// Every hook handler a document registers under one key path, events in
@@ -246,8 +269,6 @@ fn flag(handler: &Value, name: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-
-    use agentsweep_core::views::HookView;
 
     use super::*;
 

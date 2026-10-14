@@ -546,6 +546,7 @@ pub(crate) mod tests {
             },
             fixed_version: String::new(),
             switched: false,
+            facts: Default::default(),
             first_seen: moment("2026-09-24T08:00:00.000Z"),
             notified_at: None,
         }

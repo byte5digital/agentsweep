@@ -28,6 +28,7 @@ use crate::envelope::{Timestamp, canonical, hex_to_bytes, hmac_sha256_verify};
 use crate::finding::{
     Category, FindingId, FindingState, RuleStatus, Severity, Source, Standing, Tier,
 };
+use crate::finding_facts::FindingFacts;
 use crate::item::{ItemId, Kind};
 use crate::keychain::{KeyError, KeySource};
 use crate::paths::DataDirectory;
@@ -238,6 +239,12 @@ pub struct RecordedFinding {
     /// switching it off and back on. False otherwise, and in a state file
     /// written before switches were used.
     pub switched: bool,
+    /// What a client needs beside the Finding to word it and offer the right
+    /// action: who stopped it, the Item's Scope, Activation and Provenance,
+    /// why nothing happened, the fired Heuristics and the Score (spec sections
+    /// 8.4 and 8.5). Additive: a state file or a client from before carries
+    /// none of it.
+    pub facts: FindingFacts,
     /// When AgentSweep first saw it.
     pub first_seen: Timestamp,
     /// When the user was told about it, absent when they have not been.
@@ -274,6 +281,7 @@ impl RecordedFinding {
             receipt_id: standing.receipt_id.clone(),
             fixed_version: String::new(),
             switched: false,
+            facts: FindingFacts::default(),
             first_seen,
             notified_at: None,
         }
@@ -334,6 +342,7 @@ impl RecordedFinding {
         }
         map.insert("tier".to_string(), Value::from(self.tier.as_str()));
         map.insert("title".to_string(), Value::from(self.title.as_str()));
+        self.facts.write_into(&mut map);
         Value::Object(map)
     }
 
@@ -370,6 +379,7 @@ impl RecordedFinding {
                 .get("switched")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            facts: FindingFacts::read_from(value),
             first_seen: Timestamp::parse(text("first_seen")?)?,
             notified_at: moment("notified_at")?,
         })

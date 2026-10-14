@@ -1225,6 +1225,7 @@ mod tests {
             receipt_id: String::new(),
             fixed_version: String::new(),
             switched: false,
+            facts: Default::default(),
             first_seen: Timestamp::now(),
             notified_at: None,
         }

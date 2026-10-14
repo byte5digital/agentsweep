@@ -545,7 +545,7 @@ pub fn replay_in_reverse(
 /// here is compiled into a build without the `daemon` feature: the command
 /// line interface carries no code that could move a file out of a Surface.
 #[cfg(feature = "daemon")]
-mod disk {
+pub(crate) mod disk {
     use std::io;
     use std::path::{Path, PathBuf};
 
@@ -564,7 +564,7 @@ mod disk {
     /// an Agent reading a config layer sees either all of the old file or all
     /// of the new one, never a half-written one. The temp file is in the same
     /// directory so that the rename cannot cross a volume.
-    pub(super) fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
+    pub(crate) fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
         use std::io::Write as _;
 
         let directory = path.parent().unwrap_or(Path::new("."));

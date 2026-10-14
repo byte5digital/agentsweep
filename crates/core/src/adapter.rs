@@ -12,10 +12,17 @@
 //! is not the adapter's to decide: it is the [`ELIGIBILITY`] table of spec
 //! section 5.2, and an adapter may only declare which part of a row it can
 //! carry out.
+//!
+//! Beside the trait of spec section 3.2 sit the three Gate methods,
+//! [`SurfaceAdapter::register_gate`], [`SurfaceAdapter::check_gate`] and
+//! [`SurfaceAdapter::remove_gate`], because which file an Agent's hooks live
+//! in is that Agent's file knowledge (the owner's decision of 2026-10-14). An
+//! adapter that does not override them says the Agent has no Gate.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::gate_registration::{GateCheck, GateCommand, GateEntry, GateError, SurfaceWriter};
 use crate::host::Host;
 use crate::item::{Item, ItemId, Kind, Scope, Shape};
 use crate::quarantine::{Conflict, EnforcementError, Receipt, RestoreReport, Store};
@@ -477,6 +484,46 @@ pub trait SurfaceAdapter {
             kind: item.kind,
             primitive: primitives.first().copied().unwrap_or(Primitive::MoveOut),
         })
+    }
+
+    /// Writes the Gate's own entries into this Agent's user settings, one for
+    /// each event the Gate listens on that does not carry one unchanged
+    /// already, and names every entry it wrote (spec sections 7.2 and 7.6).
+    ///
+    /// The file is the one in the effective config directory the Host gives,
+    /// never one followed from an env file. Each entry is appended after what
+    /// is there, through the compare-and-swap of
+    /// [`crate::gate_registration::rewrite`]; a file that does not parse is
+    /// never written over. The default is that this Agent has no Gate.
+    fn register_gate(
+        &self,
+        host: &Host,
+        writer: &dyn SurfaceWriter,
+        command: &GateCommand,
+    ) -> Result<Vec<GateEntry>, GateError> {
+        let _ = (host, writer, command);
+        Err(GateError::NoGate)
+    }
+
+    /// Whether every event the Gate listens on carries AgentSweep's entry with
+    /// the command, arguments and timeout unchanged. Reads, never writes. The
+    /// default is that this Agent has no Gate.
+    fn check_gate(&self, host: &Host, command: &GateCommand) -> GateCheck {
+        let _ = (host, command);
+        GateCheck::NoGate
+    }
+
+    /// Takes away exactly the entries whose command, arguments and timeout
+    /// are AgentSweep's, and names every entry it took away. The default is
+    /// that this Agent has no Gate.
+    fn remove_gate(
+        &self,
+        host: &Host,
+        writer: &dyn SurfaceWriter,
+        command: &GateCommand,
+    ) -> Result<Vec<GateEntry>, GateError> {
+        let _ = (host, writer, command);
+        Err(GateError::NoGate)
     }
 
     /// Puts one Item back by replaying its Receipt in reverse.

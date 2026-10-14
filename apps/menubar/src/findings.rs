@@ -366,6 +366,8 @@ pub fn card(finding: &RecordedFinding) -> Value {
     value["actions"] = Value::Array(actions(finding).iter().map(Action::to_value).collect());
     value["note"] = Value::from(note(finding));
     value["trustConfirm"] = trust_confirmation(finding);
+    value["simple"] = crate::wording::simple(finding).to_value();
+    value["technical"] = crate::wording::technical_value(finding);
     value
 }
 

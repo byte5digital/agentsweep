@@ -20,6 +20,8 @@
 //!   subscribe stream, with the actions the daemon allows on each Finding.
 //! - [`frame`]: the window's sidebar, its counts, the two Finding panes and
 //!   the Posture the window is shown in.
+//! - [`wording`]: how a Finding reads in the Simple Posture, and the
+//!   technical table behind it.
 //! - [`folder`]: the answer of a Folder Scan as the window shows it.
 //! - [`window`]: when the app shows in the Dock.
 //! - [`placement`]: where the popover and the Findings window open.
@@ -40,3 +42,4 @@ pub mod placement;
 pub mod popover;
 pub mod supervision;
 pub mod window;
+pub mod wording;

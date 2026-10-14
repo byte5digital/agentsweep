@@ -501,3 +501,65 @@ fn the_window_frame_lands_the_findings_in_their_panes_and_follows_the_posture() 
     });
     assert!(!ids(&frame.to_value()["panes"]["threats"]).contains(&skill.id.to_string()));
 }
+
+/// The Simple Posture words what a real daemon found: the title from the
+/// Rule's phrase, the Item's kind and its name, and no id or path in any
+/// line; the technical details carry the Item id the Simple lines leave out.
+#[test]
+fn the_simple_posture_words_the_findings_a_real_daemon_sends() {
+    let sandbox = Sandbox::new("wording");
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let status: Status = asking.status().expect("a status");
+    let mut frame = Frame::new();
+    frame.load(&status);
+    let view = frame.to_value();
+
+    let card_of = |pane: &str, ends_with: &str| -> Value {
+        view["panes"][pane]
+            .as_array()
+            .expect("a pane")
+            .iter()
+            .find(|card| {
+                card["itemId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .ends_with(ends_with)
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("no card on {ends_with}: {view}"))
+    };
+    let skill = card_of("threats", "skills/setup");
+    assert_eq!(
+        skill["simple"]["title"],
+        "The skill 'setup' downloads and runs hidden code"
+    );
+    assert_eq!(skill["simple"]["severity"], "Dangerous");
+    assert_eq!(skill["simple"]["chip"], "red");
+    let bypass = card_of("exposures", "#/permissions/defaultMode");
+    assert_eq!(
+        bypass["simple"]["title"],
+        "The setting 'permissions.defaultMode' switches off the agent's safety checks"
+    );
+    assert_eq!(bypass["simple"]["chip"], "amber");
+
+    for card in [&skill, &bypass] {
+        let item_id = card["itemId"].as_str().expect("an Item id");
+        let lines = card["simple"]["lines"].as_array().expect("lines");
+        assert!(!lines.is_empty());
+        for text in
+            std::iter::once(&card["simple"]["title"]).chain(lines.iter().map(|l| &l["text"]))
+        {
+            let text = text.as_str().expect("a string");
+            assert!(!text.contains('/') && !text.contains(item_id), "{text}");
+        }
+        assert!(
+            card["technical"]
+                .as_array()
+                .expect("the technical table")
+                .iter()
+                .any(|row| row["value"] == item_id),
+            "{card}"
+        );
+    }
+}

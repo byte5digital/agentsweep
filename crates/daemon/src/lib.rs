@@ -53,6 +53,7 @@ pub mod due;
 pub mod engine;
 pub mod folder_scan;
 pub mod full_scan;
+pub mod gate;
 pub mod integrity;
 pub mod log;
 pub mod machine;

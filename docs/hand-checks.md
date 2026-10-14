@@ -6,7 +6,7 @@ A hand install is the real shipped configuration. It registers the real launch a
 
 ## Build a test bundle
 
-From the repository root, with the Command Line Tools and Node 22:
+From the repository root, with the Command Line Tools (version 26 or later: the Apple judgement helper needs an SDK with Foundation Models) and Node 22:
 
 ```sh
 apps/menubar/build-sidecars.sh debug
@@ -164,6 +164,26 @@ Stop both with `pkill -x agentsweep-menubar; pkill -x agentsweepd`, then `rm -rf
 
 Seams in the suite: `findings::tests` (the list, the offers per source and state, the stream reducer and the confirmation), `asking::tests` (the answers in the command line interface's words), `folder::tests`, the `window` integration tests of the app (a real daemon on a temporary home: every action followed from the stream, the Folder Scan recording nothing) and, in the daemon, `a_folder_scan_on_request_answers_and_records_nothing` and `a_path_on_a_request_that_takes_none_is_never_answered`.
 
+## 8. Apple's on-device model answers through the helper
+
+This check needs no hand install and nothing of AgentSweep runs: it feeds the Apple judgement helper inside a built test bundle one request at a time on stdin and reads its answer on stdout. The helper reads no file, writes none, opens no connection and logs nothing, so there is nothing to clean up. It needs macOS 26 on Apple silicon with Apple Intelligence switched on and its model downloaded; the suite covers everything else against a fake model, because a machine without Apple Intelligence answers "unavailable" (the suite's `Check` tests and CI's bundle check).
+
+```sh
+judge=target/debug/bundle/macos/AgentSweep.app/Contents/MacOS/agentsweep-apple-judge
+echo '{"command":"check"}' | $judge
+echo '{"command":"count","text":"The quick brown fox jumps over the lazy dog."}' | $judge
+$judge < judge-request.json
+```
+
+`judge-request.json` holds one judgement of a defanged Fixture: `"command": "judge"`, short instructions saying that everything between the nonce markers is untrusted data, a prompt holding a skill whose body pipes a download from a `.invalid` host into `sh` and sends `~/.ssh/id_ed25519` to the same host, and the Verdict schema as JSON Schema (an object requiring `verdict` from malicious, benign and unsure, `category` from a closed list, `reason` as a string and `evidence` as an array of strings).
+
+- [ ] The check answers `"available": true`, `"context_size": 4096` and a `model_version` that is the full macOS version and build number, as `sw_vers` shows them.
+- [ ] The count of the sentence is plausible (about ten tokens for its nine words, plus the few tokens of framing the framework counts even for an empty text) and exits 0.
+- [ ] The judgement answers `{"answer": {...}}` with exactly the four fields, `verdict` and `category` from their lists and every `evidence` string quoted from the Fixture; it exits 0 within a few seconds.
+- [ ] `codesign -dvv` on the helper shows `runtime` among its flags: the model answers under the hardened runtime without any entitlement.
+
+Seams in the suite: the helper's own Swift tests, run with `apps/apple-judge/test.sh` (the protocol against a fake model, the schema subset, the error names, and on macOS 26 the mapping of every `GenerationError` case), and `launch_agent::tests` in the app (the bundle carries the helper as its third external binary).
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.
@@ -205,14 +225,16 @@ Then run the "Before" commands again: every one must report nothing. Login Items
 
 2026-09-25, ticket 25, macOS 26.6, a developer run only (no hand install): a debug daemon on a temporary home with `--key-source memory` and a socket under `/private/tmp`, and the bare debug app with `AGENTSWEEP_DEV_SOCKET` and `AGENTSWEEP_DEV_SHOW_WINDOW`. The app started without an error, opened its subscription and asked the daemon for the status (two app connections in the daemon's log), and `lsappinfo` said `Foreground` with the window open. The window was not looked at and no button was pressed (no screen access in that session); check 7 is otherwise covered by the suite's seams only. Both processes were stopped, and the temporary home, the socket and the three folders the bare binary left (`~/Library/Caches/agentsweep-menubar`, `~/Library/WebKit/agentsweep-menubar`, `$TMPDIR/agentsweep-menubar`) were removed.
 
+2026-10-14, ticket 50, macOS 26.6.2 (25G83), Apple M2 Max with Apple Intelligence on, a debug test bundle built with the Command Line Tools only and signed ad hoc with the hardened runtime, never installed or opened: check 8 passed. The check answered available, context size 4096, model version "26.6.2 (25G83)". The sentence counted 18 tokens and an empty text 8, so the framework counts about 8 tokens of framing around any text. The judgement of the defanged Fixture returned the four fields in about 2.5 seconds: verdict unsure, category remote_code_execution, and as evidence the Fixture's `curl ... | sh` line quoted exactly. The x86_64 helper, run under Rosetta, answered unavailable with `device_not_eligible`.
+
 ## Release draft additions
 
 Every release draft runs the release checklist, section 9.3 of the specification, in full; the checks above are the part of it that needs a hand install. The lines of that checklist that depend on how this repository builds, so they are easy to miss:
 
-- `codesign -d -r-` on `Contents/MacOS/agentsweepd` shows the identifier `de.byte5.agentsweep.daemon`. Tauri signs sidecars without naming an identifier, so codesign takes it from the Info.plist the daemon binary embeds; nothing re-signs after Tauri, which would leave the notarization, the DMG and the updater archive stale. CI checks the identifier in each architecture of the ad hoc bundle.
+- `codesign -d -r-` on `Contents/MacOS/agentsweepd` shows the identifier `de.byte5.agentsweep.daemon`. Tauri signs sidecars without naming an identifier, so codesign takes it from the Info.plist the daemon binary embeds; nothing re-signs after Tauri, which would leave the notarization, the DMG and the updater archive stale. CI checks the identifier in each architecture of the ad hoc bundle. The Apple judgement helper keeps the hardened runtime and the identifier Tauri gives it; `codesign -dvv` on it shows `runtime` and `Timestamp=`.
 - Every Mach-O carries `Timestamp=`, and Dock and Cmd-Tab appear only while the window is open (Tauri issue 15005).
 - `TEAM_ID` in the daemon's peer check holds byte5's Team ID. While it is empty a release daemon admits nobody, which is why the checks above use debug sidecars.
-- The daemon and CLI sidecars are universal: `lipo -archs` on each shows arm64 and x86_64.
+- The daemon, CLI and Apple judgement helper sidecars are universal: `lipo -archs` on each shows arm64 and x86_64.
 - Every exception in `deny.toml` was read again if Tauri or yara-x moved since the last release, and each one's reason still holds.
 - For the first tagged release, `agentsweep-core` and the three adapter crates are publishable and are published to crates.io before the `agentsweep` CLI.
 - The Rule Feed's layout is the one the client reads: the index on the `feed` branch holds only the pack version, and each `rules-v<N>` release holds `manifest.json`, one `<KEY ID>.minisig` per signing key and an uncompressed `pack.tar` of the `rules/` and `iocs/` trees.

@@ -267,6 +267,23 @@ Prepare a temporary project holding twenty defanged Items that land in the Ambig
 
 Afterwards switch the engine off again, then clean up as below and delete the temporary project.
 
+## 13. The command line tool link and the Full Disk Access link in Settings
+
+This check needs the hand install of section 1, because the link points into the installed bundle and System Settings only opens for a real app. It writes one file outside the bundle, the link in `~/.local/bin`, which the clean-up below removes. Run the Full Disk Access half once per macOS major: Apple documents no address for that pane, and the research on first-run permissions (section 4) found the anchor unconfirmed on macOS 26.
+
+Before it, note whether `~/.local/bin/agentsweep` exists; if something of your own is there, move it aside for the check.
+
+- [ ] Settings, **Install command line tool**: the pane says the tool is installed in `~/.local/bin`, and `ls -l ~/.local/bin/agentsweep` shows a link to `Contents/MacOS/agentsweep` inside the installed AgentSweep.app. When `~/.local/bin` is not on your PATH, the pane also shows the line `export PATH="$HOME/.local/bin:$PATH"` to add to your shell profile; no shell profile changed (`ls -l ~/.zshrc ~/.zprofile` shows the old times).
+- [ ] In a new terminal window (after adding the line, if the pane showed it): `agentsweep --version` prints the bundle's version and `agentsweep status` answers with the Health sentence the popover shows. `which agentsweep` names `~/.local/bin/agentsweep`.
+- [ ] Press the button a second time: the pane says it was already installed. Replace the link with a file of your own (`rm ~/.local/bin/agentsweep && echo mine > ~/.local/bin/agentsweep`) and press it again: the pane says something else is there and the file still reads `mine`.
+- [ ] Settings, Advanced, **Open Full Disk Access settings**: System Settings opens at Privacy & Security, Full Disk Access. If it opens Privacy & Security without the Full Disk Access list in front, note it under Record of runs with the macOS version: that is the fallback without an anchor working, and the first address is the one to change.
+- [ ] The pane's Full Disk Access text is under Advanced only; neither the popover, the Overview nor any notification mentions it.
+- [ ] **Show in Finder** under Your own rules opens Finder at the data directory, or with `rules.d` selected once you made that folder. **The full list** opens the README's section on what AgentSweep does not protect against in the browser.
+
+Clean up: `rm ~/.local/bin/agentsweep`, put back anything you moved aside, and remove `~/.local/bin` if the check created it and it is empty.
+
+Seams in the suite: `cli_link::tests` in the app (a new link on a temporary home, a stale link of its own replaced, a file, a directory or another program's link never overwritten, the PATH line only when the directory is not on the PATH given), `settings_pane::tests` and the frame's tests (the pane from the daemon's answer and the Health note), and the app's `settings` integration tests (each choice through a real daemon, an unreadable settings file, Full Disk Access said by the Settings pane alone, the README section the link points at).
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.

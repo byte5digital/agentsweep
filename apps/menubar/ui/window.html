@@ -20,16 +20,6 @@
           <p class="wait" id="actions-wait" hidden></p>
         </header>
 
-        <section class="notice" id="notice" hidden>
-          <p class="message" id="notice-message"></p>
-          <p class="muted" id="notice-sessions"></p>
-          <div class="actions" id="notice-choices"></div>
-          <details id="notice-details">
-            <summary>Details</summary>
-            <pre id="notice-lines"></pre>
-          </details>
-        </section>
-
         <section class="folder" id="folder" hidden>
           <h2>Scan a folder</h2>
           <p class="verdict" id="folder-verdict"></p>
@@ -103,11 +93,22 @@
     <dialog id="confirm">
       <form method="dialog">
         <p class="message" id="confirm-question"></p>
-        <p id="confirm-sessions"></p>
-        <p class="muted" id="confirm-project"></p>
+        <div id="confirm-lines"></div>
         <div class="actions">
           <button value="cancel">Cancel</button>
           <button value="ok" class="primary" id="confirm-ok"></button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- A Restore that met something else at the original place (spec
+         section 5.4): the two choices, each its own Restore. -->
+    <dialog id="conflict">
+      <form method="dialog">
+        <p class="message" id="conflict-message"></p>
+        <div class="actions">
+          <button value="cancel">Cancel</button>
+          <span id="conflict-choices"></span>
         </div>
       </form>
     </dialog>

@@ -38,78 +38,108 @@ function el(tag, className, text) {
   return node;
 }
 
-// The confirmation dialog: answers true when the user confirmed.
-function confirmWith(asked, label) {
+// A confirmation the app worded (the question, the lines under it and what
+// the confirming button says): answers true when the user confirmed.
+function confirmWith(asked) {
   const dialog = $("confirm");
   $("confirm-question").textContent = asked.question;
-  $("confirm-sessions").textContent = asked.sessions;
-  $("confirm-sessions").hidden = asked.sessions === "";
-  $("confirm-project").textContent = asked.project;
-  $("confirm-project").hidden = asked.project === "";
-  $("confirm-ok").textContent = label;
+  $("confirm-lines").replaceChildren(...asked.lines.map((line) => el("p", "", line)));
+  $("confirm-ok").textContent = asked.ok;
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
     dialog.showModal();
   });
 }
 
-// What an action answered: the daemon's sentence, whether Agent sessions
-// appear to be running, and the lines the command line interface prints.
-function showResult(result) {
-  $("notice").hidden = false;
-  $("notice-message").textContent = result.message;
-  $("notice-sessions").textContent = result.sessions;
-  $("notice-sessions").hidden = result.sessions === "";
-  $("notice-lines").textContent = result.details.join("\n");
-  $("notice-details").hidden = result.details.length === 0;
-  const choices = $("notice-choices");
-  choices.replaceChildren();
-  if (result.conflict) {
-    for (const [label, conflict] of [
-      ["Replace the new file", "replace"],
-      ["Restore beside it", "beside"],
-    ]) {
-      const button = el("button", "", label);
-      button.type = "button";
-      button.dataset.action = "restore";
-      button.addEventListener("click", () =>
-        run({ command: "restore", target: result.target, conflict, label }),
-      );
-      choices.append(button);
-    }
-  }
+// The Restore conflict dialog: the daemon's sentence and the two choices
+// the app sent with it, each of which sends its own Restore. Shown only when
+// the daemon answered a Restore with a conflict.
+function askConflict(result, card) {
+  const dialog = $("conflict");
+  $("conflict-message").textContent = result.message;
+  const buttons = result.choices.map((choice) => {
+    const button = el("button", "", choice.label);
+    button.type = "button";
+    button.dataset.action = choice.command;
+    button.addEventListener("click", () => {
+      dialog.close();
+      run(choice, card);
+    });
+    return button;
+  });
+  $("conflict-choices").replaceChildren(...buttons);
   disableActions();
+  dialog.showModal();
 }
 
-function showFailure(why) {
-  showResult({
-    message: String(why),
-    sessions: "",
-    details: [],
-    conflict: false,
-    target: "",
-  });
+// The last action's answer and the Finding it belongs to. It shows beside
+// that Finding, in its detail pane, and stays there after the Finding left
+// the pane (a Quarantine moves it out of Needs your decision) until another
+// Finding is selected. The top of the window carries nothing.
+let answer = null;
+
+// The title a Finding shows in the Posture in force.
+function titleOf(card) {
+  return isDeveloper() ? `${card.kind} · ${card.name}` : card.simple.title;
+}
+
+// Keeps an action's answer for the Finding it was given on, or for the
+// Finding selected in the pane in sight when it names none.
+function showResult(result, card) {
+  const finding = card ?? selectedCard();
+  if (!finding) {
+    $("scan-line").textContent = result.message;
+    return;
+  }
+  answer = { pane: paneOf(finding), id: finding.id, title: titleOf(finding), result };
+  selectedFinding[answer.pane] = finding.id;
+  if (view) {
+    render(view);
+  }
+}
+
+function showFailure(why, card) {
+  showResult({ message: String(why), lines: [], details: [], choices: [], conflict: false }, card);
+}
+
+// One answer as the detail pane shows it: the daemon's sentence, the lines
+// under it (after a Quarantine, its confirmation), and the Receipt lines
+// under Details.
+function renderAnswer(result) {
+  const node = el("section", "answer");
+  node.setAttribute("role", "status");
+  node.append(el("p", "message", result.message));
+  for (const line of result.lines ?? []) {
+    node.append(el("p", "muted", line));
+  }
+  const lines = result.details ?? [];
+  if (lines.length > 0) {
+    const details = el("details");
+    details.append(el("summary", "", "Details"), el("pre", "", lines.join("\n")));
+    node.append(details);
+  }
+  return node;
 }
 
 async function run(action, card) {
   try {
-    if (action.confirm === "quarantine") {
-      const asked = await invoke("sessions", { target: action.target });
-      if (!(await confirmWith(asked, action.label))) {
-        return;
-      }
-    } else if (action.confirm === "trust" && card) {
-      if (!(await confirmWith(card.trustConfirm, action.label))) {
-        return;
-      }
+    const asked = {
+      trust: card?.trustConfirm,
+      "restore-trust": card?.restoreConfirm,
+    }[action.confirm];
+    if (asked && !(await confirmWith(asked))) {
+      return;
     }
     const result = await invoke(action.command, {
       target: action.target,
       conflict: action.conflict,
     });
-    showResult(result);
+    showResult(result, card);
+    if (result.conflict) {
+      askConflict(result, card);
+    }
   } catch (why) {
-    showFailure(why);
+    showFailure(why, card);
   }
 }
 
@@ -146,7 +176,7 @@ function renderCard(card) {
     node.append(el("p", "id", `receipt ${card.receiptId}`));
   }
   if (card.actions.length > 0) {
-    node.append(renderActions(card));
+    node.append(renderActions(card, card.actions));
   }
   return node;
 }
@@ -155,27 +185,36 @@ function renderCard(card) {
 const detailsOpen = new Set();
 
 // The technical table of one Finding: the same rows the Developer Posture
-// shows (spec section 8.2).
+// shows (spec section 8.2), and under it the buttons the Simple Posture
+// keeps behind Show technical details (Trust on a Drift question).
 function renderTechnical(card) {
+  const shown = document.createDocumentFragment();
   const table = el("table", "technical");
   for (const row of card.technical) {
     const line = el("tr");
     line.append(el("th", "", row.label), el("td", "", row.value));
     table.append(line);
   }
-  return table;
+  shown.append(table);
+  const behind = (card.actions ?? []).filter((action) => action.technical);
+  if (behind.length > 0) {
+    shown.append(renderActions(card, behind));
+  }
+  return shown;
 }
 
-function renderActions(card) {
-  const actions = el("div", "actions");
-  for (const action of card.actions) {
+// The buttons of one Finding: those the Posture shows in sight, or the ones
+// given.
+function renderActions(card, actions = card.actions.filter((action) => !action.technical)) {
+  const node = el("div", "actions");
+  for (const action of actions) {
     const button = el("button", "", action.label);
     button.type = "button";
     button.dataset.action = action.command;
     button.addEventListener("click", () => run(action, card));
-    actions.append(button);
+    node.append(button);
   }
-  return actions;
+  return node;
 }
 
 // One Finding in the Simple Posture: the verdict title, the Severity word on
@@ -312,16 +351,40 @@ function renderRow(id, card) {
   return row;
 }
 
+// The pane a Finding is listed in.
+function paneOf(card) {
+  return card.category === "exposure" ? "exposures" : "threats";
+}
+
+// The Finding selected in the pane in sight, if that pane lists Findings.
+function selectedCard() {
+  if (!view || !FINDING_PANES.includes(selectedPane)) {
+    return null;
+  }
+  return view.panes[selectedPane].find((card) => card.id === selectedFinding[selectedPane]) ?? null;
+}
+
 function renderFindingPane(id, cards, loaded) {
   const node = pane(id);
-  if (!cards.some((card) => card.id === selectedFinding[id])) {
+  // An answer stays beside its Finding, even once the Finding left the pane.
+  const kept = answer !== null && answer.pane === id && answer.id === selectedFinding[id];
+  if (!kept && !cards.some((card) => card.id === selectedFinding[id])) {
     selectedFinding[id] = cards.length > 0 ? cards[0].id : null;
   }
-  node.querySelector(".empty").hidden = !loaded || cards.length > 0;
-  node.querySelector(".split").hidden = cards.length === 0;
+  node.querySelector(".empty").hidden = !loaded || cards.length > 0 || kept;
+  node.querySelector(".split").hidden = cards.length === 0 && !kept;
   node.querySelector(".list").replaceChildren(...cards.map((card) => renderRow(id, card)));
   const selected = cards.find((card) => card.id === selectedFinding[id]);
-  node.querySelector(".detail").replaceChildren(...(selected ? [renderFinding(selected)] : []));
+  const detail = [];
+  if (selected) {
+    detail.push(renderFinding(selected));
+  } else if (kept) {
+    detail.push(el("p", "title", answer.title));
+  }
+  if (kept) {
+    detail.push(renderAnswer(answer.result));
+  }
+  node.querySelector(".detail").replaceChildren(...detail);
 }
 
 // A moment in local time, as the popover writes it.
@@ -410,10 +473,14 @@ $("scan-now").addEventListener("click", async () => {
     scanAnswer = await invoke("scan_now");
     $("scan-line").textContent = scanAnswer;
   } catch (why) {
-    showFailure(why);
+    $("scan-line").textContent = String(why);
   }
 });
-$("scan-folder").addEventListener("click", () => invoke("scan_folder").catch(showFailure));
+$("scan-folder").addEventListener("click", () =>
+  invoke("scan_folder").catch((why) => {
+    $("scan-line").textContent = String(why);
+  }),
+);
 
 await listen("agentsweep://findings", (event) => render(event.payload));
 await listen("agentsweep://folder", (event) => renderFolder(event.payload));

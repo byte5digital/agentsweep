@@ -102,7 +102,6 @@ header {
   border-bottom: 1px solid var(--rule);
 }
 
-.content > .notice,
 .content > .folder {
   margin: 12px 20px 0;
 }
@@ -319,7 +318,7 @@ table.technical td {
   margin-top: 8px;
 }
 
-.notice,
+.answer,
 .folder {
   margin-top: 12px;
   padding: 10px 12px;

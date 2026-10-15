@@ -22,6 +22,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, RwLock};
 
 use agentsweep_core::adapter::WatchRoots;
+use agentsweep_core::apple_engine::AppleHelper;
 use agentsweep_core::baseline::{self, Retention};
 use agentsweep_core::chain::ChainState;
 use agentsweep_core::envelope::Timestamp;
@@ -93,6 +94,12 @@ pub struct Tuning {
     /// for a developer run, so a test or a hand run never reaches an Ollama
     /// on this Mac unless it says so.
     pub detect_ollama: Option<bool>,
+    /// Where the answer to an `engine` request asks the Apple judgement
+    /// helper whether Apple's on-device model is available. Absent means the
+    /// helper beside this daemon for the installed daemon and none for a
+    /// developer run, so a test or a hand run never starts the real helper
+    /// unless it names one.
+    pub apple_helper: Option<PathBuf>,
     /// The command the Gate runs, which every Full Scan verifies with every
     /// detected Agent: the command line interface beside this daemon in the
     /// bundle. Absent when there is no such path, and then nothing is
@@ -111,6 +118,7 @@ impl Default for Tuning {
             feed: FeedTuning::default(),
             folders: Arc::new(Disk),
             detect_ollama: None,
+            apple_helper: None,
             gate: crate::gate::bundled_command(),
         }
     }
@@ -125,6 +133,7 @@ impl std::fmt::Debug for Tuning {
             .field("pack", &self.pack)
             .field("feed", &self.feed)
             .field("detect_ollama", &self.detect_ollama)
+            .field("apple_helper", &self.apple_helper)
             .field("gate", &self.gate)
             .finish_non_exhaustive()
     }
@@ -230,6 +239,9 @@ pub struct Daemon {
     feed: Option<Endpoints>,
     /// Whether the answer to an `engine` request asks Ollama.
     pub(crate) detect_ollama: bool,
+    /// The Apple judgement helper the answer to an `engine` request asks,
+    /// absent when none is asked.
+    pub(crate) apple_helper: Option<PathBuf>,
     /// Held while a fetch runs, so two never run at once.
     fetching: Mutex<()>,
     /// A change of the Rule Pack in force that is still to be recorded. It is
@@ -380,6 +392,12 @@ impl Daemon {
             .clone()
             .or_else(|| (!options.is_developer_run()).then(Endpoints::github));
         let detect_ollama = tuning.detect_ollama.unwrap_or(!options.is_developer_run());
+        let apple_helper = tuning.apple_helper.clone().or_else(|| {
+            (!options.is_developer_run())
+                .then(AppleHelper::beside_this_executable)
+                .flatten()
+                .map(|helper| helper.path().to_path_buf())
+        });
         let (settings, settings_unreadable) = settings_at_start(&directory, &*keys, &mut state);
         let (pack, discarded) = pack_at_start(&directory, &bundled, &mut state, settings.rule_feed);
         // A stored pack discarded at start is recorded like an accepted one,
@@ -446,6 +464,7 @@ impl Daemon {
             bundled,
             feed,
             detect_ollama,
+            apple_helper,
             fetching: Mutex::new(()),
             pack_change: Mutex::new(pack_change),
             activity: Mutex::new(activity),

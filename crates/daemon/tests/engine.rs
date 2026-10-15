@@ -247,6 +247,7 @@ fn the_engine_state_starts_at_every_default() {
     assert_eq!(state.claude_key_ending, None);
     assert_eq!(state.recorded, 0);
     assert_eq!(state.ollama, None, "a developer run asks no Ollama");
+    assert_eq!(state.apple, None, "a developer run starts no Apple helper");
     assert_eq!(sandbox.settings_bytes(), None, "a read writes nothing");
     assert!(sandbox.engine_events().is_empty());
 }
@@ -332,6 +333,85 @@ fn the_engine_state_names_ollama_s_presence_and_its_models() {
         })
         .expect("a loopback address is taken");
     assert_eq!(state.ollama, Some(OllamaPresence::Absent));
+}
+
+/// The engine state names whether Apple's on-device model is available, and
+/// the reason when it is not, as the helper the daemon was pointed at answers
+/// its check. Here the helper is a fake: a script answering canned JSON. Each
+/// check spawns it once, and it is gone when the answer arrives.
+#[cfg(unix)]
+#[test]
+fn the_engine_state_names_apple_s_availability_and_its_reason() {
+    use agentsweep_core::apple::AppleAvailability;
+    use std::os::unix::fs::PermissionsExt;
+
+    let sandbox = Sandbox::new("apple-availability");
+    let fake = sandbox.root.join("agentsweep-apple-judge");
+    let answer = sandbox.root.join("check");
+    let script = format!(
+        "#!/bin/sh\ncat > /dev/null\necho \"$$\" >> \"{}\"\ncat \"{}\"\n",
+        sandbox.root.join("pids").display(),
+        answer.display()
+    );
+    std::fs::write(&fake, script).expect("the fake helper is written");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
+        .expect("the fake helper is executable");
+    std::fs::write(
+        &answer,
+        r#"{"available":false,"reason":"apple_intelligence_not_enabled","model_version":"26.6.2 (25G83)"}"#,
+    )
+    .expect("the check answer is written");
+
+    let _daemon = sandbox.start_tuned(
+        Arc::new(SameUser),
+        Tuning {
+            apple_helper: Some(fake.clone()),
+            ..Tuning::default()
+        },
+    );
+    let mut client = sandbox.client();
+    let state = client.engine().expect("the engine state");
+    assert_eq!(
+        state.apple,
+        Some(AppleAvailability::Unavailable {
+            reason: "apple_intelligence_not_enabled".to_string()
+        })
+    );
+
+    std::fs::write(
+        &answer,
+        r#"{"available":true,"context_size":4096,"model_version":"26.6.2 (25G83)"}"#,
+    )
+    .expect("the check answer is written");
+    let state = client.engine().expect("the engine state");
+    assert_eq!(
+        state.apple,
+        Some(AppleAvailability::Available {
+            model_version: "26.6.2 (25G83)".to_string(),
+            context_size: Some(4096),
+        })
+    );
+
+    let pids: Vec<String> = std::fs::read_to_string(sandbox.root.join("pids"))
+        .expect("the helper ran")
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(pids.len(), 2, "one helper per check");
+    for pid in pids {
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        assert!(!alive, "helper {pid} outlived its check");
+    }
+    assert_eq!(
+        sandbox.settings_bytes(),
+        None,
+        "asking the helper writes nothing"
+    );
 }
 
 /// A non-loopback address, or a host name that is not `localhost`, is

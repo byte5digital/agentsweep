@@ -8,6 +8,7 @@
 
 use serde_json::{Map, Value};
 
+use agentsweep_core::apple::AppleAvailability;
 use agentsweep_core::ollama::{OllamaModel, OllamaPresence};
 use agentsweep_core::settings::{
     CLAUDE_MODEL, CLOUD_CENTS_PER_MONTH, CLOUD_ITEMS_PER_DAY, CLOUD_ITEMS_PER_SCAN, CloudCaps,
@@ -22,6 +23,8 @@ const CLAUDE_MODEL_IN_USE: &str = "claude_model_in_use";
 const RECORDED: &str = "recorded";
 /// The field Ollama's presence and its models are named under.
 const OLLAMA: &str = "ollama";
+/// The field Apple on-device's availability and its reason are named under.
+const APPLE: &str = "apple";
 
 /// The choices one `engine` request moves. A field left out stays as it is;
 /// a request that moves nothing reads the engine state.
@@ -130,6 +133,11 @@ pub struct EngineState {
     /// already pulled, absent when the daemon did not ask: only the answer to
     /// an `engine` request asks.
     pub ollama: Option<OllamaPresence>,
+    /// Whether Apple's on-device model can judge here, and the reason when
+    /// it cannot, as the Apple judgement helper answers its check; absent
+    /// when the daemon did not ask: only the answer to an `engine` request
+    /// asks.
+    pub apple: Option<AppleAvailability>,
 }
 
 impl EngineState {
@@ -161,6 +169,9 @@ impl EngineState {
         if let Some(presence) = &self.ollama {
             map.insert(OLLAMA.to_string(), presence_value(presence));
         }
+        if let Some(availability) = &self.apple {
+            map.insert(APPLE.to_string(), availability_value(availability));
+        }
         Value::Object(map)
     }
 
@@ -186,6 +197,10 @@ impl EngineState {
             ollama: match value.get(OLLAMA) {
                 None | Some(Value::Null) => None,
                 Some(presence) => Some(read_presence(presence)?),
+            },
+            apple: match value.get(APPLE) {
+                None | Some(Value::Null) => None,
+                Some(availability) => Some(read_availability(availability)?),
             },
         })
     }
@@ -234,6 +249,42 @@ fn read_presence(value: &Value) -> Option<OllamaPresence> {
     Some(OllamaPresence::Running {
         version: text(value, "version")?,
         models,
+    })
+}
+
+/// Apple's availability as the wire carries it: `available` true with the
+/// model version and the context size where known, or `available` false with
+/// the reason.
+fn availability_value(availability: &AppleAvailability) -> Value {
+    match availability {
+        AppleAvailability::Available {
+            model_version,
+            context_size,
+        } => serde_json::json!({
+            "available": true,
+            "model_version": model_version,
+            "context_size": context_size,
+        }),
+        AppleAvailability::Unavailable { reason } => serde_json::json!({
+            "available": false,
+            "reason": reason,
+        }),
+    }
+}
+
+/// Reads back what [`availability_value`] wrote.
+fn read_availability(value: &Value) -> Option<AppleAvailability> {
+    if !value.get("available")?.as_bool()? {
+        return Some(AppleAvailability::Unavailable {
+            reason: value.get("reason")?.as_str()?.to_string(),
+        });
+    }
+    Some(AppleAvailability::Available {
+        model_version: value.get("model_version")?.as_str()?.to_string(),
+        context_size: match value.get("context_size") {
+            None | Some(Value::Null) => None,
+            Some(size) => Some(u32::try_from(size.as_u64()?).ok()?),
+        },
     })
 }
 
@@ -287,6 +338,7 @@ mod tests {
             claude_key_ending: Some("4f2a".to_string()),
             recorded: 1,
             ollama: None,
+            apple: None,
         };
         let value = state.to_value();
         assert_eq!(EngineState::from_value(&value), Some(state));
@@ -309,6 +361,7 @@ mod tests {
             claude_key_ending: None,
             recorded: 0,
             ollama: Some(OllamaPresence::Absent),
+            apple: None,
         };
         assert_eq!(
             EngineState::from_value(&state.to_value()),
@@ -329,5 +382,35 @@ mod tests {
         );
         let value = state.to_value();
         assert_eq!(value["ollama"]["models"][0]["large_enough"], false);
+    }
+
+    #[test]
+    fn apple_s_availability_and_its_reason_round_trip() {
+        let mut state = EngineState {
+            engine: JudgementEngine::Apple,
+            ollama_address: "127.0.0.1:11434".to_string(),
+            ollama_model: String::new(),
+            claude_model: String::new(),
+            claude_model_in_use: "claude-sonnet-5".to_string(),
+            caps: CloudCaps::default(),
+            claude_key_ending: None,
+            recorded: 0,
+            ollama: None,
+            apple: Some(AppleAvailability::Available {
+                model_version: "26.6.2 (25G83)".to_string(),
+                context_size: Some(4096),
+            }),
+        };
+        assert_eq!(
+            EngineState::from_value(&state.to_value()),
+            Some(state.clone())
+        );
+        state.apple = Some(AppleAvailability::Unavailable {
+            reason: "apple_intelligence_not_enabled".to_string(),
+        });
+        let value = state.to_value();
+        assert_eq!(value["apple"]["available"], false);
+        assert_eq!(value["apple"]["reason"], "apple_intelligence_not_enabled");
+        assert_eq!(EngineState::from_value(&value), Some(state));
     }
 }

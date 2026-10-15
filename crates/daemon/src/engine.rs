@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use agentsweep_core::apple_engine::AppleHelper;
 use agentsweep_core::eventlog::{Action, Actor, Event};
 use agentsweep_core::judged::Judge;
 use agentsweep_core::judgement_request::Normalisation;
@@ -165,6 +166,7 @@ impl Daemon {
             claude_key_ending,
             recorded,
             ollama: None,
+            apple: None,
         }
     }
 
@@ -194,6 +196,11 @@ impl Daemon {
     /// name and which models it has pulled, asked on that loopback address
     /// with a short timeout and after any write is done. AgentSweep never
     /// pulls a model and never starts Ollama.
+    ///
+    /// It also says whether Apple's on-device model is available, and the
+    /// reason when it is not, as the Apple judgement helper beside the daemon
+    /// answers its check. The helper is spawned for that one check and gone
+    /// when it has answered.
     pub fn change_engine(
         self: &Arc<Daemon>,
         change: &EngineChange,
@@ -202,6 +209,9 @@ impl Daemon {
         if self.detect_ollama {
             let address = self.judgement().ollama_address;
             state.ollama = Some(OllamaClient::new(&address).presence());
+        }
+        if let Some(helper) = &self.apple_helper {
+            state.apple = Some(AppleHelper::at(helper).check());
         }
         Ok(state)
     }

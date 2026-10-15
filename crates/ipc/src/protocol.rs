@@ -1923,6 +1923,7 @@ mod tests {
                     claude_key_ending: None,
                     recorded: 0,
                     ollama: None,
+                    apple: None,
                 },
             }),
         }));

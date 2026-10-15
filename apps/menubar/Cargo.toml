@@ -43,7 +43,7 @@ objc2-service-management = { version = "0.3.2", default-features = false, featur
 rfd = { version = "0.17.2", default-features = false }
 # The general pasteboard behind "Copy a message for your admin" (spec section
 # 8.4). Already in the tree through Tauri; only the pasteboard is asked for.
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSWorkspace"] }
 
 [dev-dependencies]
 # The window's tests run a real daemon in the process, on a temporary home,

@@ -26,6 +26,10 @@
 //!   last check, the Rule Pack's date and the Scan in hand.
 //! - [`wording`]: how a Finding reads in the Simple Posture, and the
 //!   technical table behind it.
+//! - [`developer`]: how a Finding reads in the Developer Posture, the
+//!   Ambiguous Items it alone lists, and when Reveal in Finder is offered.
+//! - [`reveal`]: Reveal in Finder through the daemon's reveal-receipt
+//!   request, behind a Finder seam.
 //! - [`folder`]: the answer of a Folder Scan as the window shows it.
 //! - [`settings_pane`]: the Settings pane: the Detail choice, the background
 //!   toggles, Advanced and what AgentSweep does not protect against.
@@ -42,6 +46,7 @@ pub mod actions;
 pub mod app;
 pub mod asking;
 pub mod cli_link;
+pub mod developer;
 pub mod findings;
 pub mod folder;
 pub mod frame;
@@ -51,6 +56,7 @@ pub mod link;
 pub mod overview;
 pub mod placement;
 pub mod popover;
+pub mod reveal;
 pub mod settings_pane;
 pub mod supervision;
 pub mod window;

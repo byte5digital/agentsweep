@@ -19,8 +19,9 @@
 use std::path::Path;
 
 use agentsweep_core::finding::{Category, FindingState, RuleStatus, Severity, Tier};
-use agentsweep_core::finding_facts::WhyNothingHappened;
+use agentsweep_core::finding_facts::{HeuristicLine, WhyNothingHappened};
 use agentsweep_core::item::Kind;
+use agentsweep_core::pack::Bands;
 use agentsweep_core::rules::PHRASE_ITEM;
 use agentsweep_core::state::RecordedFinding;
 use serde_json::{Value, json};
@@ -355,7 +356,7 @@ fn noun(kind: Kind, project: bool) -> &'static str {
 /// entry by its key without array positions; a plugin by its name without
 /// marketplace or version; everything else by the last part of its locator.
 /// No name holds a slash.
-fn name(kind: Kind, id: &str) -> String {
+pub(crate) fn name(kind: Kind, id: &str) -> String {
     let locator = id.rsplit_once('#').map(|(_, after)| after);
     let named = match (kind, locator) {
         (Kind::Hook, Some(entry)) => entry.split('/').next().unwrap_or_default().to_string(),
@@ -554,6 +555,7 @@ pub fn technical(finding: &RecordedFinding) -> Vec<(String, String)> {
     );
     row("Provenance", facts.provenance.clone());
     row("Plugin", facts.plugin.clone());
+    row("Path", facts.path.clone());
     row("File", finding.file.clone());
     row("Content hash", finding.content_hash.clone());
     row("Receipt", finding.receipt_id.clone());
@@ -564,31 +566,60 @@ pub fn technical(finding: &RecordedFinding) -> Vec<(String, String)> {
             .map(|actor| actor.as_str().to_string())
             .unwrap_or_default(),
     );
-    if facts.rule_withdrawn {
-        row("Rule", "withdrawn from the Rule Pack in force".to_string());
+    if finding.rule_id > 0 {
+        row("Rule", format!("{:04}", finding.rule_id));
     }
+    if facts.rule_withdrawn {
+        row(
+            "Rule withdrawn",
+            "withdrawn from the Rule Pack in force".to_string(),
+        );
+    }
+    row("Excerpt", facts.excerpt.clone());
     if facts.score > 0 {
         row("Score", facts.score.to_string());
     }
     row("Band", facts.band.clone());
+    if let Some(bands) = facts.bands {
+        row("Band thresholds", thresholds(bands));
+    }
     for heuristic in &facts.heuristics {
-        row(
-            &format!("Heuristic {:04}", heuristic.id),
-            match heuristic.excerpt.as_str() {
-                "" => format!("weight {}", heuristic.weight),
-                excerpt => format!("weight {} · {excerpt}", heuristic.weight),
-            },
-        );
+        let (label, value) = heuristic_row(heuristic);
+        row(&label, value);
     }
     row("Drift", finding.drift.clone());
     rows
 }
 
+/// The Band thresholds on one line, as the pack manifest sets them.
+pub fn thresholds(bands: Bands) -> String {
+    format!(
+        "Ambiguous from {}, Suspicious from {}",
+        bands.ambiguous_at, bands.suspicious_at
+    )
+}
+
+/// One fired Heuristic as a row of a technical table: its id, its Weight
+/// and the redacted excerpt.
+pub fn heuristic_row(heuristic: &HeuristicLine) -> (String, String) {
+    (
+        format!("Heuristic {:04}", heuristic.id),
+        match heuristic.excerpt.as_str() {
+            "" => format!("weight {}", heuristic.weight),
+            excerpt => format!("weight {} · {excerpt}", heuristic.weight),
+        },
+    )
+}
+
 /// The technical table as the window receives it.
 pub fn technical_value(finding: &RecordedFinding) -> Value {
+    rows_value(technical(finding))
+}
+
+/// Rows of a technical table as the window receives them.
+pub fn rows_value(rows: Vec<(String, String)>) -> Value {
     Value::Array(
-        technical(finding)
-            .into_iter()
+        rows.into_iter()
             .map(|(label, value)| json!({ "label": label, "value": value }))
             .collect(),
     )
@@ -599,7 +630,6 @@ mod tests {
     use super::*;
 
     use agentsweep_core::eventlog::Actor;
-    use agentsweep_core::finding_facts::HeuristicLine;
 
     use crate::findings::tests::recorded;
 
@@ -1060,6 +1090,61 @@ mod tests {
         let card = crate::findings::card(&suspicious);
         assert_eq!(card["technical"], technical_value(&suspicious));
         assert_eq!(card["simple"], simple(&suspicious).to_value());
+    }
+
+    /// The technical table of a fixture Finding carries every field the
+    /// Developer Posture names (spec section 8.2): the Item id, the path, the
+    /// file inside a tree, the content hash, the Provenance, the Rule and
+    /// Heuristic ids with their Weights, the Score and the Band thresholds,
+    /// and the excerpts; a sensitive excerpt only as its hash.
+    #[test]
+    fn the_technical_table_carries_every_field_and_a_sensitive_excerpt_redacted() {
+        const SECRET: &str = "sk-not-a-real-token-0000";
+        let redacted = "sha256:0123456789ab";
+        let mut probation = finding(PDF_HELPER, Kind::Skill, "rule 0001", Category::Threat);
+        probation.file = "scripts/setup.sh".to_string();
+        probation.facts.provenance = "manual".to_string();
+        probation.facts.path = "/Users/me/.claude/skills/pdf-helper".to_string();
+        probation.facts.excerpt = "curl -k https://paste.example.invalid/x".to_string();
+        probation.facts.score = 5;
+        probation.facts.band = "Suspicious".to_string();
+        probation.facts.bands = Some(Bands::V1);
+        probation.facts.heuristics = vec![
+            heuristic(521, "p", "do not tell the user"),
+            heuristic(534, "p", redacted),
+        ];
+
+        let rows = technical(&probation);
+        let value = |label: &str| {
+            rows.iter()
+                .find(|(name, _)| name == label)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("Item"), Some(PDF_HELPER));
+        assert_eq!(value("Path"), Some("/Users/me/.claude/skills/pdf-helper"));
+        assert_eq!(value("File"), Some("scripts/setup.sh"));
+        assert_eq!(value("Content hash"), Some(HASH));
+        assert_eq!(value("Provenance"), Some("manual"));
+        assert_eq!(value("Rule"), Some("0001"));
+        assert_eq!(
+            value("Excerpt"),
+            Some("curl -k https://paste.example.invalid/x")
+        );
+        assert_eq!(value("Score"), Some("5"));
+        assert_eq!(
+            value("Band thresholds"),
+            Some("Ambiguous from 2, Suspicious from 4")
+        );
+        assert_eq!(
+            value("Heuristic 0521"),
+            Some("weight 2 · do not tell the user")
+        );
+        assert_eq!(
+            value("Heuristic 0534"),
+            Some("weight 2 · sha256:0123456789ab")
+        );
+        let serialised = technical_value(&probation).to_string();
+        assert!(!serialised.contains(SECRET));
     }
 
     /// Every case a Finding can be in, on every kind and Scope.

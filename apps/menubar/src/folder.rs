@@ -8,13 +8,16 @@
 //! judged the folder, because the command line interface uses the bundled
 //! pack and the two may answer differently. Placeholder otherwise.
 
+use agentsweep_core::settings::Posture;
 use agentsweep_ipc::protocol::{FolderScanResult, NOTHING_RECORDED};
 use serde_json::{Value, json};
 
 use crate::findings::{count, plain_card};
 
-/// The value the window receives for a finished Folder Scan.
-pub fn result_view(result: &FolderScanResult) -> Value {
+/// The value the window receives for a finished Folder Scan, in the Posture
+/// the window is shown in. The Ambiguous count line exists in the Developer
+/// Posture only (spec section 8.4).
+pub fn result_view(result: &FolderScanResult, posture: Posture) -> Value {
     json!({
         "state": "done",
         "root": result.root,
@@ -25,9 +28,9 @@ pub fn result_view(result: &FolderScanResult) -> Value {
             count(result.items, "Item", "Items"),
             count(result.findings.len(), "Finding", "Findings")
         ),
-        "ambiguous": match result.ambiguous {
-            0 => String::new(),
-            n => format!(
+        "ambiguous": match (result.ambiguous, posture) {
+            (0, _) | (_, Posture::Simple) => String::new(),
+            (n, Posture::Developer) => format!(
                 "{} in the Ambiguous Band, nothing to do.",
                 count(n, "Item", "Items")
             ),
@@ -85,7 +88,12 @@ mod tests {
             }],
             rule_pack: 3,
         };
-        let view = result_view(&result);
+        let view = result_view(&result, Posture::Developer);
+        assert_eq!(
+            result_view(&result, Posture::Simple)["ambiguous"],
+            "",
+            "no Ambiguous count in the Simple Posture"
+        );
         assert_eq!(view["verdict"], "Do not open yet.");
         assert_eq!(view["safe"], false);
         assert_eq!(view["summary"], "2 Items, 1 Finding.");
@@ -119,7 +127,7 @@ mod tests {
             findings: Vec::new(),
             rule_pack: 3,
         };
-        let view = result_view(&result);
+        let view = result_view(&result, Posture::Developer);
         assert_eq!(view["verdict"], "Safe to open.");
         assert_eq!(view["safe"], true);
         assert_eq!(view["summary"], "1 Item, no Findings.");

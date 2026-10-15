@@ -26,6 +26,7 @@ use agentsweep_ipc::protocol::{SettingsState, StateEvent, Status};
 use serde_json::{Value, json};
 
 use crate::actions::card_in;
+use crate::developer::{ambiguous_card, offers_reveal};
 use crate::findings::{Findings, Follow};
 use crate::overview::{self, OverviewView};
 use crate::popover::View;
@@ -287,9 +288,30 @@ impl Frame {
 
     /// The value the window receives: the list as before, the Posture, the
     /// sidebar, the Overview, and the open Findings split into the two
-    /// Finding panes.
+    /// Finding panes. The Developer Posture adds the Ambiguous Items and
+    /// offers Reveal in Finder on the quarantined Items that have a payload;
+    /// the Simple Posture carries no Ambiguous Item and no Ambiguous count
+    /// anywhere (spec section 8.4), so the last Scan's line, which names
+    /// the Ambiguous Band, is left out of it.
     pub fn to_value(&self) -> Value {
         let mut value = self.findings.to_value();
+        match self.posture {
+            Posture::Developer => {
+                value["ambiguous"] =
+                    Value::Array(self.overview.ambiguous.iter().map(ambiguous_card).collect());
+                let decided: Vec<_> = self.findings.decided().collect();
+                if let Some(cards) = value["decided"].as_array_mut() {
+                    for (card, finding) in cards.iter_mut().zip(decided) {
+                        card["reveal"] = Value::from(offers_reveal(finding, self.posture));
+                    }
+                }
+            }
+            Posture::Simple => {
+                if !self.findings.scan().running {
+                    value["scan"]["line"] = Value::from("");
+                }
+            }
+        }
         value["overview"] = self.overview().to_value();
         value["settings"] = self.settings_pane();
         let pane = |category: Category| -> Vec<Value> {
@@ -327,8 +349,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use agentsweep_core::envelope::Timestamp;
+    use agentsweep_core::finding_facts::HeuristicLine;
+    use agentsweep_core::item::ItemId;
     use agentsweep_core::item::Kind;
-    use agentsweep_core::overview::AgentRecord;
+    use agentsweep_core::overview::{AgentRecord, AmbiguousItem};
     use agentsweep_core::scan_pass::ScanKind;
     use agentsweep_core::settings::{CloudCaps, JudgementEngine};
     use agentsweep_core::state::Trigger;
@@ -841,6 +865,97 @@ mod tests {
                         .contains(pane.split('?').nth(1).unwrap_or(pane))
                 );
             }
+        }
+    }
+
+    const MURKY: &str = "claude-code/user/skill/~/.claude/skills/murky";
+
+    /// A status whose last Full Scan left one Item in the Ambiguous Band.
+    fn with_an_ambiguous_item() -> Status {
+        let mut status = status();
+        status.overview = claude_code();
+        status.overview.ambiguous = vec![AmbiguousItem {
+            item_id: ItemId::from_recorded(MURKY),
+            kind: Kind::Skill,
+            score: 3,
+            heuristics: vec![HeuristicLine {
+                id: 521,
+                weight: 3,
+                plain: "It asks the agent to keep a secret.".to_string(),
+                excerpt: "keep this between us".to_string(),
+            }],
+        }];
+        status.scan = Some(ScanSummary {
+            ambiguous: 1,
+            ..finished()
+        });
+        status
+    }
+
+    /// Spec section 8.4: the Simple Posture shows no Ambiguous Item and no
+    /// Ambiguous count, wherever the window could read one: the list, the
+    /// Overview, the panes and the last Scan's line, after a status and after
+    /// the stream moved the Overview and ended a Scan.
+    #[test]
+    fn the_simple_view_holds_no_ambiguous_item_and_no_ambiguous_count() {
+        let status = with_an_ambiguous_item();
+        let mut frame = Frame::new();
+        frame.load(&status);
+        let assert_clean = |frame: &Frame| {
+            let serialised = frame.to_value().to_string().to_lowercase();
+            for needle in ["mbiguous", "murky", "keep this between us", "keep a secret"] {
+                assert!(
+                    !serialised.contains(needle),
+                    "the Simple view holds `{needle}`: {serialised}"
+                );
+            }
+            assert!(frame.to_value().get("ambiguous").is_none());
+        };
+        assert_clean(&frame);
+        frame.apply(&StateEvent::OverviewChanged {
+            overview: Box::new(status.overview.clone()),
+        });
+        frame.apply(&StateEvent::ScanFinished {
+            summary: Box::new(status.scan.clone().expect("a summary")),
+        });
+        assert_clean(&frame);
+
+        frame.settings(&settings(Posture::Developer));
+        let developer = frame.to_value();
+        assert_eq!(developer["ambiguous"][0]["title"], "Skill · murky");
+        assert_eq!(
+            developer["ambiguous"][0]["score"],
+            "Score 3, Ambiguous Band"
+        );
+        assert!(developer["ambiguous"][0].get("actions").is_none());
+        assert!(
+            developer["scan"]["line"]
+                .as_str()
+                .expect("the line")
+                .contains("1 in the Ambiguous Band")
+        );
+    }
+
+    /// Reveal in Finder is offered on the quarantined skill in the Developer
+    /// Posture and on nothing in the Simple Posture.
+    #[test]
+    fn reveal_in_finder_is_offered_in_developer_only() {
+        let mut frame = Frame::new();
+        frame.load(&status());
+        let simple = frame.to_value();
+        for card in simple["decided"].as_array().expect("decided") {
+            assert_eq!(card["reveal"], false, "{card}");
+        }
+        frame.settings(&settings(Posture::Developer));
+        let value = frame.to_value();
+        let mut offered = 0;
+        for card in value["decided"].as_array().expect("decided") {
+            assert_eq!(card["reveal"], card["state"] == "stopped", "{card}");
+            offered += usize::from(card["reveal"] == true);
+        }
+        assert_eq!(offered, 2, "the two stopped Findings on the skill");
+        for card in value["panes"]["threats"].as_array().expect("threats") {
+            assert_eq!(card["reveal"], false, "an open Finding");
         }
     }
 

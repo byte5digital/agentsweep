@@ -35,6 +35,9 @@
 //! - `show_rules_folder`: the user's own rules folder in Finder.
 //! - `open_not_protected`: the README's list of what AgentSweep does not
 //!   protect against, in the browser.
+//! - `reveal_in_finder`: shows a quarantined Item's payload in Finder, in
+//!   the Developer Posture only, at the path the daemon's reveal-receipt
+//!   answer names (spec sections 5.1 and 8.5).
 //! - `scan_now`: asks the daemon for a Full Scan; the progress arrives on the
 //!   stream.
 //! - `scan_folder`: the native folder picker, then a Folder Scan by the
@@ -63,6 +66,7 @@ use agentsweep_ipc::protocol::Message;
 
 use crate::asking::{ActionRequest, Asking, refusal, scan_now_line};
 use crate::cli_link;
+use crate::developer::offers_reveal;
 use crate::findings::Follow;
 use crate::folder;
 use crate::frame::Frame;
@@ -70,6 +74,7 @@ use crate::glyph::{self, Mark};
 use crate::link::{Link, Socket, Update};
 use crate::placement;
 use crate::popover::View;
+use crate::reveal::{self, SystemFinder};
 use crate::settings_pane::{
     self, FULL_DISK_ACCESS_PANES, FULL_DISK_ACCESS_UNOPENED, NOT_PROTECTED_LINK,
 };
@@ -248,6 +253,47 @@ fn copy_for_admin(shell: tauri::State<'_, Shell>, target: String) -> Result<Stri
     }
 }
 
+/// **Reveal in Finder** on a quarantined Item, in the Developer Posture: the
+/// daemon names the payload through the reveal-receipt request, and the
+/// Finder is asked on the main thread to select it.
+#[tauri::command]
+async fn reveal_in_finder(app: AppHandle, target: String) -> Result<String, String> {
+    let (finding, posture) = {
+        let shell = app.state::<Shell>();
+        let frame = shell.frame.lock().expect("the frame is not poisoned");
+        let finding = frame
+            .findings()
+            .get(&target)
+            .cloned()
+            .ok_or_else(|| "That Finding is no longer listed.".to_string())?;
+        (finding, frame.posture())
+    };
+    if !offers_reveal(&finding, posture) {
+        return Err(
+            "Reveal in Finder is offered on a quarantined Item in the Developer Posture only."
+                .to_string(),
+        );
+    }
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    let receipts = tauri::async_runtime::spawn_blocking(move || asking.receipts())
+        .await
+        .map_err(|error| format!("AgentSweep could not be asked: {error}"))?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = sender.send(reveal::reveal_in_finder(
+            &finding,
+            posture,
+            || receipts,
+            &SystemFinder,
+        ));
+    })
+    .map_err(|error| format!("Finder could not be asked: {error}"))?;
+    tauri::async_runtime::spawn_blocking(move || receiver.recv())
+        .await
+        .map_err(|error| format!("Finder could not be asked: {error}"))?
+        .map_err(|error| format!("Finder could not be asked: {error}"))?
+}
+
 /// Puts text on the general pasteboard, answering whether it is there.
 #[cfg(target_os = "macos")]
 fn put_on_clipboard(text: &str) -> bool {
@@ -384,7 +430,15 @@ async fn scan_folder(app: AppHandle) -> Result<Value, String> {
     let asking = Arc::clone(&app.state::<Shell>().asking);
     let path = root.clone();
     let view = match blocking(move || asking.folder_scan(&path)).await {
-        Ok(result) => folder::result_view(&result),
+        Ok(result) => {
+            let posture = app
+                .state::<Shell>()
+                .frame
+                .lock()
+                .expect("the frame is not poisoned")
+                .posture();
+            folder::result_view(&result, posture)
+        }
         Err(why) => folder::failed_view(
             &root,
             &why.replace("Nothing was done", "Nothing was checked"),
@@ -662,6 +716,7 @@ pub fn run() {
             open_full_disk_access,
             show_rules_folder,
             open_not_protected,
+            reveal_in_finder,
             scan_now,
             scan_folder
         ])

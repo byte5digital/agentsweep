@@ -21,7 +21,8 @@ use agentsweep_core::eventlog::Outcome;
 use agentsweep_core::item::ItemId;
 use agentsweep_core::quarantine::{Conflict, RestoreReport};
 use agentsweep_ipc::protocol::{
-    ActionReport, FolderScanResult, Sessions, SettingsChange, SettingsState, Status,
+    ActionReport, FolderScanResult, RevealedReceipt, Sessions, SettingsChange, SettingsState,
+    Status,
 };
 use agentsweep_ipc::{Client, ClientError};
 use serde_json::{Value, json};
@@ -159,6 +160,12 @@ impl Asking {
     /// Whether Agent sessions appear to be running right now.
     pub fn sessions(&self) -> Result<Sessions, ClientError> {
         self.with(true, Client::sessions)
+    }
+
+    /// Every Receipt in the quarantine store with its original place and its
+    /// payload, through the reveal-receipt request. It only reads.
+    pub fn receipts(&self) -> Result<Vec<RevealedReceipt>, ClientError> {
+        self.with(true, |client| client.reveal_receipts(None))
     }
 
     /// Asks for a Full Scan; true when this started one, false when it joined
@@ -513,6 +520,7 @@ mod tests {
         assert!(asking.status().expect_err("nobody").is_unreachable());
         assert!(asking.sessions().expect_err("nobody").is_unreachable());
         assert!(asking.scan_now().expect_err("nobody").is_unreachable());
+        assert!(asking.receipts().expect_err("nobody").is_unreachable());
         assert!(
             asking
                 .folder_scan("/")

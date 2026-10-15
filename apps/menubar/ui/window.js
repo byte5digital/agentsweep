@@ -6,8 +6,10 @@
 // and offered was made by the daemon and the app. Which pane and which
 // Finding are selected is the window's own. Everything is written with
 // textContent, never as markup. In the Simple Posture a Finding reads as the
-// app worded it (spec section 8.4); the Developer Posture's rendering is
-// still the placeholder.
+// app worded it (spec section 8.4); in the Developer Posture it reads as
+// `<Kind> · <name>` with its chips, the same body lines and the technical
+// table shown always, and the Threat Findings pane lists the Ambiguous Items
+// beneath the Findings (spec sections 4.3 and 8.2).
 
 import { isDeveloper, takePosture } from "./posture.js";
 
@@ -143,7 +145,9 @@ async function run(action, card) {
   }
 }
 
-function renderCard(card) {
+// A Folder Scan's Finding: it recorded nothing, so it has no actions and no
+// technical table of its own.
+function renderPlainCard(card) {
   const node = el("article", "card");
   node.dataset.category = card.category;
   node.append(el("p", "title", `${card.kind} · ${card.name}`));
@@ -181,7 +185,7 @@ function renderCard(card) {
   return node;
 }
 
-// The Findings whose technical details are open in the Simple Posture.
+// The Findings and Ambiguous Items whose technical details are open.
 const detailsOpen = new Set();
 
 // The technical table of one Finding: the same rows the Developer Posture
@@ -228,19 +232,7 @@ function renderSimpleCard(card) {
   const chips = el("div", "chips");
   chips.append(el("span", `chip ${simple.chip}`, simple.severity));
   node.append(chips);
-  let list = null;
-  for (const line of simple.lines) {
-    if (line.part === "heuristic") {
-      if (list === null) {
-        list = el("ul", "heuristics");
-        node.append(list);
-      }
-      list.append(el("li", "", line.text));
-      continue;
-    }
-    const muted = ["also", "project", "drift"].includes(line.part);
-    node.append(el("p", muted ? "muted" : "", line.text));
-  }
+  renderLines(node, simple.lines);
   const actions = renderActions(card);
   if (simple.admin) {
     const copy = el("button", "", "Copy a message for your admin");
@@ -263,28 +255,122 @@ function renderSimpleCard(card) {
   if (actions.childElementCount > 0) {
     node.append(actions);
   }
-  const open = detailsOpen.has(card.id);
-  const toggle = el("button", "link", open ? "Hide technical details" : "Show technical details");
-  toggle.type = "button";
-  toggle.setAttribute("aria-expanded", String(open));
-  toggle.addEventListener("click", () => {
-    if (detailsOpen.has(card.id)) {
-      detailsOpen.delete(card.id);
-    } else {
-      detailsOpen.add(card.id);
-    }
-    render(view);
-  });
-  node.append(toggle);
-  if (open) {
+  node.append(renderToggle(card.id));
+  if (detailsOpen.has(card.id)) {
     node.append(renderTechnical(card));
   }
   return node;
 }
 
+// The body lines the app worded, in their fixed order (spec section 8.4).
+function renderLines(node, lines) {
+  let list = null;
+  for (const line of lines) {
+    if (line.part === "heuristic") {
+      if (list === null) {
+        list = el("ul", "heuristics");
+        node.append(list);
+      }
+      list.append(el("li", "", line.text));
+      continue;
+    }
+    const muted = ["also", "project", "drift"].includes(line.part);
+    node.append(el("p", muted ? "muted" : "", line.text));
+  }
+}
+
+// One Finding in the Developer Posture: `<Kind> · <name>` with chips for
+// Severity, Tier, category, Probation, Scope and Activation, the body lines,
+// the technical table shown always, the actions and, on a quarantined Item
+// with a payload, Reveal in Finder.
+function renderDeveloperCard(card) {
+  const developer = card.developer;
+  const node = el("article", "card");
+  node.dataset.category = card.category;
+  node.append(el("p", "title", developer.title));
+  const chips = el("div", "chips");
+  for (const chip of developer.chips) {
+    const span = el("span", "chip", chip.text);
+    span.dataset.fact = chip.fact;
+    chips.append(span);
+  }
+  node.append(chips);
+  renderLines(node, card.simple.lines);
+  node.append(renderTechnical(card));
+  const actions = renderActions(card);
+  if (card.reveal) {
+    const reveal = el("button", "", "Reveal in Finder");
+    reveal.type = "button";
+    reveal.addEventListener("click", async () => {
+      try {
+        showResult({
+          message: await invoke("reveal_in_finder", { target: card.id }),
+          sessions: "",
+          details: [],
+          conflict: false,
+          target: "",
+        });
+      } catch (why) {
+        showFailure(why);
+      }
+    });
+    actions.append(reveal);
+  }
+  if (actions.childElementCount > 0) {
+    node.append(actions);
+  }
+  return node;
+}
+
+// The Show technical details toggle of one Finding or Ambiguous Item.
+function renderToggle(id) {
+  const open = detailsOpen.has(id);
+  const toggle = el("button", "link", open ? "Hide technical details" : "Show technical details");
+  toggle.type = "button";
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.addEventListener("click", () => {
+    if (detailsOpen.has(id)) {
+      detailsOpen.delete(id);
+    } else {
+      detailsOpen.add(id);
+    }
+    render(view);
+  });
+  return toggle;
+}
+
+// One Ambiguous Item, in the Developer Posture only: its title, its Score,
+// its Heuristic lines and its technical details. It is not a Finding, so it
+// offers no action.
+function renderAmbiguous(item) {
+  const node = el("article", "card ambiguous");
+  node.append(el("p", "title", item.title));
+  node.append(el("p", "muted", item.score));
+  const list = el("ul", "heuristics");
+  for (const line of item.lines) {
+    list.append(el("li", "", line));
+  }
+  node.append(list);
+  const key = `ambiguous:${item.id}`;
+  node.append(renderToggle(key));
+  if (detailsOpen.has(key)) {
+    node.append(renderTechnical(item));
+  }
+  return node;
+}
+
+// The Ambiguous Items beneath the Threat Findings. The app sends them in the
+// Developer Posture only; the Simple Posture never shows one (spec 8.4).
+function renderAmbiguousList(items) {
+  const section = pane("threats").querySelector(".ambiguous-items");
+  const shown = isDeveloper() && Array.isArray(items) && items.length > 0;
+  section.hidden = !shown;
+  section.querySelector(".list").replaceChildren(...(shown ? items.map(renderAmbiguous) : []));
+}
+
 // A Finding of a Finding pane, in the Posture in force.
 function renderFinding(card) {
-  return isDeveloper() ? renderCard(card) : renderSimpleCard(card);
+  return isDeveloper() ? renderDeveloperCard(card) : renderSimpleCard(card);
 }
 
 // The two panes that list Findings: a list beside the selected Finding.
@@ -335,7 +421,7 @@ function renderRow(id, card) {
   row.setAttribute("role", "listitem");
   row.dataset.category = card.category;
   if (isDeveloper()) {
-    row.append(el("span", "title", `${card.kind} · ${card.name}`));
+    row.append(el("span", "title", card.developer.title));
     row.append(el("span", "chip", card.severity));
   } else {
     row.append(el("span", "title", card.simple.title));
@@ -578,6 +664,7 @@ function render(list) {
   for (const id of FINDING_PANES) {
     renderFindingPane(id, list.panes[id], list.loaded);
   }
+  renderAmbiguousList(list.ambiguous);
   disableActions();
 }
 
@@ -603,7 +690,8 @@ function renderFolder(view) {
   $("folder-ambiguous").textContent = view.ambiguous;
   $("folder-recorded").textContent = view.recorded;
   $("folder-pack").textContent = view.rulePack;
-  $("folder-cards").replaceChildren(...view.findings.map(renderCard));
+  $("folder-ambiguous").hidden = !isDeveloper();
+  $("folder-cards").replaceChildren(...view.findings.map(renderPlainCard));
 }
 
 // The same request the popover's Scan now sends; the progress and the last

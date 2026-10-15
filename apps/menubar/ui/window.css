@@ -451,3 +451,17 @@ dialog {
 [hidden] {
   display: none !important;
 }
+
+/* The Ambiguous Items beneath the Threat Findings, Developer Posture only. */
+.ambiguous-items {
+  margin-top: 24px;
+}
+
+.ambiguous-items h3 {
+  font-size: 13px;
+  margin: 0 0 4px;
+}
+
+.card.ambiguous {
+  border-style: dashed;
+}

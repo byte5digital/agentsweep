@@ -66,6 +66,24 @@ pub fn render(status: &Status) -> String {
         let _ = writeln!(out, "  {note}");
     }
 
+    // The projects whose own settings switch an Agent's hooks off, which the
+    // Gate shows rather than fights (spec section 7.6).
+    let gate_off = status.overview.gate_off();
+    if !gate_off.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "Gate off in this project:");
+        for (root, agent) in gate_off {
+            let name = status
+                .overview
+                .agents
+                .iter()
+                .find(|record| record.agent == agent)
+                .map(|record| record.display_name.as_str())
+                .unwrap_or(agent);
+            let _ = writeln!(out, "  {root}  {name}");
+        }
+    }
+
     match &status.scan {
         Some(scan) => {
             let _ = writeln!(out);
@@ -310,6 +328,62 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("could not be added"), "{rendered}");
+    }
+
+    /// Spec section 7.6: the projects that switched the check off are listed
+    /// with their Agent, and Health counts them on the Gate rung.
+    #[test]
+    fn the_projects_gate_off_are_listed_with_their_agent() {
+        use agentsweep_core::overview::{
+            AgentRecord, Overview, ProjectAgent, ProjectCheck, ProjectRecord,
+        };
+        let agent = |agent: &str, gate_off: bool| ProjectAgent {
+            agent: agent.to_string(),
+            registered: true,
+            gate_off,
+        };
+        let overview = Overview {
+            agents: vec![AgentRecord {
+                agent: "claude-code".to_string(),
+                display_name: "Claude Code".to_string(),
+                installed: true,
+                ..AgentRecord::default()
+            }],
+            projects: vec![
+                ProjectRecord {
+                    root: "/work/app".to_string(),
+                    agents: vec![agent("claude-code", true), agent("codex", true)],
+                    check: ProjectCheck::Checked,
+                },
+                ProjectRecord {
+                    root: "/work/other".to_string(),
+                    agents: vec![agent("claude-code", false)],
+                    check: ProjectCheck::Checked,
+                },
+            ],
+            ambiguous: Vec::new(),
+        };
+        let mut health = Health::running();
+        health.projects_gate_off = overview.projects_gate_off();
+        let status = Status {
+            health,
+            scan: Some(summary()),
+            findings: Vec::new(),
+            activity: Vec::new(),
+            overview,
+        };
+        let rendered = render(&status);
+        assert!(
+            rendered.starts_with("Gate off in 1 project.\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "Gate off in this project:\n  /work/app  Claude Code\n  /work/app  codex\n"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("/work/other"), "{rendered}");
     }
 
     #[test]

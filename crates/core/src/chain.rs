@@ -1133,7 +1133,11 @@ mod tests {
 
         let daemon = include_str!("../../daemon/Cargo.toml");
         assert!(
-            daemon.contains("features = [\"daemon\"]"),
+            daemon
+                .lines()
+                .any(|line| line.starts_with("agentsweep-core = ")
+                    && line.contains("features = [")
+                    && line.contains("\"daemon\"")),
             "the daemon crate must turn the feature on"
         );
 

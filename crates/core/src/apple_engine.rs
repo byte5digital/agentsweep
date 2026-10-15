@@ -494,6 +494,31 @@ impl JudgementEngine for AppleEngine {
 mod tests {
     use super::*;
 
+    /// The crates.io build of the CLI has no Apple engine: only its `bundle`
+    /// feature turns the core's `apple` feature on, and the daemon does.
+    #[test]
+    fn only_the_daemon_and_the_in_bundle_cli_build_the_apple_engine() {
+        let cli = include_str!("../../cli/Cargo.toml");
+        let bundle = cli
+            .lines()
+            .find(|line| line.starts_with("bundle = "))
+            .expect("the CLI has a bundle feature");
+        assert!(bundle.contains("\"agentsweep-core/apple\""), "{bundle}");
+        assert!(cli.contains("default = []"));
+        let core_line = cli
+            .lines()
+            .find(|line| line.starts_with("agentsweep-core"))
+            .expect("the CLI names the core");
+        assert!(!core_line.contains("apple"), "{core_line}");
+
+        let daemon = include_str!("../../daemon/Cargo.toml");
+        assert!(
+            daemon
+                .lines()
+                .any(|line| line.starts_with("agentsweep-core = ") && line.contains("\"apple\""))
+        );
+    }
+
     #[test]
     fn each_wait_is_twice_the_one_before() {
         assert_eq!(backoff(1), FIRST_BACKOFF);

@@ -672,7 +672,13 @@ fn neither_build_of_the_cli_links_the_claude_engine() {
         "the CLI must not carry an HTTP client"
     );
     let daemon = include_str!("../../../daemon/Cargo.toml");
-    assert!(daemon.contains("features = [\"daemon\"]"));
+    assert!(
+        daemon
+            .lines()
+            .any(|line| line.starts_with("agentsweep-core = ")
+                && line.contains("features = [")
+                && line.contains("\"daemon\""))
+    );
 }
 
 /// A live call to the real Claude API with a real key: the hand check of

@@ -18,7 +18,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use agentsweep_core::adapter::{Descriptor, Enumeration, SWITCH_ONLY, SurfaceAdapter, WatchRoots};
+use agentsweep_core::adapter::{
+    Descriptor, Enumeration, ProjectHooks, SWITCH_ONLY, SurfaceAdapter, WatchRoots,
+};
 use agentsweep_core::baseline::{Baseline, BaselineWriter};
 use agentsweep_core::chain::{ChainError, ChainState};
 use agentsweep_core::coverage::CoveragePlan;
@@ -135,6 +137,10 @@ pub struct ScanRun {
     /// where the Gate cannot stand. Absent when this Scan did not check: a
     /// Change Scan, or a Full Scan that was not handed the Gate's command.
     pub gate_lines: Option<Vec<GateLine>>,
+    /// What each Agent adapter stated about the hook switch of every root
+    /// this Scan enumerated: every pooled root after a Full Scan, the roots in
+    /// play after a Change Scan (spec section 7.6).
+    pub project_hooks: Vec<ProjectHooks>,
 }
 
 /// What a Scan reports as it goes.
@@ -291,6 +297,7 @@ impl FullScan<'_> {
         );
         overview.ambiguous = judged.ambiguous.clone();
         overview.checked = judged.checked.clone();
+        overview.take_project_hooks(&survey.enumeration.project_hooks);
 
         Ok(ScanRun {
             summary: judged.summary,
@@ -311,6 +318,7 @@ impl FullScan<'_> {
             gate_facts: judged.gate_facts,
             overview,
             gate_lines,
+            project_hooks: survey.enumeration.project_hooks,
         })
     }
 }

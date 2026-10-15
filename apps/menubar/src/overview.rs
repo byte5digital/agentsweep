@@ -299,6 +299,7 @@ mod tests {
                     agents: vec![ProjectAgent {
                         agent: "claude-code".to_string(),
                         registered: true,
+                        gate_off: false,
                     }],
                     ..ProjectRecord::default()
                 }],

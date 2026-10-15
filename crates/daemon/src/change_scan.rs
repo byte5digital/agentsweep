@@ -196,6 +196,9 @@ impl ChangeScan<'_> {
             },
             // Only a Full Scan checks the Gate's registration.
             gate_lines: None,
+            // What the adapters stated about the roots in play, which a
+            // project that changed its hook switch is among.
+            project_hooks: survey.enumeration.project_hooks,
         }))
     }
 }

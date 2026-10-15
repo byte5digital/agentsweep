@@ -860,6 +860,10 @@ pub fn health_to_value(health: &Health) -> Value {
         Value::from(health.open_threats as u64),
     );
     map.insert(
+        "projects_gate_off".to_string(),
+        Value::from(health.projects_gate_off as u64),
+    );
+    map.insert(
         "projects_need_permission".to_string(),
         Value::from(health.projects_need_permission as u64),
     );
@@ -972,6 +976,11 @@ pub fn health_from_value(value: &Value) -> Option<Health> {
         baseline: chain_state_from_value(value.get("baseline")?)?,
         projects_need_permission: count("projects_need_permission")?,
         gate_lines,
+        // A daemon from before the Gate's project state sends no count.
+        projects_gate_off: match value.get("projects_gate_off") {
+            None => 0,
+            Some(count) => count.as_u64()? as usize,
+        },
         state_file: StateFileHealth::parse(text("state_file")?)?,
         settings_unreadable: value.get("settings_unreadable")?.as_bool()?,
         scanning: value.get("scanning")?.as_bool()?,
@@ -1891,6 +1900,7 @@ mod tests {
                         trouble: GateTrouble::ManagedPolicy,
                     },
                 ],
+                projects_gate_off: 2,
                 ..Health::running()
             }),
         }));
@@ -1943,6 +1953,7 @@ mod tests {
                 agents: vec![ProjectAgent {
                     agent: "codex".to_string(),
                     registered: false,
+                    gate_off: true,
                 }],
                 check: ProjectCheck::Checked,
             }],
@@ -1974,6 +1985,7 @@ mod tests {
         let value = status.to_value();
         assert_eq!(value["agents"][0]["version"], "unknown");
         assert_eq!(value["projects"][0]["agents"][0]["registered"], false);
+        assert_eq!(value["projects"][0]["agents"][0]["gate_off"], true);
         assert_eq!(value["ambiguous"][0]["score"], 3);
         assert_eq!(Status::from_value(&value), Some(status.clone()));
 
@@ -2610,5 +2622,28 @@ mod tests {
             }
             assert_eq!(Message::from_value(&bad), None, "{field}");
         }
+    }
+
+    /// Spec section 7.6: Health carries how many projects switched the check
+    /// off, and a Health from a daemon from before reads as none.
+    #[test]
+    fn a_health_carries_the_projects_gate_off_and_an_older_one_reads_as_none() {
+        let health = Health {
+            projects_gate_off: 3,
+            ..Health::running()
+        };
+        let value = health_to_value(&health);
+        assert_eq!(value["projects_gate_off"], 3);
+        assert_eq!(health_from_value(&value), Some(health));
+
+        let mut older = value.clone();
+        older
+            .as_object_mut()
+            .expect("an object")
+            .remove("projects_gate_off");
+        assert_eq!(
+            health_from_value(&older).map(|health| health.projects_gate_off),
+            Some(0)
+        );
     }
 }

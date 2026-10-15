@@ -206,7 +206,8 @@ pub enum Rung {
     /// Registered projects the operating system will not let AgentSweep read.
     NeedsPermission,
     /// The Gate cannot stand in a detected Agent: its registration failed,
-    /// managed policy blocks it, or the user switched hooks off there.
+    /// managed policy blocks it, or the user switched hooks off there; or a
+    /// project switched the check off for itself.
     GateLine,
     /// A Scan is running.
     CheckingNow,
@@ -236,6 +237,10 @@ pub struct Health {
     /// detected Agent where the Gate cannot stand, worst first. Empty when
     /// every check passed.
     pub gate_lines: Vec<GateLine>,
+    /// How many pooled projects switch the check off for at least one Agent
+    /// with their own settings: "Gate off in this project" (spec section
+    /// 7.6). A state of those projects, never a Finding.
+    pub projects_gate_off: usize,
     /// What the state file was found to be.
     pub state_file: StateFileHealth,
     /// True when the settings file is there and cannot be read back: the
@@ -278,6 +283,7 @@ impl Default for Health {
             baseline: ChainState::Intact,
             projects_need_permission: 0,
             gate_lines: Vec::new(),
+            projects_gate_off: 0,
             state_file: StateFileHealth::Loaded,
             settings_unreadable: false,
             scanning: false,
@@ -367,7 +373,7 @@ impl Health {
             Rung::StateReset
         } else if self.projects_need_permission > 0 {
             Rung::NeedsPermission
-        } else if !self.gate_lines.is_empty() {
+        } else if !self.gate_lines.is_empty() || self.projects_gate_off > 0 {
             Rung::GateLine
         } else if self.scanning {
             Rung::CheckingNow
@@ -395,9 +401,9 @@ impl Health {
     pub fn headline_in(&self, posture: Posture) -> String {
         match self.rung() {
             Rung::GateLine => self
-                .gate_lines
-                .first()
-                .map(|line| line.wording(posture))
+                .gate_sentences(posture)
+                .into_iter()
+                .next()
                 .unwrap_or_default(),
             Rung::ProtectionOff => "Protection is off.".to_string(),
             Rung::RecordsTampered => "Records tampered.".to_string(),
@@ -417,6 +423,23 @@ impl Health {
                 None => "All clear, nothing checked yet.".to_string(),
             },
         }
+    }
+
+    /// Every sentence of the Gate rung in a Posture, in the order of spec
+    /// section 6.6: the projects that switched the check off first, then the
+    /// Gate lines of the registration check.
+    fn gate_sentences(&self, posture: Posture) -> Vec<String> {
+        let projects = match (self.projects_gate_off, posture) {
+            (0, _) => None,
+            (1, Posture::Simple) => Some("1 project switched off the check.".to_string()),
+            (many, Posture::Simple) => Some(format!("{many} projects switched off the check.")),
+            (1, Posture::Developer) => Some("Gate off in 1 project.".to_string()),
+            (many, Posture::Developer) => Some(format!("Gate off in {many} projects.")),
+        };
+        projects
+            .into_iter()
+            .chain(self.gate_lines.iter().map(|line| line.wording(posture)))
+            .collect()
     }
 
     /// "N things need your decision", with the open Threat and Exposure
@@ -461,8 +484,7 @@ impl Health {
         // Gate rung holds it, and the rest, or all of them under a worse
         // rung, are notes.
         let headline = self.headline_in(posture);
-        for line in &self.gate_lines {
-            let line = line.wording(posture);
+        for line in self.gate_sentences(posture) {
             if line != headline && !notes.contains(&line) {
                 notes.push(line);
             }
@@ -763,6 +785,55 @@ mod tests {
 
         health.gate_lines.clear();
         assert_eq!(health.headline(), "Checking now.");
+    }
+
+    /// Spec sections 6.6 and 7.6: the projects that switched the check off
+    /// are counted on the Gate rung, in the pair of sentences of rung 5, and
+    /// come first among the Gate sentences.
+    #[test]
+    fn the_projects_that_switched_off_the_check_are_counted_on_the_gate_rung() {
+        let mut health = Health::running();
+        health.projects_gate_off = 1;
+        health.open_threats = 1;
+        assert_eq!(health.rung(), Rung::GateLine);
+        assert_eq!(health.headline(), "1 project switched off the check.");
+        assert_eq!(
+            health.headline_in(Posture::Developer),
+            "Gate off in 1 project."
+        );
+
+        health.projects_gate_off = 2;
+        assert_eq!(health.headline(), "2 projects switched off the check.");
+        assert_eq!(
+            health.headline_in(Posture::Developer),
+            "Gate off in 2 projects."
+        );
+
+        // Beside a Gate line, both are said once.
+        health.gate_lines = vec![line(
+            "claude-code",
+            "Claude Code",
+            GateTrouble::RegistrationFailed,
+        )];
+        assert_eq!(health.headline(), "2 projects switched off the check.");
+        assert!(
+            health
+                .notes()
+                .contains(&"The check could not be added to Claude Code.".to_string())
+        );
+
+        // Under a worse rung the count is a note.
+        health.projects_need_permission = 1;
+        assert!(
+            health
+                .notes_in(Posture::Developer)
+                .contains(&"Gate off in 2 projects.".to_string())
+        );
+
+        health.projects_need_permission = 0;
+        health.gate_lines.clear();
+        health.projects_gate_off = 0;
+        assert_eq!(health.rung(), Rung::NeedsDecision);
     }
 
     /// Every line has its pair of sentences, and a second line is a note.

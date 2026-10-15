@@ -408,6 +408,7 @@ impl Daemon {
             baseline: crate::integrity::shown(&baseline, reset.baseline),
             projects_need_permission: crate::permission::needing_permission(&state.overview),
             gate_lines: Vec::new(),
+            projects_gate_off: state.overview.projects_gate_off(),
             state_file,
             settings_unreadable,
             scanning: false,
@@ -828,6 +829,7 @@ impl Daemon {
                     state
                         .overview
                         .take_checked(&run.looked_at, &run.overview.checked);
+                    state.overview.take_project_hooks(&run.project_hooks);
                 }
             }
             if state.overview != overview_before {
@@ -850,6 +852,9 @@ impl Daemon {
                 health.projects_need_permission =
                     crate::permission::needing_permission(&state.overview);
             }
+            // A project leaves the count on the first Scan that looks at it
+            // once its switch is cleared.
+            health.projects_gate_off = state.overview.projects_gate_off();
             // A line clears on the first Full Scan whose check passes.
             if let Some(lines) = &run.gate_lines {
                 health.gate_lines = lines.clone();

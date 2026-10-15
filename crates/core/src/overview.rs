@@ -19,6 +19,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
+use crate::adapter::ProjectHooks;
 use crate::finding_facts::HeuristicLine;
 use crate::item::{ItemId, Kind};
 
@@ -140,7 +141,8 @@ impl ProjectCheck {
     }
 }
 
-/// One Agent at one project root: whether its own registry names the root.
+/// One Agent at one project root: whether its own registry names the root,
+/// and whether the project's own settings switch the Agent's hooks off there.
 /// Every installed Agent scans its Surfaces at every pooled root, so an Agent
 /// that does not know the root is listed with `registered: false` (spec
 /// section 3.3).
@@ -150,6 +152,11 @@ pub struct ProjectAgent {
     pub agent: String,
     /// True when this Agent's registry names the root.
     pub registered: bool,
+    /// True when the project's own settings switch this Agent's hooks off,
+    /// which the Overview shows as "Gate off in this project" (spec section
+    /// 7.6). A state of the project, never a Finding: it blocks nothing,
+    /// allows nothing and raises no notification.
+    pub gate_off: bool,
 }
 
 /// One pooled project root as the last Full Scan found it.
@@ -175,6 +182,7 @@ impl ProjectRecord {
                     .map(|agent| {
                         let mut entry = Map::new();
                         entry.insert("agent".to_string(), Value::from(agent.agent.as_str()));
+                        entry.insert("gate_off".to_string(), Value::from(agent.gate_off));
                         entry.insert("registered".to_string(), Value::from(agent.registered));
                         Value::Object(entry)
                     })
@@ -197,6 +205,12 @@ impl ProjectRecord {
                     Some(ProjectAgent {
                         agent: entry.get("agent")?.as_str()?.to_string(),
                         registered: entry.get("registered")?.as_bool()?,
+                        // Written before the Gate's project state existed,
+                        // which is a project nothing was stated about.
+                        gate_off: match entry.get("gate_off") {
+                            None => false,
+                            Some(gate_off) => gate_off.as_bool()?,
+                        },
                     })
                 })
                 .collect::<Option<Vec<_>>>()?,
@@ -322,6 +336,47 @@ impl Overview {
         self.checked.extend(checked.iter().cloned());
     }
 
+    /// Takes what a Scan stated about the hook switch of the projects it
+    /// enumerated: each Agent at each root stated takes the new answer, and
+    /// every other entry stays where it was. A project that cleared its switch
+    /// leaves the list on the first Scan that looks at it.
+    pub fn take_project_hooks(&mut self, stated: &[ProjectHooks]) {
+        for project in &mut self.projects {
+            for agent in &mut project.agents {
+                if let Some(hooks) = stated.iter().find(|hooks| {
+                    hooks.agent == agent.agent && hooks.root.display().to_string() == project.root
+                }) {
+                    agent.gate_off = hooks.switched_off;
+                }
+            }
+        }
+    }
+
+    /// Every project root whose own settings switch an Agent's hooks off,
+    /// each with that Agent, in the order of the project records: what the
+    /// Overview shows as "Gate off in this project".
+    pub fn gate_off(&self) -> Vec<(&str, &str)> {
+        self.projects
+            .iter()
+            .flat_map(|project| {
+                project
+                    .agents
+                    .iter()
+                    .filter(|agent| agent.gate_off)
+                    .map(|agent| (project.root.as_str(), agent.agent.as_str()))
+            })
+            .collect()
+    }
+
+    /// How many projects switch the check off for at least one Agent, which
+    /// is the count Health says on the Gate rung.
+    pub fn projects_gate_off(&self) -> usize {
+        self.projects
+            .iter()
+            .filter(|project| project.agents.iter().any(|agent| agent.gate_off))
+            .count()
+    }
+
     /// Writes the four lists into an object under the keys `agents`,
     /// `projects`, `ambiguous` and `checked`. Every key is new beside its
     /// neighbours, so a reader that does not know them passes them by.
@@ -422,10 +477,12 @@ mod tests {
                     ProjectAgent {
                         agent: "claude-code".to_string(),
                         registered: true,
+                        gate_off: true,
                     },
                     ProjectAgent {
                         agent: "codex".to_string(),
                         registered: false,
+                        gate_off: false,
                     },
                 ],
                 check: ProjectCheck::Checked,
@@ -502,5 +559,67 @@ mod tests {
         );
         assert_eq!(overview.agents, before.agents);
         assert_eq!(overview.projects, before.projects);
+    }
+
+    /// Spec section 7.6: the projects that switched the check off, each with
+    /// the Agent, and how many projects that is.
+    #[test]
+    fn the_projects_gate_off_are_listed_with_their_agent_and_counted() {
+        let mut overview = an_overview();
+        assert_eq!(overview.gate_off(), vec![("/work/app", "claude-code")]);
+        assert_eq!(overview.projects_gate_off(), 1);
+
+        // A second Agent off in the same project is one more line, not one
+        // more project.
+        overview.projects[0].agents[1].gate_off = true;
+        assert_eq!(
+            overview.gate_off(),
+            vec![("/work/app", "claude-code"), ("/work/app", "codex")]
+        );
+        assert_eq!(overview.projects_gate_off(), 1);
+    }
+
+    #[test]
+    fn a_project_record_written_before_the_gate_state_reads_as_not_gate_off() {
+        let older = serde_json::json!({"projects": [{
+            "root": "/work/app",
+            "check": "checked",
+            "agents": [{"agent": "codex", "registered": true}]
+        }]});
+        let overview = Overview::read_from(&older).expect("an older record reads");
+        assert!(!overview.projects[0].agents[0].gate_off);
+        assert!(overview.gate_off().is_empty());
+    }
+
+    /// A Scan speaks for the roots it stated, and a project that cleared its
+    /// switch leaves the list on it; every other entry stays where it was.
+    #[test]
+    fn a_scan_that_looks_at_a_project_takes_its_hook_switch_and_leaves_the_rest() {
+        let mut overview = an_overview();
+        overview.projects.push(ProjectRecord {
+            root: "/work/other".to_string(),
+            agents: vec![ProjectAgent {
+                agent: "claude-code".to_string(),
+                registered: true,
+                gate_off: true,
+            }],
+            check: ProjectCheck::Checked,
+        });
+        overview.take_project_hooks(&[
+            ProjectHooks {
+                agent: "claude-code".to_string(),
+                root: std::path::PathBuf::from("/work/app"),
+                switched_off: false,
+            },
+            ProjectHooks {
+                agent: "codex".to_string(),
+                root: std::path::PathBuf::from("/work/app"),
+                switched_off: true,
+            },
+        ]);
+        assert_eq!(
+            overview.gate_off(),
+            vec![("/work/app", "codex"), ("/work/other", "claude-code")]
+        );
     }
 }

@@ -327,6 +327,7 @@ fn the_status_names_both_agents_every_pooled_root_and_the_ambiguous_items() {
     let agent = |agent: &str, registered: bool| ProjectAgent {
         agent: agent.to_string(),
         registered,
+        gate_off: false,
     };
     assert_eq!(
         record_of(&only_claude).agents,
@@ -428,4 +429,60 @@ fn a_change_scan_that_moves_an_item_across_the_band_is_on_the_stream() {
     assert_eq!(ambiguous_names(&into), vec!["notes"]);
     assert_eq!(into.ambiguous[0].score, 2);
     assert_eq!(ambiguous_names(&sandbox.status().overview), vec!["notes"]);
+}
+
+/// Spec sections 6.6 and 7.6: a project whose own settings switch an Agent's
+/// hooks off is listed in the status with that Agent and counted on the Gate
+/// rung of Health, and a project that changes its switch moves in or out of
+/// the list on the next Scan that looks at it.
+#[test]
+fn a_project_that_switches_hooks_off_is_listed_and_counted_until_it_clears_the_switch() {
+    let sandbox = Sandbox::new("gate-off");
+    let project = sandbox.project("switched");
+    sandbox.claude_code_registry(&[&project]);
+    sandbox.install_codex(&[&project]);
+    let write = |relative: &str, content: &str| {
+        let path = project.join(relative);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+        std::fs::write(path, content).expect("a file");
+    };
+    write(".claude/settings.json", "{\"disableAllHooks\": true}\n");
+    write(".codex/config.toml", "[features]\nhooks = true\n");
+    let root = project.display().to_string();
+
+    let _daemon = sandbox.start();
+    let status = sandbox.status();
+    assert_eq!(
+        status.overview.gate_off(),
+        vec![(root.as_str(), "claude-code")]
+    );
+    assert_eq!(status.health.projects_gate_off, 1);
+    assert_eq!(
+        status.health.rung(),
+        agentsweep_core::health::Rung::GateLine
+    );
+    assert_eq!(
+        status.health.headline(),
+        "1 project switched off the check."
+    );
+    let overviews = sandbox.overviews();
+
+    // The project puts Claude Code's hooks back and switches Codex's off.
+    write(".claude/settings.json", "{\"disableAllHooks\": false}\n");
+    an_overview_where(&overviews, |overview| overview.gate_off().is_empty());
+    write(".codex/config.toml", "[features]\nhooks = false\n");
+    let codex = an_overview_where(&overviews, |overview| !overview.gate_off().is_empty());
+    assert_eq!(codex.gate_off(), vec![(root.as_str(), "codex")]);
+    assert_eq!(sandbox.status().health.projects_gate_off, 1);
+
+    // And clears that switch too.
+    write(".codex/config.toml", "[features]\nhooks = true\n");
+    an_overview_where(&overviews, |overview| overview.gate_off().is_empty());
+    let status = sandbox.status();
+    assert!(status.overview.gate_off().is_empty());
+    assert_eq!(status.health.projects_gate_off, 0);
+    assert_ne!(
+        status.health.rung(),
+        agentsweep_core::health::Rung::GateLine
+    );
 }

@@ -102,6 +102,9 @@ pub fn of_the_full_scan(
                     (registered || found.detection.installed).then(|| ProjectAgent {
                         agent: found.agent.to_string(),
                         registered,
+                        // What the adapters stated about the project's hook
+                        // switch is taken once they have enumerated it.
+                        gate_off: false,
                     })
                 })
                 .collect(),
@@ -208,11 +211,13 @@ mod tests {
             vec![
                 ProjectAgent {
                     agent: "claude-code".to_string(),
-                    registered: true
+                    registered: true,
+                    gate_off: false,
                 },
                 ProjectAgent {
                     agent: "codex".to_string(),
-                    registered: false
+                    registered: false,
+                    gate_off: false,
                 },
             ]
         );

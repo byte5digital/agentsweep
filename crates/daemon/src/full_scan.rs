@@ -743,6 +743,7 @@ impl Judgement<'_> {
             enumeration,
             self.pack,
             &outcome.judged,
+            self.manifest.bands,
         );
         // Where every Finding stands is settled, so the open Threat Findings
         // are known, and the Items they are about are in hand: the facts the
@@ -897,15 +898,16 @@ fn withdrawn(standing: &mut [Standing], pack: &RulePack) {
 }
 
 /// What a client needs beside each standing Finding: the facts of the Item it
-/// is about, who took it out when it is stopped, and whether the Rule that
-/// stopped it was withdrawn. Nothing is decided here; it only says what the
-/// Scan already knows.
+/// is about, who took it out when it is stopped, whether the Rule that
+/// stopped it was withdrawn, and the Band thresholds that placed a scored
+/// Item. Nothing is decided here; it only says what the Scan already knows.
 fn facts(
     standing: &[Standing],
     quarantined: &QuarantineManifest,
     enumeration: &Enumeration,
     pack: &RulePack,
     judged: &[AppliedVerdict],
+    bands: agentsweep_core::pack::Bands,
 ) -> BTreeMap<FindingId, FindingFacts> {
     let items: BTreeMap<&ItemId, &Item> = enumeration
         .items
@@ -917,6 +919,9 @@ fn facts(
         .map(|placed| {
             let item = items.get(&placed.finding.item_id).copied();
             let mut facts = FindingFacts::of(&placed.finding, item);
+            if facts.score > 0 || !facts.heuristics.is_empty() {
+                facts.bands = Some(bands);
+            }
             if let Source::Rule(id) = placed.finding.source {
                 facts.phrase = pack
                     .metas()

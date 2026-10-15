@@ -19,8 +19,9 @@ use serde_json::{Map, Value};
 
 use crate::baseline::{SensitiveValues, sensitive_values};
 use crate::eventlog::Actor;
-use crate::finding::{Category, Finding, FiredHeuristic, RuleStatus, Source, Tier};
+use crate::finding::{Category, Finding, FiredHeuristic, MatchRange, RuleStatus, Source, Tier};
 use crate::item::{Item, ItemId, Kind, Provenance, Scope, sha256_hex};
+use crate::pack::Bands;
 
 /// The longest excerpt a Heuristic line carries, in characters. A match is
 /// evidence to read, not content to reproduce.
@@ -213,6 +214,16 @@ pub struct FindingFacts {
     /// The engine's reason, contained: plain text of at most 240 characters,
     /// shown labelled as the engine's. Empty for any other Finding.
     pub judgement_reason: String,
+    /// Where the Item sits on disk, empty where the Item was not at hand.
+    pub path: String,
+    /// The text the Rule's first match landed on, redacted to a short hash
+    /// as a Heuristic line's excerpt is, empty for any other source and for
+    /// a Rule that matched no pattern.
+    pub excerpt: String,
+    /// The Band thresholds of the Rule Pack that scored the Item, absent
+    /// where no Heuristic fired on it. The Rule Pack's to give, like the
+    /// phrase.
+    pub bands: Option<Bands>,
 }
 
 impl FindingFacts {
@@ -275,6 +286,16 @@ impl FindingFacts {
             judgement_engine: String::new(),
             judgement_model: String::new(),
             judgement_reason: String::new(),
+            path: item
+                .map(|item| item.path.display().to_string())
+                .unwrap_or_default(),
+            excerpt: match (finding.source, item) {
+                (Source::Rule(_), Some(item)) => {
+                    first_match_excerpt(item, &finding.file, &finding.matches, finding.sensitive)
+                }
+                _ => String::new(),
+            },
+            bands: None,
         }
     }
 
@@ -291,10 +312,18 @@ impl FindingFacts {
             Value::from(self.activation.as_str()),
         );
         map.insert("band".to_string(), Value::from(self.band.as_str()));
+        if let Some(bands) = self.bands {
+            map.insert("ambiguous_at".to_string(), Value::from(bands.ambiguous_at));
+            map.insert(
+                "suspicious_at".to_string(),
+                Value::from(bands.suspicious_at),
+            );
+        }
         map.insert(
             "drift_change".to_string(),
             Value::from(self.drift_change.as_str()),
         );
+        map.insert("excerpt".to_string(), Value::from(self.excerpt.as_str()));
         map.insert(
             "heuristics".to_string(),
             Value::Array(
@@ -312,6 +341,7 @@ impl FindingFacts {
             "project_root".to_string(),
             Value::from(self.project_root.as_str()),
         );
+        map.insert("path".to_string(), Value::from(self.path.as_str()));
         map.insert("phrase".to_string(), Value::from(self.phrase.as_str()));
         map.insert(
             "judgement_engine".to_string(),
@@ -382,6 +412,18 @@ impl FindingFacts {
             judgement_engine: text("judgement_engine"),
             judgement_model: text("judgement_model"),
             judgement_reason: text("judgement_reason"),
+            path: text("path"),
+            excerpt: text("excerpt"),
+            bands: match (
+                value.get("ambiguous_at").and_then(Value::as_i64),
+                value.get("suspicious_at").and_then(Value::as_i64),
+            ) {
+                (Some(ambiguous_at), Some(suspicious_at)) => Some(Bands {
+                    ambiguous_at,
+                    suspicious_at,
+                }),
+                _ => None,
+            },
         }
     }
 }
@@ -396,21 +438,31 @@ impl FindingFacts {
 /// is one itself. The hash is the same short form the parsed views and the
 /// stores use, so a person can tell two values apart and never read one.
 pub fn excerpt(item: &Item, heuristic: &FiredHeuristic) -> String {
-    let Some(first) = heuristic
-        .matches
+    first_match_excerpt(
+        item,
+        &heuristic.file,
+        &heuristic.matches,
+        heuristic.sensitive,
+    )
+}
+
+/// The excerpt of the first of `matches` in `file` of an Item, redacted as
+/// [`excerpt`] says: what a Heuristic line and a Rule Finding both show.
+fn first_match_excerpt(item: &Item, file: &str, matches: &[MatchRange], sensitive: bool) -> String {
+    let Some(first) = matches
         .iter()
         .min_by_key(|found| (found.range.start, found.range.end))
     else {
         return String::new();
     };
     let units = item.scan_units();
-    let Some(unit) = units.iter().find(|unit| unit.file == heuristic.file) else {
+    let Some(unit) = units.iter().find(|unit| unit.file == file) else {
         return String::new();
     };
     let Some(matched) = unit.bytes.get(first.range.clone()) else {
         return String::new();
     };
-    if heuristic.sensitive
+    if sensitive
         || item.kind == Kind::EnvFile
         || lands_on_a_sensitive_field(item, first.range.clone())
     {
@@ -479,7 +531,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::finding::{MatchRange, Severity};
+    use crate::finding::Severity;
     use crate::item::{Activation, InactiveReason, Provenance};
 
     fn finding_on(item: &Item, source: Source) -> Finding {
@@ -697,6 +749,64 @@ mod tests {
         assert_eq!(facts.heuristics[1].excerpt, "https://paste.example.inva");
     }
 
+    /// A Rule Finding carries the Item's place on disk and the text its
+    /// first match landed on; a sensitive Rule's match only as a hash.
+    #[test]
+    fn a_rule_finding_carries_its_path_and_its_redacted_excerpt() {
+        let item = skill(Scope::User);
+        let mut finding = finding_on(&item, Source::Rule(4));
+        finding.matches = vec![
+            MatchRange {
+                pattern: "$b".to_string(),
+                range: 13..39,
+            },
+            MatchRange {
+                pattern: "$a".to_string(),
+                range: 5..12,
+            },
+        ];
+        let facts = FindingFacts::of(&finding, Some(&item));
+        assert_eq!(facts.path, "/home/u/.claude/skills/setup/SKILL.md");
+        assert_eq!(facts.excerpt, "curl -k", "the first match");
+        assert_eq!(facts.bands, None, "the Rule Pack's to give");
+
+        finding.sensitive = true;
+        let facts = FindingFacts::of(&finding, Some(&item));
+        assert_eq!(
+            facts.excerpt,
+            format!("sha256:{}", &sha256_hex(b"curl -k")[..12])
+        );
+
+        let away = FindingFacts::of(&finding, None);
+        assert_eq!((away.path.as_str(), away.excerpt.as_str()), ("", ""));
+        let mut score = finding_on(&item, Source::Score(4));
+        score.matches = finding.matches.clone();
+        assert_eq!(FindingFacts::of(&score, Some(&item)).excerpt, "");
+    }
+
+    #[test]
+    fn the_path_the_excerpt_and_the_bands_survive_the_state_file() {
+        let item = skill(Scope::User);
+        let mut finding = finding_on(&item, Source::Rule(4));
+        finding.matches = vec![MatchRange {
+            pattern: "$a".to_string(),
+            range: 5..12,
+        }];
+        let mut facts = FindingFacts::of(&finding, Some(&item));
+        facts.bands = Some(Bands::V1);
+        let mut map = Map::new();
+        facts.write_into(&mut map);
+        assert_eq!(map["ambiguous_at"], 2);
+        assert_eq!(map["suspicious_at"], 4);
+        assert_eq!(FindingFacts::read_from(&Value::Object(map)), facts);
+
+        facts.bands = None;
+        let mut map = Map::new();
+        facts.write_into(&mut map);
+        assert!(!map.contains_key("ambiguous_at"));
+        assert_eq!(FindingFacts::read_from(&Value::Object(map)), facts);
+    }
+
     #[test]
     fn a_sensitive_heuristic_shows_only_a_hash_of_its_match() {
         let item = skill(Scope::User);
@@ -834,6 +944,9 @@ mod tests {
             judgement_engine: "ollama".to_string(),
             judgement_model: "qwen3:8b".to_string(),
             judgement_reason: "It hides an instruction.".to_string(),
+            path: "/src/demo/CLAUDE.md".to_string(),
+            excerpt: "sha256:0123456789ab".to_string(),
+            bands: Some(crate::pack::Bands::V1),
         };
         let mut map = Map::new();
         facts.write_into(&mut map);

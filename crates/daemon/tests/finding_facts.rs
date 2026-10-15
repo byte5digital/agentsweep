@@ -390,6 +390,15 @@ fn a_finding_in_an_untrusted_project_names_its_scope_root_and_activation() {
     // force, which the daemon reads off the Rule Pack.
     assert_eq!(planted.facts.phrase, "downloads and runs hidden code");
     assert_eq!(planted.facts.plugin, "");
+    assert!(
+        planted.facts.path.ends_with("CLAUDE.md"),
+        "{}",
+        planted.facts.path
+    );
+    assert!(
+        !planted.facts.excerpt.is_empty(),
+        "the text the Rule matched"
+    );
 }
 
 /// A Suspicious skill carries one line per fired Threat Heuristic with its
@@ -425,6 +434,16 @@ fn a_suspicious_finding_lists_its_heuristics_and_redacts_the_sensitive_one() {
         })
         .unwrap_or_else(|| panic!("a Suspicious Finding: {:?}", status.findings));
     assert_eq!(suspicious.facts.band, "Suspicious");
+    assert_eq!(
+        suspicious.facts.bands,
+        Some(agentsweep_core::pack::Bands::V1),
+        "the thresholds of the Rule Pack in force"
+    );
+    assert!(
+        suspicious.facts.path.ends_with("doc-refresher"),
+        "{}",
+        suspicious.facts.path
+    );
     let ids: Vec<i64> = suspicious
         .facts
         .heuristics
@@ -471,6 +490,7 @@ fn a_suspicious_finding_lists_its_heuristics_and_redacts_the_sensitive_one() {
     assert!(exposure.facts.heuristics.is_empty());
     assert_eq!(exposure.facts.score, 0);
     assert_eq!(exposure.facts.band, "");
+    assert_eq!(exposure.facts.bands, None, "no Heuristic placed it");
     assert_eq!(
         exposure.facts.why_nothing_happened,
         Some(WhyNothingHappened::Exposure)

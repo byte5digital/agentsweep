@@ -2507,6 +2507,9 @@ mod tests {
             phrase: "downloads and runs hidden code".to_string(),
             plugin: "shipit".to_string(),
             drift_change: "changed".to_string(),
+            path: "/src/demo/.claude/skills/setup".to_string(),
+            excerpt: "curl -k".to_string(),
+            bands: Some(agentsweep_core::pack::Bands::V1),
             ..FindingFacts::default()
         };
         let status = Status {

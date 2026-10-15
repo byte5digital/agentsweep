@@ -253,6 +253,20 @@ The first command asks for the key at a prompt, so it stays out of the shell his
 
 Seams in the suite: `claude_engine::tests` in the core (the exact request body and headers, every failure as no Verdict, the one retry after a `429`, usage on every answer, the key in no error and no debug output, and the compile-time boundary that keeps the engine out of both builds of the CLI).
 
+## 12. Apple's model judges a batch through the daemon, and how often it is rate limited
+
+This check answers the fact of spec section 12 on Apple's `rateLimited`: whether a helper spawned by a background process is rate limited, and at what rate. In AgentSweep the helper is spawned by the daemon, a launch agent with `ProcessType=Background`, not by the menu bar app, so the check measures that configuration and nothing else: the helper as a child of the running daemon. It needs a hand install of a debug test bundle (sections "Build a test bundle" and 1), macOS 26 on Apple silicon with Apple Intelligence switched on and its model downloaded, and the daemon's AI Judgement queue, which starts judging Ambiguous Items after a Scan; until that queue is in, the Apple engine is exercised by the suite alone. The suite covers everything else against a fake helper, a script answering canned JSON (the core's `apple_engine` tests and the daemon's engine tests), because no automated test may reach Apple's model.
+
+Prepare a temporary project holding twenty defanged Items that land in the Ambiguous Band: instruction files and skills taken from the Heuristics' bad Fixtures, every host ending in `.invalid` and every payload decoding to `echo`. Open Claude Code in it once and accept the trust dialog, so the project is pooled. Then switch the Judgement Engine to Apple on-device (onboarding's Apple screen, or Settings) and press Scan now.
+
+- [ ] The engine state, as the Settings pane shows it, says Apple on-device is available, with the full macOS version and build number as `sw_vers` shows them.
+- [ ] Every one of the twenty Items ends with a Verdict or with no Verdict and stays Ambiguous; none is called benign because of an engine error.
+- [ ] While the batch runs, `pgrep -P $(pgrep -x agentsweepd) agentsweep-apple-judge` shows at most one helper at a time, and none once the batch is done.
+- [ ] The daemon's log names every Item that got no Verdict and why. A judgement answered `rate_limited` is asked again after five and then ten seconds, so a batch that meets it takes visibly longer; one rate limited three times in a row gives no Verdict.
+- [ ] Write a dated section into the measurements: how many of the twenty judgements met `rate_limited` at least once, how many gave up after three tries, the time from the first judgement to the last, and the macOS version and build.
+
+Afterwards switch the engine off again, then clean up as below and delete the temporary project.
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.

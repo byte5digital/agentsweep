@@ -199,6 +199,7 @@ impl ChangeScan<'_> {
             // What the adapters stated about the roots in play, which a
             // project that changed its hook switch is among.
             project_hooks: survey.enumeration.project_hooks,
+            awaiting: judged.awaiting,
         }))
     }
 }

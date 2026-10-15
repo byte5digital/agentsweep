@@ -19,7 +19,10 @@
 //! Rule Feed at start and once a day, verifies a newer Rule Pack against the
 //! keys pinned in the binary and puts it in force for every Tier, with the
 //! Full Scan a new pack brings. The Rule Feed toggle is kept in the settings
-//! file, which a rebuilt state file leaves alone.
+//! file, which a rebuilt state file leaves alone. What a Scan leaves awaiting
+//! judgement it feeds to the AI Judgement queue, which asks the active engine
+//! on threads of its own after the Scan has finished and opens a Finding when
+//! a malicious Verdict lands.
 //!
 //! The daemon has no asynchronous runtime: every part of it is a blocking
 //! thread, the socket is served through `interprocess` and the watcher gathers
@@ -56,6 +59,7 @@ pub mod full_scan;
 pub mod gate;
 pub mod gate_answer;
 pub mod integrity;
+pub mod judgement_queue;
 pub mod log;
 pub mod machine;
 pub mod options;

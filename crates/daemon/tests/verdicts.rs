@@ -5,9 +5,9 @@
 //! note only the Developer Posture shows, unsure leaves it Ambiguous. The
 //! cache is compacted behind a completed Full Scan, at most once a day.
 //!
-//! The daemon has no engine to ask in this milestone: the AI Judgement queue
-//! comes after it. So every Verdict here was written into the cache by the
-//! test, through the daemon's own writer, and every one the Scan applies
+//! A developer run asks no engine (the AI Judgement queue has its own tests,
+//! with a fake engine). So every Verdict here was written into the cache by
+//! the test, through the daemon's own writer, and every one the Scan applies
 //! came from there and from nowhere else.
 //!
 //! Every test runs against a temporary home, a temporary data directory and

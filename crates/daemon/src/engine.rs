@@ -18,8 +18,6 @@ use std::sync::Arc;
 
 use agentsweep_core::apple_engine::AppleHelper;
 use agentsweep_core::eventlog::{Action, Actor, Event};
-use agentsweep_core::judged::Judge;
-use agentsweep_core::judgement_request::Normalisation;
 use agentsweep_core::keychain::{ClaudeKey, ClaudeKeyStore, MemoryClaudeKeyStore};
 use agentsweep_core::ollama::OllamaClient;
 use agentsweep_core::settings::{
@@ -35,23 +33,23 @@ use crate::stores::open_the_event_log;
 /// The store the Claude API key is kept in, by where the chain key comes from:
 /// the login Keychain for the shipped daemon, the process's memory for a test
 /// or a developer's hand run, which therefore never touches the Keychain.
-pub fn claude_key_store(choice: KeySourceChoice) -> Box<dyn ClaudeKeyStore + Send + Sync> {
+pub fn claude_key_store(choice: KeySourceChoice) -> Arc<dyn ClaudeKeyStore + Send + Sync> {
     match choice {
-        KeySourceChoice::Memory => Box::new(MemoryClaudeKeyStore::empty()),
+        KeySourceChoice::Memory => Arc::new(MemoryClaudeKeyStore::empty()),
         KeySourceChoice::Keychain => login_keychain(),
     }
 }
 
 #[cfg(target_os = "macos")]
-fn login_keychain() -> Box<dyn ClaudeKeyStore + Send + Sync> {
-    Box::new(agentsweep_core::keychain::LoginKeychainClaudeKey::for_the_daemon())
+fn login_keychain() -> Arc<dyn ClaudeKeyStore + Send + Sync> {
+    Arc::new(agentsweep_core::keychain::LoginKeychainClaudeKey::for_the_daemon())
 }
 
 /// There is no Keychain off macOS (spec section 6.1); a key that lives only as
 /// long as the process is the honest stand-in.
 #[cfg(not(target_os = "macos"))]
-fn login_keychain() -> Box<dyn ClaudeKeyStore + Send + Sync> {
-    Box::new(MemoryClaudeKeyStore::empty())
+fn login_keychain() -> Arc<dyn ClaudeKeyStore + Send + Sync> {
+    Arc::new(MemoryClaudeKeyStore::empty())
 }
 
 /// What one engine change was, as the Event Log names it.
@@ -170,14 +168,6 @@ impl Daemon {
         }
     }
 
-    /// The active Judgement Engine as a Scan looks up its Verdicts under,
-    /// None while AI Judgement is off. Requests normalise the home of the
-    /// machine in force.
-    pub fn judge_in_force(&self) -> Option<Judge> {
-        let machine = self.machine_in_force();
-        Judge::of_settings(&self.judgement(), Normalisation::of_home(machine.home()))
-    }
-
     /// The AI Judgement choices as they stand.
     pub fn judgement(&self) -> JudgementSettings {
         self.settings
@@ -205,7 +195,13 @@ impl Daemon {
         self: &Arc<Daemon>,
         change: &EngineChange,
     ) -> Result<EngineState, RequestError> {
+        let before = self.judgement();
         let mut state = self.change_engine_choices(change)?;
+        // A switch feeds the Items that await judgement to the queue under
+        // the engine now active; switching off drops what was pending.
+        if engine_change(&before, &self.judgement()).is_some() {
+            self.judge_again();
+        }
         if self.detect_ollama {
             let address = self.judgement().ollama_address;
             state.ollama = Some(OllamaClient::new(&address).presence());
@@ -308,6 +304,10 @@ impl Daemon {
         }
         if held || before.engine == JudgementEngine::Claude {
             self.tell_settings();
+        }
+        drop(_writing);
+        if before.engine == JudgementEngine::Claude {
+            self.judge_again();
         }
         Ok(self.engine_state_of(&self.judgement(), recorded))
     }

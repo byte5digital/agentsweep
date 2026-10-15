@@ -53,6 +53,7 @@ use agentsweep_core::state::{ScanSummary, Trigger};
 use agentsweep_core::verdicts::{VerdictCache, VerdictCacheView};
 
 use crate::actions::{Acting, ScanActions, act_in_scan};
+use crate::judgement_queue::Awaiting;
 use crate::machine::{Machine, adapters, agents};
 use crate::overview::{Detected, ambiguous, checked, of_the_full_scan};
 use crate::permission::{Access, Disk, Reach};
@@ -141,6 +142,9 @@ pub struct ScanRun {
     /// this Scan enumerated: every pooled root after a Full Scan, the roots in
     /// play after a Change Scan (spec section 7.6).
     pub project_hooks: Vec<ProjectHooks>,
+    /// The Items it looked at that await judgement, which is what the AI
+    /// Judgement queue is fed with: every one not marked answered.
+    pub awaiting: Vec<Awaiting>,
 }
 
 /// What a Scan reports as it goes.
@@ -319,6 +323,7 @@ impl FullScan<'_> {
             overview,
             gate_lines,
             project_hooks: survey.enumeration.project_hooks,
+            awaiting: judged.awaiting,
         })
     }
 }
@@ -542,6 +547,9 @@ pub struct Judged {
     pub ambiguous: Vec<agentsweep_core::overview::AmbiguousItem>,
     /// The Items it looked at that a cached benign Verdict moved to Clear.
     pub checked: Vec<agentsweep_core::overview::CheckedItem>,
+    /// The Items it looked at that await judgement, an unsure Verdict from
+    /// the cache marked answered.
+    pub awaiting: Vec<Awaiting>,
 }
 
 /// Reading the stores, running one pass and writing what it decided.
@@ -594,6 +602,7 @@ impl Judgement<'_> {
         let baseline = Baseline::in_data_directory(self.directory);
         let (mut writer, baseline_state) = BaselineWriter::open(&baseline, self.keys)?;
         let held = baseline.read(self.keys)?;
+        let baseline_held = &held;
 
         let declarations = Declarations::of(self.descriptors);
         let rule_pack = self.manifest.pack_version;
@@ -741,6 +750,13 @@ impl Judgement<'_> {
         let gate_facts = gate_facts::for_open_threats(&standing, &enumeration.items);
         let ambiguous = ambiguous(&outcome.report.assessments, &enumeration.items, &raised);
         let checked = checked(&outcome.judged, &enumeration.items);
+        let awaiting = awaiting(
+            &outcome,
+            &enumeration.items,
+            &raised,
+            baseline_held,
+            self.at,
+        );
 
         let bands = count_bands(&outcome);
         let summary = ScanSummary {
@@ -787,14 +803,60 @@ impl Judgement<'_> {
             gate_facts,
             ambiguous,
             checked,
+            awaiting,
         })
     }
+}
+
+/// The Items that await judgement, each with when its content last changed:
+/// the moment the Baseline last accepted the content it has now, or this
+/// Scan's moment for content it has not accepted before. An unsure Verdict
+/// leaves an Item Ambiguous and is cached, so an Item it was applied to is
+/// marked answered and is not asked again under the same engine.
+fn awaiting(
+    outcome: &agentsweep_core::scan_pass::ScanOutcome,
+    items: &[Item],
+    raised: &[Finding],
+    baseline: &agentsweep_core::baseline::BaselineView,
+    at: Timestamp,
+) -> Vec<Awaiting> {
+    let flagged: BTreeSet<&ItemId> = raised.iter().map(|finding| &finding.item_id).collect();
+    let answered: BTreeSet<&ItemId> = outcome
+        .judged
+        .iter()
+        .map(|applied| &applied.item_id)
+        .collect();
+    outcome
+        .report
+        .assessments
+        .iter()
+        .filter(|assessment| assessment.awaits_judgement())
+        .filter(|assessment| !flagged.contains(&assessment.item_id))
+        .filter_map(|assessment| {
+            let item = items.iter().find(|item| item.id == assessment.item_id)?;
+            let changed_at = baseline
+                .record(&item.id)
+                .filter(|record| record.accepted_hash == item.content_hash)
+                .map(|record| record.accepted_at)
+                .unwrap_or(at);
+            Some(Awaiting {
+                item: item.clone(),
+                fired: assessment.fired.clone(),
+                score: assessment.score,
+                changed_at,
+                answered: answered.contains(&item.id),
+            })
+        })
+        .collect()
 }
 
 /// The Verdict cache as it reads now. A cache that cannot be read is no
 /// cache: every Item that awaits judgement stays Ambiguous, and the daemon's
 /// log says why.
-fn read_the_verdicts(directory: &DataDirectory, keys: &dyn KeySource) -> VerdictCacheView {
+pub(crate) fn read_the_verdicts(
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+) -> VerdictCacheView {
     match VerdictCache::in_data_directory(directory).read(keys) {
         Ok(view) => view,
         Err(error) => {

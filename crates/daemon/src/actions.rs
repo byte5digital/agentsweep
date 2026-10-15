@@ -722,6 +722,9 @@ impl Daemon {
             message = format!("{message} {PROJECT_LINE}");
         }
         say!("quarantined {} on request ({receipt_id})", item.id);
+        // A pending AI Judgement request about the Item is taken out: it is
+        // stopped, and nothing an engine says about it changes that.
+        self.withdraw_from_judgement(&item.id);
         Ok(self.report(
             "quarantine",
             &finding,
@@ -1214,6 +1217,7 @@ impl Daemon {
             true
         });
         say!("trusted {} on request", finding.item_id);
+        self.withdraw_from_judgement(&finding.item_id);
         let message = match finding.category {
             Category::Threat => "Trusted this exact version. Any change to it is checked afresh.",
             Category::Exposure => "Kept it as it is. Any change to it is checked afresh.",

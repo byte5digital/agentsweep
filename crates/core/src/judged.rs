@@ -120,18 +120,24 @@ fn budget_of(engine: JudgementEngine) -> Option<usize> {
     }
 }
 
-/// Every engine and model the settings name as installed, which is what a
-/// cached Verdict has to name to survive a compaction: Apple on-device, the
-/// Ollama model once one is named, and the Claude model in use.
-pub fn installed_models(settings: &JudgementSettings) -> Vec<InstalledModel> {
+/// Every engine and model that is installed, which is what a cached Verdict
+/// has to name to survive a compaction: Apple on-device, the Ollama model
+/// once one is named, and the Claude model in use.
+///
+/// The Ollama model is named as the Verdict cache keys it, which is the tag
+/// and the digest of what Ollama holds under it (`qwen3:8b@sha256:...`), so
+/// a model pulled again under the same tag never keeps the old one's
+/// Verdicts. The caller reads the digest from Ollama's model list; empty
+/// means no Ollama model.
+pub fn installed_models(settings: &JudgementSettings, ollama_model: &str) -> Vec<InstalledModel> {
     let mut installed = vec![InstalledModel::new(
         JudgementEngine::Apple.as_str(),
         settings.model_of(JudgementEngine::Apple),
     )];
-    if !settings.ollama_model.is_empty() {
+    if !ollama_model.is_empty() {
         installed.push(InstalledModel::new(
             JudgementEngine::Ollama.as_str(),
-            &settings.ollama_model,
+            ollama_model,
         ));
     }
     installed.push(InstalledModel::new(
@@ -366,21 +372,21 @@ mod tests {
     }
 
     #[test]
-    fn the_installed_models_are_the_ones_the_settings_name() {
-        let mut settings = JudgementSettings::default();
-        let names = |settings: &JudgementSettings| -> Vec<(String, String)> {
-            installed_models(settings)
+    fn the_installed_ollama_model_is_the_tag_and_digest_handed_over() {
+        let settings = JudgementSettings::default();
+        let names = |ollama: &str| -> Vec<(String, String)> {
+            installed_models(&settings, ollama)
                 .into_iter()
                 .map(|model| (model.engine, model.model))
                 .collect()
         };
         assert!(
-            !names(&settings)
-                .iter()
-                .any(|(engine, _)| engine == "ollama"),
+            !names("").iter().any(|(engine, _)| engine == "ollama"),
             "no Ollama model named, none installed"
         );
-        settings.ollama_model = "qwen3:8b".to_string();
-        assert!(names(&settings).contains(&("ollama".to_string(), "qwen3:8b".to_string())));
+        assert!(
+            names("qwen3:8b@sha256:1")
+                .contains(&("ollama".to_string(), "qwen3:8b@sha256:1".to_string()))
+        );
     }
 }

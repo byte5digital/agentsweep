@@ -55,6 +55,7 @@ use crate::bundle_watch::{self, BundleWatch, Change, Own};
 use crate::change_scan::ChangeScan;
 use crate::due::{self, Occasion, PowerState, Schedule, SystemPower};
 use crate::full_scan::{FullScan, Progress, ScanRun};
+use crate::judgement_queue::{Awaiting, Engines, JudgementQueue, NoEngines, SystemEngines};
 use crate::machine::Machine;
 use crate::options::{KeySourceChoice, Options};
 use crate::permission::{Access, Disk, Folders, proven_readable_classes};
@@ -105,6 +106,11 @@ pub struct Tuning {
     /// bundle. Absent when there is no such path, and then nothing is
     /// registered.
     pub gate: Option<GateCommand>,
+    /// Where the Judgement Engine the settings make active is opened. Absent
+    /// means the real engines for the installed daemon and none to ask for a
+    /// developer run, so a test or a hand run never reaches an Ollama or the
+    /// Claude API on this Mac unless it hands in a fake.
+    pub engines: Option<Arc<dyn Engines>>,
 }
 
 impl Default for Tuning {
@@ -120,6 +126,7 @@ impl Default for Tuning {
             detect_ollama: None,
             apple_helper: None,
             gate: crate::gate::bundled_command(),
+            engines: None,
         }
     }
 }
@@ -135,6 +142,7 @@ impl std::fmt::Debug for Tuning {
             .field("detect_ollama", &self.detect_ollama)
             .field("apple_helper", &self.apple_helper)
             .field("gate", &self.gate)
+            .field("engines", &self.engines.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -210,7 +218,14 @@ pub struct Daemon {
     pub(crate) settings: Mutex<Settings>,
     /// Where the Claude API key is kept: the second item of the login
     /// Keychain for the shipped daemon, memory for a test or a hand run.
-    pub(crate) claude_key: Box<dyn ClaudeKeyStore + Send + Sync>,
+    pub(crate) claude_key: Arc<dyn ClaudeKeyStore + Send + Sync>,
+    /// Where the active Judgement Engine is opened.
+    pub(crate) engines: Arc<dyn Engines>,
+    /// The AI Judgement queue the Scans feed.
+    pub(crate) judgement_queue: Arc<JudgementQueue>,
+    /// The Items that awaited judgement when the last Scans looked at them,
+    /// which a switch of engine feeds to the queue again. In memory only.
+    pub(crate) awaiting: Mutex<Vec<Awaiting>>,
     /// Every state a client is shown, by the precedence of spec section 6.6.
     pub(crate) health: Mutex<Health>,
     /// Which chains started again under a new key without the user having
@@ -223,7 +238,7 @@ pub struct Daemon {
     pub(crate) writing: Mutex<()>,
     /// The Findings the last Scan raised, which the next one compares against
     /// to know what is gone. Never stored: a restart derives them again.
-    raised: Mutex<Vec<Finding>>,
+    pub(crate) raised: Mutex<Vec<Finding>>,
     /// What has been asked for, and what is running.
     queue: Mutex<Queue>,
     /// The Rule Pack in force, compiled once. Compiling it costs far more than
@@ -398,6 +413,11 @@ impl Daemon {
                 .flatten()
                 .map(|helper| helper.path().to_path_buf())
         });
+        let engines: Arc<dyn Engines> = match (&tuning.engines, options.is_developer_run()) {
+            (Some(engines), _) => Arc::clone(engines),
+            (None, false) => Arc::new(SystemEngines),
+            (None, true) => Arc::new(NoEngines),
+        };
         let (settings, settings_unreadable) = settings_at_start(&directory, &*keys, &mut state);
         let (pack, discarded) = pack_at_start(&directory, &bundled, &mut state, settings.rule_feed);
         // A stored pack discarded at start is recorded like an accepted one,
@@ -455,6 +475,9 @@ impl Daemon {
             state: Mutex::new(state),
             settings: Mutex::new(settings),
             claude_key: crate::engine::claude_key_store(options.key_source),
+            engines,
+            judgement_queue: Arc::new(JudgementQueue::new()),
+            awaiting: Mutex::new(Vec::new()),
             health: Mutex::new(health),
             reset: Mutex::new(reset),
             writing: Mutex::new(()),
@@ -668,10 +691,11 @@ impl Daemon {
         // The pack in force when the Scan starts is the one it runs to the
         // end; a pack accepted meanwhile asks for the Full Scan after it.
         let pack = self.pack_in_force();
-        // So is the Judgement Engine: its Verdicts are looked up, and its name
-        // and model key the evaluation cache, under what was active at the
-        // start.
-        let judge = self.judge_in_force();
+        // So is the Judgement Engine: its Verdicts are looked up, its name
+        // and model key the evaluation cache, and what missed is fed to the
+        // queue under what was active at the start.
+        let in_force = self.engine_in_force();
+        let judge = in_force.as_ref().map(|engine| engine.judge.clone());
         match work {
             Work::Full(trigger) => {
                 self.record_the_pack_change(&pack);
@@ -707,7 +731,11 @@ impl Daemon {
                 }
                 .run(trigger);
                 match run {
-                    Ok(run) => self.took(run),
+                    Ok(mut run) => {
+                        let awaiting = std::mem::take(&mut run.awaiting);
+                        self.took(run);
+                        self.feed_the_queue(awaiting, in_force, trigger, None);
+                    }
                     Err(error) => say!("the Full Scan failed: {error}"),
                 }
             }
@@ -739,12 +767,15 @@ impl Daemon {
                     // before the batch is mapped, because only the mapping can
                     // say whether there was anything to scan.
                     Ok(None) => {}
-                    Ok(Some(run)) => {
+                    Ok(Some(mut run)) => {
                         self.publish(StateEvent::ScanStarted {
                             trigger: Trigger::Watcher,
                             at,
                         });
+                        let awaiting = std::mem::take(&mut run.awaiting);
+                        let looked_at = run.looked_at.clone();
                         self.took(run);
+                        self.feed_the_queue(awaiting, in_force, Trigger::Watcher, Some(&looked_at));
                     }
                     Err(error) => say!("the Change Scan failed: {error}"),
                 }
@@ -1058,7 +1089,22 @@ impl Daemon {
         if !baseline::compaction_due(last, at) {
             return;
         }
-        let installed = installed_models(&self.judgement());
+        let judgement = self.judgement();
+        // An Ollama model is kept under the tag and digest it is cached
+        // under, read from Ollama's model list. A list that cannot be read
+        // says nothing about what is installed, so nothing is compacted until
+        // it can be.
+        let ollama = match judgement.ollama_model.is_empty() {
+            true => String::new(),
+            false => match self.ollama_model_id(&judgement) {
+                Ok(model) => model,
+                Err(error) => {
+                    say!("the Verdict cache is not compacted: {error}");
+                    return;
+                }
+            },
+        };
+        let installed = installed_models(&judgement, &ollama);
         match verdicts::compact(&self.directory, &*self.keys, &installed) {
             Ok(Some(done)) => say!(
                 "the Verdict cache was compacted: {} records before, {} after",

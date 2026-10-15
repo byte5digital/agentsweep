@@ -29,8 +29,9 @@ path = "src/main.rs"
 [features]
 default = []
 # The in-bundle build: the daemon client. Everything that reaches the daemon is
-# behind it, and so is the IPC crate.
-bundle = ["dep:agentsweep-ipc", "dep:serde_json"]
+# behind it, and so is the IPC crate, and the Apple on-device engine, whose
+# helper only the bundle carries.
+bundle = ["dep:agentsweep-ipc", "dep:serde_json", "agentsweep-core/apple"]
 
 [dependencies]
 agentsweep-adapter-claude-code.workspace = true

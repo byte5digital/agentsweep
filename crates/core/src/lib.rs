@@ -28,6 +28,9 @@
 
 pub mod adapter;
 pub mod allowlist;
+pub mod apple;
+#[cfg(feature = "apple")]
+pub mod apple_engine;
 pub mod baseline;
 pub mod chain;
 #[cfg(feature = "daemon")]

@@ -24,7 +24,7 @@ agentsweep-adapter-workspace.workspace = true
 # The daemon is the one crate that turns the core's `daemon` feature on, which
 # is what makes it the only writer of the chains and the only process that
 # touches the Keychain (spec section 6.2).
-agentsweep-core = { workspace = true, features = ["daemon"] }
+agentsweep-core = { workspace = true, features = ["apple", "daemon"] }
 agentsweep-ipc.workspace = true
 # The jitter of the Rule Feed fetch: up to an hour, drawn from the operating
 # system's generator, so a fleet of clients does not ask in the same minute.
@@ -67,7 +67,7 @@ agentsweep-adapter-conformance = { version = "0.1.0", path = "../adapter-conform
 agentsweep-adapter-workspace = { workspace = true, features = ["testing"] }
 # Signs the test Rule Packs a fixture Rule Feed serves, with the development
 # keys the binary pins until the real key pairs exist.
-agentsweep-core = { workspace = true, features = ["daemon", "development-keys"] }
+agentsweep-core = { workspace = true, features = ["apple", "daemon", "development-keys"] }
 # The Rule Pack release workflow's own release writer and signing step, so a
 # test proves the client accepts what the workflow publishes.
 agentsweep-xtask = { path = "../xtask" }

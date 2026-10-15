@@ -67,6 +67,11 @@ security-framework = { version = "3.7.0", default-features = false, optional = t
 # reads the login Keychain (spec section 6.2), or that sends a request to the
 # Claude API (spec section 4.4).
 daemon = ["dep:security-framework", "dep:ureq"]
+# The Apple on-device Judgement Engine, which spawns the Apple judgement
+# helper the bundle places beside the daemon and the CLI. The daemon and the
+# in-bundle CLI turn it on; the crates.io build has no helper beside it and so
+# no Apple engine (spec section 4.4). It pulls in no dependency.
+apple = []
 # Signs with the development key pairs of the Rule Feed. For tests alone: the
 # real key pairs do not exist yet (spec section 9.8), and a shipped binary
 # never signs anything. It builds only inside the repository: the published
@@ -78,5 +83,5 @@ development-keys = ["dep:minisign"]
 # The core's own tests cover the write side, so a test build turns the daemon
 # feature on for the core itself, and signs its test packs with the development
 # keys. Nothing here reaches a shipped binary.
-agentsweep-core = { path = ".", features = ["daemon", "development-keys"] }
+agentsweep-core = { path = ".", features = ["apple", "daemon", "development-keys"] }
 tempfile = "3.27.0"

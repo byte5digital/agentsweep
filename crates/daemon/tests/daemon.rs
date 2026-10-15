@@ -560,6 +560,10 @@ fn a_subscriber_is_told_when_a_scan_starts_gets_on_and_finishes() {
             Some(StateEvent::SettingsChanged { .. }) => {
                 seen.push("settings-changed".to_string());
             }
+            Some(StateEvent::JudgementProgress { done, total }) => {
+                assert!(done <= total, "{done} of {total}");
+                seen.push("judgement-progress".to_string());
+            }
             Some(StateEvent::OverviewChanged { overview }) => {
                 assert!(!overview.agents.is_empty());
                 seen.push("overview-changed".to_string());

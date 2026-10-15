@@ -611,6 +611,15 @@ pub enum StateEvent {
         /// How many it has, zero while it is still enumerating.
         total: usize,
     },
+    /// The AI Judgement queue got this far: the line "AI check: 3 of 12"
+    /// that the Developer Posture and the Activity show (spec section 6.4).
+    /// It runs after the Scan that fed it has finished.
+    JudgementProgress {
+        /// How many Items the queue has had answered, a Verdict or none.
+        done: usize,
+        /// How many it holds altogether, answered or not.
+        total: usize,
+    },
     /// A Scan ended, with its summary.
     ScanFinished {
         /// What it found.
@@ -670,6 +679,7 @@ impl StateEvent {
         match self {
             StateEvent::ScanStarted { .. } => "scan-started",
             StateEvent::ScanProgress { .. } => "scan-progress",
+            StateEvent::JudgementProgress { .. } => "judgement-progress",
             StateEvent::ScanFinished { .. } => "scan-finished",
             StateEvent::FindingChanged { .. } => "finding-changed",
             StateEvent::Activity { .. } => "activity",
@@ -1646,6 +1656,10 @@ impl Message {
                         map.insert("done".to_string(), Value::from(*done as u64));
                         map.insert("total".to_string(), Value::from(*total as u64));
                     }
+                    StateEvent::JudgementProgress { done, total } => {
+                        map.insert("done".to_string(), Value::from(*done as u64));
+                        map.insert("total".to_string(), Value::from(*total as u64));
+                    }
                     StateEvent::ScanFinished { summary } => {
                         map.insert("summary".to_string(), summary.to_value());
                     }
@@ -1726,6 +1740,10 @@ impl Message {
                         at: Timestamp::parse(text("at")?)?,
                     },
                     "scan-progress" => StateEvent::ScanProgress {
+                        done: count("done")? as usize,
+                        total: count("total")? as usize,
+                    },
+                    "judgement-progress" => StateEvent::JudgementProgress {
                         done: count("done")? as usize,
                         total: count("total")? as usize,
                     },
@@ -1861,6 +1879,10 @@ mod tests {
         round_trip(Message::Event(StateEvent::ScanProgress {
             done: 3,
             total: 17,
+        }));
+        round_trip(Message::Event(StateEvent::JudgementProgress {
+            done: 3,
+            total: 12,
         }));
         round_trip(Message::Event(StateEvent::ScanFinished {
             summary: Box::new(summary()),

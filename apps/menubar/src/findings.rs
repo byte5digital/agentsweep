@@ -160,7 +160,11 @@ impl Findings {
                 }
             }
             StateEvent::HealthChanged { health } => self.health(health),
-            StateEvent::Activity { .. } | StateEvent::SettingsChanged { .. } => Follow::Nothing,
+            // The AI check's progress is a Developer Posture and Activity line,
+            // never the Scan line.
+            StateEvent::Activity { .. }
+            | StateEvent::SettingsChanged { .. }
+            | StateEvent::JudgementProgress { .. } => Follow::Nothing,
             // The list holds no Overview; the window's frame keeps it.
             StateEvent::OverviewChanged { .. } => Follow::Nothing,
         }

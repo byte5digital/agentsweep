@@ -45,6 +45,7 @@ item claude-code/project:<root>/project/mcp-server/~/.claude.json#scratch
 item claude-code/project:<root>/project/instruction-file/CLAUDE.md
   shape=file scope=project provenance=unknown activation=active registered=true symlink=false size=79
   sha256=62894292ceb3940e0249ac29dec4b52340f05098cc610554524666c0cd7bc572
+project <root>/project claude-code hooks_switched_off=false
 watch recursive <root>/home/.claude
 watch recursive <root>/project/.claude
 watch <root>/home

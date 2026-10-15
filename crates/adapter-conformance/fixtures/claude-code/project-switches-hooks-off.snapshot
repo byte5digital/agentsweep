@@ -1,0 +1,10 @@
+item claude-code/project:<root>/project/settings-entry/.claude/settings.json#/disableAllHooks
+  shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=24
+  sha256=8d71786a3a7dec5fcb050c095655e59dd5ddbb229d084c354297686fcb575319
+  view settings {key_path="disableAllHooks" trust_has_sessions=false trust_stated=true value="true" value_host=""}
+item claude-code/project:<root>/project/hook/.claude/settings.json#Stop//cf085885a6c4
+  shape=entry scope=project provenance=unknown activation=inactive(disabled) registered=true symlink=false size=85
+  sha256=cf085885a6c477f994c2ba2a1590805a7df8952031c9714697665178fb16951a
+  view hook {command="echo done" command_file_type="" command_resolved="" event="Stop" matcher="" type="command" url=""}
+project <root>/project claude-code hooks_switched_off=true
+watch recursive <root>/project/.claude

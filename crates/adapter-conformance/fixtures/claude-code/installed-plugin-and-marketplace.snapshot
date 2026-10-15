@@ -27,4 +27,5 @@ item claude-code/user/plugin/notes@demo-marketplace@1.1.0
   file .claude-plugin/plugin.json 97 scanned text
   file .orphaned_at 14 scanned text
   view plugin {bin_names=[""] bin_names_n=0 has_monitors=false name="notes" name_reserved_distance=10}
+project <root>/project claude-code hooks_switched_off=false
 watch recursive <root>/home/.claude

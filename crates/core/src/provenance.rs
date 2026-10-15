@@ -310,6 +310,7 @@ mod tests {
                 ),
             ],
             problems: Vec::new(),
+            project_hooks: Vec::new(),
         };
         provenances().stamp(&mut enumeration);
         assert_eq!(enumeration.items[0].provenance.as_str(), "repository");

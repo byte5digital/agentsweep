@@ -1,4 +1,5 @@
 item claude-code/project:<root>/instruction-file/CLAUDE.md
   shape=file scope=project provenance=unknown activation=unknown registered=false symlink=false size=72
   sha256=c815fa4c35d24eade7399afb4a84dd8228aa3f4108d7c82bc631c51514af371a
+project <root> claude-code hooks_switched_off=false
 watch <root>

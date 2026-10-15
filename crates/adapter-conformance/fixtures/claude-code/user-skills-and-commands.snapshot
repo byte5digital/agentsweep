@@ -44,6 +44,7 @@ item claude-code/user/workflow/~/.claude/workflows/release.js
 item claude-code/user/instruction-file/~/.claude/projects/-root-project/memory/MEMORY.md
   shape=file scope=user provenance=agent_written activation=active registered=true symlink=false size=39
   sha256=a096c6e0fa9fe223329930bc0b9afc3c2a2763b12deeaf7685fa8a2fba7004f9
+project <root>/project claude-code hooks_switched_off=false
 watch recursive <root>/home/.agents/skills/shared-notes
 watch recursive <root>/home/.claude
 watch recursive <root>/project/.claude

@@ -1,0 +1,3 @@
+# A trusted project that turns the hook engine off for its own sessions.
+[features]
+hooks = false

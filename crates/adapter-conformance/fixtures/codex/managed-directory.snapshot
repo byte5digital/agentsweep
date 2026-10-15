@@ -36,6 +36,7 @@ item codex/managed/settings-entry/<root>/system/etc/codex/requirements.toml#/ign
   shape=entry scope=managed provenance=manual activation=active registered=true symlink=false size=50
   sha256=e7d563f65ff3f8ad77d78dc692cfab3cf62f7494d7349eff1f6c6a3b0f8a440d
   view settings {key_path="ignore_user_and_project_exec_policy_rules" trust_has_sessions=false trust_stated=false value="true" value_host=""}
+project <root>/project codex hooks_switched_off=false
 watch recursive <root>/home/.codex
 watch <root>/system/etc/codex
 watch <root>/system/etc/codex/rules

@@ -310,6 +310,28 @@ pub struct Problem {
     pub reason: ProblemReason,
 }
 
+/// Whether one Agent's user hooks are switched off at one pooled project root
+/// by that project's own settings: the repository kill switch of spec section
+/// 7.6, which the Overview shows as "Gate off in this project".
+///
+/// An Agent adapter states it for every pooled root it was handed, computed
+/// from the settings it already parses and by the precedence the Agent gives
+/// them. A switch in the user's own or the managed settings is not a
+/// project's and is never stated here: that is the Gate's registration check.
+/// The workspace adapter states none, because it reads no Agent settings.
+/// The fact is no Finding: it blocks nothing, allows nothing and raises no
+/// notification by itself.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectHooks {
+    /// The Agent, by adapter id.
+    pub agent: String,
+    /// The pooled project root.
+    pub root: PathBuf,
+    /// True when the project's own settings switch the Agent's hooks off, so
+    /// the Gate cannot run in it.
+    pub switched_off: bool,
+}
+
 /// The result of one eager enumeration pass: complete Items with content and
 /// hashes, plus the paths that did not make it.
 #[derive(Clone, Debug, Default)]
@@ -318,6 +340,9 @@ pub struct Enumeration {
     pub items: Vec<Item>,
     /// The paths that could not be read, parsed or supported.
     pub problems: Vec<Problem>,
+    /// Whether the Agent's hooks are switched off at each pooled root, one
+    /// statement per root an Agent adapter was handed.
+    pub project_hooks: Vec<ProjectHooks>,
 }
 
 impl Enumeration {
@@ -325,6 +350,13 @@ impl Enumeration {
     pub fn extend(&mut self, other: Enumeration) {
         self.items.extend(other.items);
         self.problems.extend(other.problems);
+        self.project_hooks.extend(other.project_hooks);
+    }
+
+    /// The pooled roots where an Agent's hooks are switched off by the
+    /// project's own settings, each with the Agent.
+    pub fn gate_off(&self) -> impl Iterator<Item = &ProjectHooks> {
+        self.project_hooks.iter().filter(|hooks| hooks.switched_off)
     }
 }
 

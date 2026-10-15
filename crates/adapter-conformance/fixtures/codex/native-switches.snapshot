@@ -30,4 +30,5 @@ item codex/user/skill/~/.codex/skills/switched
   shape=file scope=user provenance=manual activation=active registered=true symlink=false size=109
   sha256=6c34090761ac7100dae361e0871ff4e05af788ae06fd4eac885ba319b3baab2e
   view skill {allowed_tools=[""] allowed_tools_n=0 has_dynamic_context=false name="switched"}
+project <root>/project codex hooks_switched_off=false
 watch recursive <root>/home/.codex

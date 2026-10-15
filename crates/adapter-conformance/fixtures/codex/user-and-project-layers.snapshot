@@ -63,6 +63,7 @@ item codex/project:<root>/project/skill/.agents/skills/shared
 item codex/project:<root>/project/instruction-file/AGENTS.md
   shape=file scope=project provenance=unknown activation=active registered=true symlink=false size=73
   sha256=83395998c80b2900b2b365955c099652a723b2afba139fad5116984410b4eb69
+project <root>/project codex hooks_switched_off=false
 watch recursive <root>/home/.codex
 watch recursive <root>/project/.agents
 watch recursive <root>/project/.codex

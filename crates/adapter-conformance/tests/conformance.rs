@@ -59,3 +59,31 @@ fn a_snapshot_that_does_not_match_is_a_violation() {
     assert_eq!(recorded, rendered);
     assert_ne!(recorded, format!("{rendered}item one more\n"));
 }
+
+/// Spec section 7.6: every Agent adapter states, for every pooled root of
+/// every case, whether the project's own settings switch its hooks off; the
+/// workspace adapter reads no Agent settings and states none.
+#[test]
+fn every_agent_adapter_states_the_hook_switch_of_every_root_and_the_workspace_none() {
+    use agentsweep_adapter_conformance::fixtures;
+
+    for adapter in adapters() {
+        let agent = adapter.descriptor().agent;
+        for case in fixtures::cases(agent) {
+            let copy = fixtures::Copy::of(agent, &case);
+            let host = copy.host();
+            let roots = host.project_roots().to_vec();
+            let enumeration = adapter.enumerate(&host, &roots);
+            let stated: Vec<_> = enumeration
+                .project_hooks
+                .iter()
+                .map(|hooks| (hooks.agent.as_str(), hooks.root.clone()))
+                .collect();
+            let expected: Vec<_> = match agent {
+                "workspace" => Vec::new(),
+                _ => roots.iter().map(|root| (agent, root.clone())).collect(),
+            };
+            assert_eq!(stated, expected, "{agent}/{case}");
+        }
+    }
+}

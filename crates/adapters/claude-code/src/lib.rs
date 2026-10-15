@@ -38,8 +38,8 @@ pub mod tree;
 use std::path::{Path, PathBuf};
 
 use agentsweep_core::adapter::{
-    Descriptor, Detection, Enumeration, Primitive, ProjectRegistration, Surface, SurfaceAdapter,
-    WatchRoots,
+    Descriptor, Detection, Enumeration, Primitive, ProjectHooks, ProjectRegistration, Surface,
+    SurfaceAdapter, WatchRoots,
 };
 use agentsweep_core::gate_registration::{
     GateCheck, GateCommand, GateError, GateWrite, SurfaceWriter,
@@ -812,6 +812,19 @@ impl ClaudeCode {
             .as_ref()
             .map(registry::Record::mcpjson_choices)
             .unwrap_or_default();
+        // The project layers in their precedence, the local file first: the
+        // first one that says anything about `disableAllHooks` settles what
+        // the project says, which is the repository kill switch of spec
+        // section 7.6. The user's and the managed layers are not a project's.
+        let project_disables_hooks = documents
+            .iter()
+            .find_map(|document| document.flag("disableAllHooks"))
+            .unwrap_or(false);
+        enumeration.project_hooks.push(ProjectHooks {
+            agent: AGENT_ID.to_string(),
+            root: root.to_path_buf(),
+            switched_off: project_disables_hooks,
+        });
         let facts = ProjectFacts {
             registered: record.is_some(),
             trusted,
@@ -825,11 +838,7 @@ impl ClaudeCode {
             }),
             enabled_mcpjson,
             disabled_mcpjson,
-            hooks_disabled: managed_disables_hooks
-                || documents
-                    .iter()
-                    .find_map(|document| document.flag("disableAllHooks"))
-                    .unwrap_or(false),
+            hooks_disabled: managed_disables_hooks || project_disables_hooks,
             has_sessions: self.has_sessions(host, root, record.as_ref()),
         };
 
@@ -1971,6 +1980,99 @@ mod tests {
             "{\"event_name\":\"SessionStart\",\"hooks\":[{\"command\":\
              \"bash ~/.claude/hooks/start.sh\",\"type\":\"command\"}],\"matcher\":\"\"}"
                 .as_bytes()
+        );
+    }
+
+    /// What the adapter states about the project's hooks: one statement per
+    /// pooled root, switched off or not.
+    fn project_hooks_off(enumeration: &Enumeration) -> Vec<(PathBuf, bool)> {
+        enumeration
+            .project_hooks
+            .iter()
+            .map(|hooks| {
+                assert_eq!(hooks.agent, AGENT_ID);
+                (hooks.root.clone(), hooks.switched_off)
+            })
+            .collect()
+    }
+
+    /// Spec section 7.6: a project whose committed settings switch every hook
+    /// off is "Gate off in this project".
+    #[test]
+    fn a_project_that_commits_disable_all_hooks_is_gate_off() {
+        let machine = Machine::new("gate-off");
+        machine.write(
+            "project/.claude/settings.json",
+            "{\"disableAllHooks\": true}",
+        );
+        assert_eq!(
+            project_hooks_off(&machine.enumerate()),
+            vec![(machine.project(), true)]
+        );
+    }
+
+    /// The local file outranks the committed one, so a project that puts
+    /// hooks back in it is not Gate off, and one that switches them off in it
+    /// is.
+    #[test]
+    fn a_higher_precedence_project_layer_that_sets_it_back_is_not_gate_off() {
+        let machine = Machine::new("gate-back-on");
+        machine.write(
+            "project/.claude/settings.json",
+            "{\"disableAllHooks\": true}",
+        );
+        machine.write(
+            "project/.claude/settings.local.json",
+            "{\"disableAllHooks\": false}",
+        );
+        assert_eq!(
+            project_hooks_off(&machine.enumerate()),
+            vec![(machine.project(), false)]
+        );
+
+        let local = Machine::new("gate-off-locally");
+        local.write(
+            "project/.claude/settings.json",
+            "{\"disableAllHooks\": false}",
+        );
+        local.write(
+            "project/.claude/settings.local.json",
+            "{\"disableAllHooks\": true}",
+        );
+        assert_eq!(
+            project_hooks_off(&local.enumerate()),
+            vec![(local.project(), true)]
+        );
+    }
+
+    /// A User-scope switch is the user's own and belongs to the Gate's
+    /// registration check; neither it nor the managed tier makes a project
+    /// Gate off.
+    #[test]
+    fn a_user_or_managed_disable_all_hooks_does_not_make_a_project_gate_off() {
+        let machine = Machine::new("gate-user-off");
+        machine.write("home/.claude/settings.json", "{\"disableAllHooks\": true}");
+        machine.write(
+            "system/Library/Application Support/ClaudeCode/managed-settings.json",
+            "{\"disableAllHooks\": true}",
+        );
+        machine.write("project/.claude/settings.json", "{\"model\": \"sonnet\"}");
+        let host = machine.host().with_system_root(machine.root.join("system"));
+        let enumeration = ClaudeCode::new().enumerate(&host, host.project_roots());
+        assert_eq!(
+            project_hooks_off(&enumeration),
+            vec![(machine.project(), false)]
+        );
+    }
+
+    /// Every pooled root is stated, a project without settings as not
+    /// switched off.
+    #[test]
+    fn a_project_without_settings_is_stated_as_not_gate_off() {
+        let machine = Machine::new("gate-no-settings");
+        assert_eq!(
+            project_hooks_off(&machine.enumerate()),
+            vec![(machine.project(), false)]
         );
     }
 

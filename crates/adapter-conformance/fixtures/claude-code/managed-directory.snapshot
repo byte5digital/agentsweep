@@ -22,6 +22,7 @@ item claude-code/user/hook/~/.claude/settings.json#Stop//1c4352b25fc9
   shape=entry scope=user provenance=manual activation=inactive(disabled) registered=true symlink=false size=95
   sha256=1c4352b25fc99a3a3c226b9969c31827cf9a3d209fc252478fd98b136d20f78c
   view hook {command="/opt/example/notify" command_file_type="" command_resolved="/opt/example/notify" event="Stop" matcher="" type="command" url=""}
+project <root>/project claude-code hooks_switched_off=false
 watch recursive <root>/home/.claude
 watch <root>/system/Library/Application Support/ClaudeCode
 watch <root>/system/Library/Application Support/ClaudeCode/managed-settings.d

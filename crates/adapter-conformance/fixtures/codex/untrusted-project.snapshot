@@ -32,6 +32,7 @@ item codex/project:<root>/project/instruction-file/AGENTS.override.md
 item codex/project:<root>/project/instruction-file/AGENTS.md
   shape=file scope=project provenance=unknown activation=inactive(disabled) registered=false symlink=false size=53
   sha256=1580e0bce86bc8bdfa377fe3f379251976f869faf54606527f56a218c5eafd9e
+project <root>/project codex hooks_switched_off=false
 watch recursive <root>/home/.codex
 watch recursive <root>/project/.agents
 watch recursive <root>/project/.codex

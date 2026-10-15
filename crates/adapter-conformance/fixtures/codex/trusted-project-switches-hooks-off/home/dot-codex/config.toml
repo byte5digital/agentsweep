@@ -1,0 +1,5 @@
+# A sanitised user layer that trusts the project and leaves hooks on.
+model = "gpt-5-codex"
+
+[projects."{{project}}"]
+trust_level = "trusted"

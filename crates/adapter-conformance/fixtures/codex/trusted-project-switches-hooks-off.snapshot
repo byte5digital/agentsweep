@@ -1,0 +1,6 @@
+item codex/project:<root>/project/settings-entry/.codex/config.toml#/features/hooks
+  shape=entry scope=project provenance=unknown activation=active registered=true symlink=false size=24
+  sha256=b4ae01ef43245deef55ee32a27f9ff53a1900d583347aaca9f124a666f426b7a
+  view settings {key_path="features.hooks" trust_has_sessions=false trust_stated=true value="false" value_host=""}
+project <root>/project codex hooks_switched_off=true
+watch recursive <root>/project/.codex

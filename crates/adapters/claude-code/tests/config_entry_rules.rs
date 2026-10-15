@@ -20,6 +20,7 @@ use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
 use agentsweep_core::finding::{Category, Severity, Source, Tier};
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{Item, Provenance};
+use agentsweep_core::pack::Manifest;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::Scanners;
 use agentsweep_core::views::ParsedView;
@@ -228,4 +229,33 @@ fn listing(root: &Path) -> Vec<String> {
     }
     entries.sort();
     entries
+}
+
+/// Spec section 7.6: the repository kill switch is surfaced as "Gate off in
+/// this project", and Heuristic 0566 is left exactly as it was: it still
+/// fires on the committed key, with weight 2.
+#[test]
+fn a_committed_hook_kill_switch_is_gate_off_and_heuristic_0566_keeps_weight_two() {
+    let pack = RulePack::bundled().expect("the bundled Rule Pack");
+    let mut scanners = Scanners::with_bands(&pack, Manifest::bundled().bands);
+
+    let repository = TemporaryRepository::new("cc-rules-gate-off");
+    repository.write(".claude/settings.json", b"{\"disableAllHooks\": true}\n");
+    repository.track(&[".claude/settings.json"]);
+    let enumeration = scanned(&repository);
+
+    let off: Vec<&Path> = enumeration
+        .gate_off()
+        .map(|hooks| hooks.root.as_path())
+        .collect();
+    assert_eq!(off, vec![repository.root()]);
+
+    let entry = item(&enumeration, "#/disableAllHooks");
+    let assessment = scanners.assess(entry).expect("the entry is scanned");
+    let fired: Vec<(i64, i64)> = assessment
+        .fired
+        .iter()
+        .map(|heuristic| (heuristic.id, heuristic.weight))
+        .collect();
+    assert!(fired.contains(&(566, 2)), "{fired:?}");
 }

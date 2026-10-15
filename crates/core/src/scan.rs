@@ -317,6 +317,7 @@ mod tests {
                 kind: Some(Kind::Skill),
                 reason: crate::adapter::ProblemReason::Unsupported,
             }],
+            project_hooks: Vec::new(),
         };
 
         let report = scan_enumeration(&pack, &enumeration).expect("the scan runs");

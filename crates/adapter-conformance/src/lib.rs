@@ -536,6 +536,17 @@ pub fn snapshot(adapter: &dyn SurfaceAdapter, enumeration: &Enumeration, root: &
             problem.reason
         );
     }
+    // Whether the project's own settings switch the Agent's hooks off, one
+    // line per pooled root an Agent adapter states it for (spec section 7.6).
+    for hooks in &enumeration.project_hooks {
+        let _ = writeln!(
+            out,
+            "project {} {} hooks_switched_off={}",
+            hooks.root.display(),
+            hooks.agent,
+            hooks.switched_off
+        );
+    }
     let roots = adapter.watch_roots(enumeration);
     for path in &roots.recursive {
         let _ = writeln!(out, "watch recursive {}", path.display());
@@ -689,6 +700,7 @@ mod tests {
         let enumeration = Enumeration {
             items: vec![item],
             problems: Vec::new(),
+            project_hooks: Vec::new(),
         };
 
         let report = check_enumeration(&Wrong, "made-up", &enumeration);

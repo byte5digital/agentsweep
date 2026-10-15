@@ -50,8 +50,8 @@ pub mod settings;
 use std::path::{Path, PathBuf};
 
 use agentsweep_core::adapter::{
-    Descriptor, Detection, Enumeration, Primitive, Problem, ProblemReason, ProjectRegistration,
-    Surface, SurfaceAdapter, WatchRoots,
+    Descriptor, Detection, Enumeration, Primitive, Problem, ProblemReason, ProjectHooks,
+    ProjectRegistration, Surface, SurfaceAdapter, WatchRoots,
 };
 use agentsweep_core::gate_registration::{
     GateCheck, GateCommand, GateError, GateWrite, SurfaceWriter,
@@ -961,14 +961,27 @@ impl Codex {
         // A trusted project may turn hooks off for its own sessions, and the
         // project denylist does not cover `features`.
         let mut gates = gates.clone();
+        let switches_hooks_off = |config: &Document| {
+            HOOKS_FEATURE
+                .iter()
+                .any(|switch| config.flag(switch) == Some(false))
+        };
         if let Some(config) = &layer.config
             && layer.loaded()
         {
-            gates.hooks_off |= HOOKS_FEATURE
-                .iter()
-                .any(|switch| config.flag(switch) == Some(false));
+            gates.hooks_off |= switches_hooks_off(config);
             gates.disabled_skills.extend(disabled_skills(config));
         }
+        // The repository kill switch of spec section 7.6 is the project's
+        // own layer alone, and only of a project Codex was told to trust: an
+        // untrusted layer is never loaded, and on a Folder Scan nothing says
+        // the project is trusted.
+        enumeration.project_hooks.push(ProjectHooks {
+            agent: AGENT_ID.to_string(),
+            root: root.to_path_buf(),
+            switched_off: layer.trusted == Some(true)
+                && layer.config.as_ref().is_some_and(switches_hooks_off),
+        });
         self.layer_items(host, &layer, &gates, registered, enumeration);
 
         self.skill_items(
@@ -1059,6 +1072,12 @@ impl SurfaceAdapter for Codex {
             // is the user layer under another name, and Codex skips it rather
             // than loading the same layer twice.
             if config_dir.as_deref() == Some(root.join(PROJECT_DIRECTORY).as_path()) {
+                // Its switch is the user's, never a project's.
+                enumeration.project_hooks.push(ProjectHooks {
+                    agent: AGENT_ID.to_string(),
+                    root: root.clone(),
+                    switched_off: false,
+                });
                 continue;
             }
             self.project_level(host, root, &registry, &gates, &mut enumeration);
@@ -1918,6 +1937,95 @@ mod tests {
         assert_eq!(
             found(&enumeration, "#tracker").invocations,
             [Invocation::mcp_server("tracker", "")]
+        );
+    }
+
+    /// What the adapter states about the project's hooks: one statement per
+    /// pooled root, switched off or not.
+    fn project_hooks_off(enumeration: &Enumeration) -> Vec<(PathBuf, bool)> {
+        enumeration
+            .project_hooks
+            .iter()
+            .map(|hooks| {
+                assert_eq!(hooks.agent, AGENT_ID);
+                (hooks.root.clone(), hooks.switched_off)
+            })
+            .collect()
+    }
+
+    /// The user layer that trusts the fake project, and nothing else.
+    fn trusting(machine: &Machine) {
+        machine.write(
+            "home/.codex/config.toml",
+            &format!(
+                "[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+                machine.project().display()
+            ),
+        );
+    }
+
+    /// Spec section 7.6: a trusted project that turns the hook engine off in
+    /// its own config is "Gate off in this project", under either name of the
+    /// switch.
+    #[test]
+    fn a_trusted_project_that_turns_hooks_off_is_gate_off() {
+        for switch in ["hooks", "codex_hooks"] {
+            let machine = Machine::new("gate-off");
+            trusting(&machine);
+            machine.write(
+                "project/.codex/config.toml",
+                &format!("[features]\n{switch} = false\n"),
+            );
+            assert_eq!(
+                project_hooks_off(&machine.enumerate()),
+                vec![(machine.project(), true)],
+                "{switch}"
+            );
+        }
+    }
+
+    /// Codex does not load the layer of a project it was not told to trust,
+    /// so the same file there switches nothing off.
+    #[test]
+    fn the_same_switch_in_an_untrusted_project_is_not_gate_off() {
+        for switch in ["hooks", "codex_hooks"] {
+            let machine = Machine::new("gate-untrusted");
+            machine.write("home/.codex/config.toml", "model = \"gpt-5-codex\"\n");
+            machine.write(
+                "project/.codex/config.toml",
+                &format!("[features]\n{switch} = false\n"),
+            );
+            assert_eq!(
+                project_hooks_off(&machine.enumerate()),
+                vec![(machine.project(), false)],
+                "{switch}"
+            );
+        }
+    }
+
+    /// A trusted project that leaves the hook engine on, and a user layer that
+    /// turns it off, which is the Gate's registration check and no project's.
+    #[test]
+    fn hooks_left_on_or_switched_off_by_the_user_are_not_gate_off() {
+        let machine = Machine::new("gate-on");
+        trusting(&machine);
+        machine.write("project/.codex/config.toml", "[features]\nhooks = true\n");
+        assert_eq!(
+            project_hooks_off(&machine.enumerate()),
+            vec![(machine.project(), false)]
+        );
+
+        let user = Machine::new("gate-user-off");
+        user.write(
+            "home/.codex/config.toml",
+            &format!(
+                "[features]\nhooks = false\n\n[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+                user.project().display()
+            ),
+        );
+        assert_eq!(
+            project_hooks_off(&user.enumerate()),
+            vec![(user.project(), false)]
         );
     }
 }

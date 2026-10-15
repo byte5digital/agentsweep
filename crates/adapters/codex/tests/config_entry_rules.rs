@@ -21,6 +21,7 @@ use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
 use agentsweep_core::finding::{Category, Severity, Source, Tier};
 use agentsweep_core::host::Host;
 use agentsweep_core::item::{Item, Provenance};
+use agentsweep_core::pack::Manifest;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::Scanners;
 use agentsweep_core::views::{McpView, ParsedView};
@@ -425,4 +426,40 @@ fn a_trusted_codex_project_nobody_has_worked_in_is_heuristic_0589() {
     let worked_in = machine.enumerate();
     let entry = project_item(&worked_in, "#/approval_policy");
     assert!(!noticed(&pack, entry).contains(&589), "{entry:?}");
+}
+
+/// Spec section 7.6: a trusted project that turns the hook engine off is
+/// "Gate off in this project", and Heuristic 0566 is left exactly as it was:
+/// it still fires on the same entry, with weight 2.
+#[test]
+fn a_trusted_project_hook_kill_switch_is_gate_off_and_heuristic_0566_keeps_weight_two() {
+    let pack = RulePack::bundled().expect("the bundled Rule Pack");
+    let mut scanners = Scanners::with_bands(&pack, Manifest::bundled().bands);
+
+    let machine = Machine::new("gate-off");
+    let project = machine.root.join("project");
+    machine.write(
+        "home/.codex/config.toml",
+        &format!(
+            "[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            project.display()
+        ),
+    );
+    machine.write("project/.codex/config.toml", "[features]\nhooks = false\n");
+    let enumeration = machine.enumerate();
+
+    let off: Vec<&Path> = enumeration
+        .gate_off()
+        .map(|hooks| hooks.root.as_path())
+        .collect();
+    assert_eq!(off, vec![project.as_path()]);
+
+    let entry = project_item(&enumeration, "#/features/hooks");
+    let assessment = scanners.assess(entry).expect("the entry is scanned");
+    let fired: Vec<(i64, i64)> = assessment
+        .fired
+        .iter()
+        .map(|heuristic| (heuristic.id, heuristic.weight))
+        .collect();
+    assert!(fired.contains(&(566, 2)), "{fired:?}");
 }

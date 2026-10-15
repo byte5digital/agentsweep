@@ -303,6 +303,7 @@ mod tests {
                     ..ProjectRecord::default()
                 }],
                 ambiguous: Vec::new(),
+                checked: Vec::new(),
             },
         }
     }

@@ -397,6 +397,56 @@ dialog {
   margin-top: 8px;
 }
 
+/* The Settings pane (spec section 8.10): one block per setting. */
+
+.setting {
+  max-width: 620px;
+  margin: 0 0 18px;
+  padding: 0 0 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.setting h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.setting h4 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+}
+
+.setting .choice,
+.setting .toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.setting .dir {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.setting .dir .label {
+  flex: 0 0 170px;
+}
+
+.setting .dir input {
+  flex: 1;
+  min-width: 0;
+}
+
+.note {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--card);
+  border-left: 3px solid var(--exposure);
+}
+
 /* The hidden attribute wins over every display rule above. */
 [hidden] {
   display: none !important;

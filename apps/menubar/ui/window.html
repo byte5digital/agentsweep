@@ -85,6 +85,64 @@
           </section>
           <section class="pane" data-pane="settings" hidden>
             <h2 class="pane-title"></h2>
+            <p class="note" id="settings-note" hidden></p>
+            <p class="muted" id="settings-off" hidden>
+              Settings can be changed while AgentSweep is running.
+            </p>
+            <p class="muted" id="settings-answer" role="status"></p>
+
+            <div class="setting" id="settings-detail">
+              <h3></h3>
+              <div class="choices" role="radiogroup"></div>
+            </div>
+
+            <!-- The AI check takes this place (spec section 8.10). -->
+            <div class="setting" id="settings-ai-check" hidden></div>
+
+            <div class="setting" id="settings-background">
+              <h3></h3>
+              <p class="muted disclosure"></p>
+              <div class="toggles"></div>
+              <!-- Stop the AI from using flagged items, the Gate switch,
+                   takes this place (spec section 8.10). -->
+              <div id="settings-gate" hidden></div>
+            </div>
+
+            <div class="setting" id="settings-cli">
+              <h3></h3>
+              <p class="muted line"></p>
+              <button type="button" class="install"></button>
+              <div class="cli-answer" role="status"></div>
+            </div>
+
+            <div class="setting" id="settings-advanced">
+              <h3></h3>
+              <p class="muted dirs-line"></p>
+              <div class="dirs"></div>
+              <!-- The Ollama address and the Claude model id take this place
+                   (spec section 8.10). -->
+              <div id="settings-advanced-ai" hidden></div>
+              <div class="sub" id="settings-everything">
+                <h4></h4>
+                <div class="lines"></div>
+                <button type="button" class="open"></button>
+              </div>
+              <div class="sub" id="settings-rules">
+                <h4></h4>
+                <p class="muted line"></p>
+                <p class="id path"></p>
+                <button type="button" class="show"></button>
+              </div>
+            </div>
+
+            <div class="setting" id="settings-not-protected">
+              <h3></h3>
+              <p class="paragraph"></p>
+              <button type="button" class="link"></button>
+            </div>
+
+            <!-- Uninstall AgentSweep takes this place (spec section 9.6). -->
+            <div class="setting" id="settings-uninstall" hidden></div>
           </section>
         </main>
       </div>

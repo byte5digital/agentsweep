@@ -425,12 +425,152 @@ function renderOverview(overview) {
   $("overview-summary").hidden = overview.summary === null;
 }
 
+// The Settings pane (spec section 8.10). Every choice is sent to the daemon
+// through the app, and the pane shows the answer the app sends back with the
+// next view, never what was clicked.
+function settingsAnswer(text) {
+  $("settings-answer").textContent = text;
+}
+
+async function changeSetting(change) {
+  try {
+    settingsAnswer(await invoke("change_settings", { change }));
+  } catch (why) {
+    settingsAnswer(String(why));
+  }
+  if (view) {
+    render(view);
+  }
+}
+
+function renderSettings(settings) {
+  $("settings-note").hidden = settings.note === null;
+  $("settings-note").textContent = settings.note ?? "";
+  $("settings-off").hidden = settings.available;
+  const disabled = !settings.available;
+
+  const detail = $("settings-detail");
+  detail.querySelector("h3").textContent = settings.detail.title;
+  detail.querySelector(".choices").replaceChildren(
+    ...settings.detail.choices.map((choice) => {
+      const label = el("label", "choice");
+      const input = el("input");
+      input.type = "radio";
+      input.name = "posture";
+      input.checked = choice.selected;
+      input.disabled = disabled;
+      input.addEventListener("change", () => changeSetting({ posture: choice.posture }));
+      label.append(input, el("span", "", choice.label));
+      return label;
+    }),
+  );
+
+  const background = $("settings-background");
+  background.querySelector("h3").textContent = settings.background.title;
+  background.querySelector(".disclosure").textContent = settings.background.disclosure;
+  background.querySelector(".toggles").replaceChildren(
+    ...settings.background.toggles.map((toggle) => {
+      const label = el("label", "toggle");
+      const input = el("input");
+      input.type = "checkbox";
+      input.checked = toggle.on;
+      input.disabled = disabled;
+      input.addEventListener("change", () => changeSetting({ [toggle.key]: input.checked }));
+      label.append(input, el("span", "", toggle.label));
+      return label;
+    }),
+  );
+
+  const cli = $("settings-cli");
+  cli.querySelector("h3").textContent = settings.cli.title;
+  cli.querySelector(".line").textContent = settings.cli.line;
+  cli.querySelector(".install").textContent = settings.cli.button;
+
+  const advanced = $("settings-advanced");
+  advanced.querySelector("h3").textContent = settings.advanced.title;
+  advanced.querySelector(".dirs-line").textContent = settings.advanced.configDirsLine;
+  const dirs = advanced.querySelector(".dirs");
+  const typing = dirs.contains(document.activeElement);
+  if (!typing) {
+    dirs.replaceChildren(
+      ...settings.advanced.configDirs.map((entry) => {
+        const row = el("form", "dir");
+        const input = el("input");
+        input.type = "text";
+        input.value = entry.dir ?? "";
+        input.placeholder = entry.default;
+        input.disabled = disabled;
+        input.setAttribute("aria-label", entry.label);
+        const save = el("button", "", "Save");
+        save.type = "submit";
+        save.disabled = disabled;
+        row.addEventListener("submit", (event) => {
+          event.preventDefault();
+          changeSetting({ agent: entry.agent, dir: input.value });
+        });
+        row.append(el("span", "label", entry.label), input, save);
+        return row;
+      }),
+    );
+  }
+
+  const everything = $("settings-everything");
+  everything.querySelector("h4").textContent = settings.advanced.fullDiskAccess.title;
+  everything
+    .querySelector(".lines")
+    .replaceChildren(...settings.advanced.fullDiskAccess.lines.map((line) => el("p", "muted", line)));
+  everything.querySelector(".open").textContent = settings.advanced.fullDiskAccess.button;
+
+  const rules = $("settings-rules");
+  rules.querySelector("h4").textContent = settings.advanced.rules.title;
+  rules.querySelector(".line").textContent = settings.advanced.rules.line;
+  rules.querySelector(".path").textContent = settings.advanced.rules.path ?? "";
+  rules.querySelector(".show").textContent = settings.advanced.rules.button;
+
+  const notProtected = $("settings-not-protected");
+  notProtected.querySelector("h3").textContent = settings.notProtected.title;
+  notProtected.querySelector(".paragraph").textContent = settings.notProtected.paragraph;
+  notProtected.querySelector(".link").textContent = settings.notProtected.link.label;
+}
+
+$("settings-cli")
+  .querySelector(".install")
+  .addEventListener("click", async () => {
+    const answer = $("settings-cli").querySelector(".cli-answer");
+    try {
+      const lines = await invoke("install_cli");
+      answer.replaceChildren(
+        ...lines.map((line, index) =>
+          el("p", index > 0 && line.startsWith("export ") ? "id" : "muted", line),
+        ),
+      );
+    } catch (why) {
+      answer.replaceChildren(el("p", "muted", String(why)));
+    }
+  });
+$("settings-everything")
+  .querySelector(".open")
+  .addEventListener("click", () => invoke("open_full_disk_access").catch((why) => settingsAnswer(String(why))));
+$("settings-rules")
+  .querySelector(".show")
+  .addEventListener("click", async () => {
+    try {
+      settingsAnswer(await invoke("show_rules_folder"));
+    } catch (why) {
+      settingsAnswer(String(why));
+    }
+  });
+$("settings-not-protected")
+  .querySelector(".link")
+  .addEventListener("click", () => invoke("open_not_protected").catch((why) => settingsAnswer(String(why))));
+
 function render(list) {
   view = list;
   takePosture(list.posture);
   $("off").hidden = list.off === null;
   $("off").textContent = list.off === null ? "" : `Protection is off: ${list.off}.`;
   renderOverview(list.overview);
+  renderSettings(list.settings);
   actionsWait = list.actionsWait;
   $("actions-wait").hidden = actionsWait === null;
   $("actions-wait").textContent = actionsWait === null ? "" : actionsWait;

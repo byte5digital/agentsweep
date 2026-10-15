@@ -26,6 +26,15 @@
 //!   in place, and its Restore switches the line back on.
 //! - `copy_for_admin`: puts the message about a Managed Finding for whoever
 //!   administers the Mac on the clipboard (spec section 8.4).
+//! - `change_settings`: moves one choice of the Settings pane through the
+//!   daemon's `settings` request; the pane follows the answer.
+//! - `install_cli`: **Install command line tool**, the link in
+//!   `~/.local/bin` ([`crate::cli_link`]).
+//! - `open_full_disk_access`: System Settings at Full Disk Access, best
+//!   effort, or at Privacy & Security without an anchor.
+//! - `show_rules_folder`: the user's own rules folder in Finder.
+//! - `open_not_protected`: the README's list of what AgentSweep does not
+//!   protect against, in the browser.
 //! - `scan_now`: asks the daemon for a Full Scan; the progress arrives on the
 //!   stream.
 //! - `scan_folder`: the native folder picker, then a Folder Scan by the
@@ -49,9 +58,11 @@ use tauri::{
     WindowEvent,
 };
 
+use agentsweep_core::paths::DataDirectory;
 use agentsweep_ipc::protocol::Message;
 
 use crate::asking::{ActionRequest, Asking, refusal, scan_now_line};
+use crate::cli_link;
 use crate::findings::Follow;
 use crate::folder;
 use crate::frame::Frame;
@@ -59,6 +70,9 @@ use crate::glyph::{self, Mark};
 use crate::link::{Link, Socket, Update};
 use crate::placement;
 use crate::popover::View;
+use crate::settings_pane::{
+    self, FULL_DISK_ACCESS_PANES, FULL_DISK_ACCESS_UNOPENED, NOT_PROTECTED_LINK,
+};
 use crate::supervision::{self, Services, SystemServices, Unsupervised};
 use crate::window::{Presence, presence};
 use crate::wording;
@@ -252,6 +266,99 @@ fn put_on_clipboard(text: &str) -> bool {
 #[cfg(not(target_os = "macos"))]
 fn put_on_clipboard(_text: &str) -> bool {
     false
+}
+
+/// Moves one choice of the Settings pane: the daemon answers with every
+/// choice, which the frame takes and the window is sent again with.
+#[tauri::command]
+async fn change_settings(app: AppHandle, change: Value) -> Result<String, String> {
+    let change = settings_pane::change_of(&change)?;
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    let answer = blocking(move || asking.change_settings(&change))
+        .await
+        .map_err(|why| why.replace("Nothing was done", "Nothing was changed"))?;
+    let follow = app
+        .state::<Shell>()
+        .frame
+        .lock()
+        .expect("the frame is not poisoned")
+        .settings(&answer);
+    if follow != Follow::Nothing {
+        render(&app);
+    }
+    Ok(settings_pane::RECORDED.to_string())
+}
+
+/// **Install command line tool**: the link to the bundle's `agentsweep` in
+/// `~/.local/bin`, answered with the lines the pane shows.
+#[tauri::command]
+fn install_cli() -> Result<Vec<String>, String> {
+    let home = std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .ok_or_else(|| "Your home folder is not known, so nothing was installed.".to_string())?;
+    let cli = std::env::current_exe()
+        .ok()
+        .and_then(|exe| cli_link::bundled_cli(&exe))
+        .ok_or_else(|| {
+            "This copy of AgentSweep carries no command line tool, so nothing was installed."
+                .to_string()
+        })?;
+    let path = std::env::var_os("PATH");
+    cli_link::install(std::path::Path::new(&home), &cli, path.as_deref())
+        .map(|installed| installed.lines())
+        .map_err(|refused| refused.to_string())
+}
+
+/// System Settings at Full Disk Access: each pane address in turn until one
+/// opens, the last one without an anchor.
+#[tauri::command]
+fn open_full_disk_access() -> Result<(), String> {
+    match FULL_DISK_ACCESS_PANES.iter().any(|pane| open(&[pane])) {
+        true => Ok(()),
+        false => Err(FULL_DISK_ACCESS_UNOPENED.to_string()),
+    }
+}
+
+/// The user's own rules folder in Finder, or the data directory it belongs
+/// in while it does not exist yet. The app creates nothing there.
+#[tauri::command]
+fn show_rules_folder() -> Result<String, String> {
+    let directory =
+        DataDirectory::for_user().ok_or_else(|| "Your home folder is not known.".to_string())?;
+    let rules = directory.user_rules();
+    if rules.is_dir() && open(&[std::ffi::OsStr::new("-R"), rules.as_os_str()]) {
+        return Ok(String::new());
+    }
+    if directory.root().is_dir() && open(&[directory.root().as_os_str()]) {
+        return Ok(
+            "There is no rules.d folder yet. Make one here and put your rules in it.".to_string(),
+        );
+    }
+    Err("AgentSweep has not made its folder yet. It does once it has started.".to_string())
+}
+
+/// The README's full list of what AgentSweep does not protect against, in
+/// the browser. The address is fixed; the window cannot name another.
+#[tauri::command]
+fn open_not_protected() -> Result<(), String> {
+    match open(&[NOT_PROTECTED_LINK]) {
+        true => Ok(()),
+        false => Err(format!(
+            "The browser could not be opened: {NOT_PROTECTED_LINK}"
+        )),
+    }
+}
+
+/// Hands arguments to macOS's `open`, never through a shell, and answers
+/// whether it succeeded.
+fn open<S: AsRef<std::ffi::OsStr>>(arguments: &[S]) -> bool {
+    std::process::Command::new("/usr/bin/open")
+        .args(arguments)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Asks the daemon for a Full Scan. Its progress arrives on the stream.
@@ -509,6 +616,14 @@ fn display_under_pointer(app: &AppHandle) -> Option<placement::Display> {
     })
 }
 
+/// A frame that names the user's own rules folder for the Settings pane.
+fn rules_folder_named(mut frame: Frame) -> Frame {
+    if let Some(directory) = DataDirectory::for_user() {
+        frame.set_rules_folder(directory.user_rules().display().to_string());
+    }
+    frame
+}
+
 /// Runs the app until it is quit.
 pub fn run() {
     // A debug build pointed at a developer's daemon supervises nothing, so a
@@ -521,7 +636,7 @@ pub fn run() {
     let shell = Shell {
         view: Mutex::new(View::unknown()),
         services: Arc::clone(&services),
-        frame: Mutex::new(Frame::new()),
+        frame: Mutex::new(rules_folder_named(Frame::new())),
         folder: Mutex::new(Value::Null),
         asking: Arc::new(Asking::new(socket.clone())),
     };
@@ -542,6 +657,11 @@ pub fn run() {
             fix,
             re_enable,
             copy_for_admin,
+            change_settings,
+            install_cli,
+            open_full_disk_access,
+            show_rules_folder,
+            open_not_protected,
             scan_now,
             scan_folder
         ])

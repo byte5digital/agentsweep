@@ -29,6 +29,7 @@ use crate::actions::card_in;
 use crate::findings::{Findings, Follow};
 use crate::overview::{self, OverviewView};
 use crate::popover::View;
+use crate::settings_pane;
 
 /// One entry of the sidebar, in the order spec section 8.1 lists them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,6 +139,11 @@ pub struct Frame {
     overview: Overview,
     /// The most recent Scan's summary.
     last_scan: Option<ScanSummary>,
+    /// Every choice as the daemon last answered, for the Settings pane;
+    /// absent until it answered.
+    choices: Option<SettingsState>,
+    /// Where the user's own rules folder is, for the Settings pane.
+    rules_folder: Option<String>,
 }
 
 /// A follow-up that at least sends the view again.
@@ -173,16 +179,33 @@ impl Frame {
         self.last_scan = status.scan.clone();
     }
 
-    /// Takes the Posture from a `settings` answer or a `settings-changed`
-    /// event, and says whether the window needs to be sent again.
+    /// Takes every choice, the Posture among them, from a `settings` answer
+    /// or a `settings-changed` event, and says whether the window needs to
+    /// be sent again.
     pub fn settings(&mut self, settings: &SettingsState) -> Follow {
-        match self.posture == settings.posture {
+        match self.choices.as_ref() == Some(settings) {
             true => Follow::Nothing,
             false => {
                 self.posture = settings.posture;
+                self.choices = Some(settings.clone());
                 Follow::Render
             }
         }
+    }
+
+    /// Names the user's own rules folder for the Settings pane.
+    pub fn set_rules_folder(&mut self, folder: impl Into<String>) {
+        self.rules_folder = Some(folder.into());
+    }
+
+    /// The Settings pane as it stands.
+    pub fn settings_pane(&self) -> Value {
+        settings_pane::view(
+            self.choices.as_ref(),
+            &self.health,
+            self.posture,
+            self.rules_folder.as_deref(),
+        )
     }
 
     /// No daemon answers: see [`Findings::off`]. The Overview drops what it
@@ -268,6 +291,7 @@ impl Frame {
     pub fn to_value(&self) -> Value {
         let mut value = self.findings.to_value();
         value["overview"] = self.overview().to_value();
+        value["settings"] = self.settings_pane();
         let pane = |category: Category| -> Vec<Value> {
             self.findings
                 .open()
@@ -749,6 +773,75 @@ mod tests {
         assert_eq!(frame.apply(&gone), Follow::Render);
         assert!(frame.overview().off);
         assert_eq!(frame.to_value()["overview"]["actions"], false);
+    }
+
+    /// A moved toggle reaches the Settings pane from the stream, and the
+    /// pane carries the Health note of an unreadable settings file.
+    #[test]
+    fn the_settings_pane_follows_the_answer_and_the_health() {
+        let mut frame = Frame::new();
+        frame.load(&status());
+        frame.set_rules_folder("/home/Library/Application Support/de.byte5.agentsweep/rules.d");
+        assert_eq!(frame.settings(&settings(Posture::Simple)), Follow::Render);
+        let pane = frame.to_value()["settings"].clone();
+        assert_eq!(pane["background"]["toggles"][0]["on"], true);
+        assert_eq!(
+            pane["advanced"]["rules"]["path"],
+            "/home/Library/Application Support/de.byte5.agentsweep/rules.d"
+        );
+
+        let mut moved = settings(Posture::Simple);
+        moved.rule_feed = false;
+        moved
+            .config_dirs
+            .insert("codex".to_string(), "/Users/x/.codex-work".to_string());
+        let event = StateEvent::SettingsChanged {
+            settings: Box::new(moved),
+        };
+        assert_eq!(frame.apply(&event), Follow::Render);
+        let pane = frame.to_value()["settings"].clone();
+        assert_eq!(pane["background"]["toggles"][0]["on"], false);
+        assert_eq!(pane["background"]["toggles"][1]["on"], true);
+        assert_eq!(
+            pane["advanced"]["configDirs"][1]["dir"],
+            "/Users/x/.codex-work"
+        );
+        assert_eq!(frame.apply(&event), Follow::Nothing);
+
+        let mut health = status().health;
+        health.settings_unreadable = true;
+        let unreadable = StateEvent::HealthChanged {
+            health: Box::new(health),
+        };
+        assert_eq!(frame.apply(&unreadable), Follow::Render);
+        let pane = frame.to_value()["settings"].clone();
+        assert_eq!(pane["note"], agentsweep_core::health::SETTINGS_UNREADABLE);
+        assert_eq!(pane["available"], true);
+    }
+
+    /// Full Disk Access is named under the Settings pane's Advanced section
+    /// and nowhere else in what the window receives.
+    #[test]
+    fn full_disk_access_is_only_under_advanced() {
+        let mut frame = Frame::new();
+        frame.load(&status());
+        for posture in Posture::ALL {
+            frame.settings(&settings(posture));
+            let mut value = frame.to_value();
+            assert!(value.to_string().contains(settings_pane::FULL_DISK_ACCESS));
+            value["settings"]["advanced"]["fullDiskAccess"] = Value::Null;
+            assert!(
+                !value.to_string().contains(settings_pane::FULL_DISK_ACCESS),
+                "{value}"
+            );
+            for pane in settings_pane::FULL_DISK_ACCESS_PANES {
+                assert!(
+                    !value
+                        .to_string()
+                        .contains(pane.split('?').nth(1).unwrap_or(pane))
+                );
+            }
+        }
     }
 
     #[test]

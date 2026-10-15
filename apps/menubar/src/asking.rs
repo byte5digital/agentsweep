@@ -20,7 +20,9 @@ use std::sync::Mutex;
 use agentsweep_core::eventlog::Outcome;
 use agentsweep_core::item::ItemId;
 use agentsweep_core::quarantine::{Conflict, RestoreReport};
-use agentsweep_ipc::protocol::{ActionReport, FolderScanResult, Sessions, SettingsState, Status};
+use agentsweep_ipc::protocol::{
+    ActionReport, FolderScanResult, Sessions, SettingsChange, SettingsState, Status,
+};
 use agentsweep_ipc::{Client, ClientError};
 use serde_json::{Value, json};
 
@@ -142,10 +144,16 @@ impl Asking {
         self.with(true, Client::status)
     }
 
-    /// Where every choice the user made stands, the Posture among them. It
-    /// only reads: the app moves no choice yet.
+    /// Where every choice the user made stands, the Posture among them.
     pub fn settings(&self) -> Result<SettingsState, ClientError> {
         self.with(true, Client::settings)
+    }
+
+    /// Moves the choices the Settings pane asks for and answers where every
+    /// choice stands afterwards. Asking twice sets the same values again, so
+    /// it may be.
+    pub fn change_settings(&self, change: &SettingsChange) -> Result<SettingsState, ClientError> {
+        self.with(true, |client| client.change_settings(change.clone()))
     }
 
     /// Whether Agent sessions appear to be running right now.

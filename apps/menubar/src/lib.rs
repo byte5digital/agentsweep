@@ -27,6 +27,10 @@
 //! - [`wording`]: how a Finding reads in the Simple Posture, and the
 //!   technical table behind it.
 //! - [`folder`]: the answer of a Folder Scan as the window shows it.
+//! - [`settings_pane`]: the Settings pane: the Detail choice, the background
+//!   toggles, Advanced and what AgentSweep does not protect against.
+//! - [`cli_link`]: **Install command line tool**, the link in
+//!   `~/.local/bin`.
 //! - [`window`]: when the app shows in the Dock.
 //! - [`placement`]: where the popover and the Findings window open.
 //! - [`glyph`]: the menu bar icon in its three states.
@@ -37,6 +41,7 @@
 pub mod actions;
 pub mod app;
 pub mod asking;
+pub mod cli_link;
 pub mod findings;
 pub mod folder;
 pub mod frame;
@@ -46,6 +51,7 @@ pub mod link;
 pub mod overview;
 pub mod placement;
 pub mod popover;
+pub mod settings_pane;
 pub mod supervision;
 pub mod window;
 pub mod wording;

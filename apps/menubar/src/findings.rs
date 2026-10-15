@@ -1,7 +1,7 @@
 //! What the Findings window shows: every Finding the daemon's `status`
 //! carries, split into the open ones that ask something of the user and the
 //! ones already stopped or decided, each with exactly the actions the daemon
-//! allows on it ([`offers`]); and the Scan in hand, followed from the
+//! allows on it ([`crate::actions`]); and the Scan in hand, followed from the
 //! subscribe stream. While a Scan runs every action waits for it to finish
 //! (decision 22 of the owner), so the window disables the action buttons and
 //! says why; Health on the stream says when they may be pressed again.
@@ -12,17 +12,21 @@
 //! a Finding a Scan newly raised) is fetched again from the status, which
 //! [`Follow::Refresh`] asks the caller to do. The user never refreshes by hand.
 //!
-//! Wording here is placeholder, taken from the command line interface where
-//! it has a sentence and from the action vocabulary of spec section 8.5
-//! otherwise. It commits to nothing about the Postures of spec section 8.
+//! The Scan lines here are taken from the command line interface. How a
+//! Finding reads is [`crate::wording`]'s; its buttons and their
+//! confirmations are [`crate::actions`]'s.
 
 use agentsweep_core::adapter::{Primitive, eligibility};
 use agentsweep_core::finding::{Category, FindingState, RuleStatus};
 use agentsweep_core::health::Health;
 use agentsweep_core::item::Kind;
+use agentsweep_core::settings::Posture;
 use agentsweep_core::state::{RecordedFinding, ScanSummary};
-use agentsweep_ipc::protocol::{Offer, Sessions, StateEvent, Status, offers};
+use agentsweep_ipc::protocol::{StateEvent, Status};
 use serde_json::{Value, json};
+
+pub use crate::actions::{Action, trust_confirmation};
+use crate::actions::{card_in, offered};
 
 /// What the caller does after an event was applied.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -250,7 +254,12 @@ impl Findings {
                 "exposures": open.iter().filter(|f| f.category == Category::Exposure).count(),
             },
             "open": open.into_iter().map(card).collect::<Vec<_>>(),
-            "decided": self.decided().map(card).collect::<Vec<_>>(),
+            // A stopped Item's buttons read the same in both Postures, and
+            // its card carries the restore-and-trust confirmation.
+            "decided": self
+                .decided()
+                .map(|finding| card_in(finding, Posture::Simple))
+                .collect::<Vec<_>>(),
         })
     }
 }
@@ -259,37 +268,6 @@ impl Findings {
 pub const ACTIONS_WAIT: &str =
     "Checking now. Actions wait until the check has finished, then they can be used again.";
 
-/// One action a card offers: the command the window invokes, its label, the
-/// id it addresses, and the confirmation it asks first.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Action {
-    /// The Tauri command, which is the request of the same name.
-    pub command: &'static str,
-    /// What the button says. Placeholder wording.
-    pub label: String,
-    /// The Finding id the request addresses.
-    pub target: String,
-    /// What a Restore does when something else stands at the original place:
-    /// `refuse` first, `replace` or `beside` once the user chose.
-    pub conflict: Option<&'static str>,
-    /// The confirmation asked before the request goes out, if any:
-    /// `quarantine` (which states whether Agent sessions appear to be
-    /// running) or `trust` (which explains hash-bound Trust).
-    pub confirm: Option<&'static str>,
-}
-
-impl Action {
-    fn to_value(&self) -> Value {
-        json!({
-            "command": self.command,
-            "label": self.label,
-            "target": self.target,
-            "conflict": self.conflict,
-            "confirm": self.confirm,
-        })
-    }
-}
-
 /// True for the kinds a Quarantine neutralises in place and that are never
 /// quarantined automatically: Repository Metadata and env files (spec
 /// section 5.2). Read off the eligibility table, not listed here.
@@ -297,63 +275,11 @@ pub fn neutralised_in_place(kind: Kind) -> bool {
     eligibility(kind).primitives == [Primitive::NeutraliseInPlace]
 }
 
-/// The actions the daemon allows on one Finding, labelled for the window.
-///
-/// For the never-auto kinds a manual Quarantine is the NeutraliseInPlace
-/// primitive and its Restore switches the line back on, so the pair is the
-/// neutralise-in-place toggle of spec section 8.5. Where the Quarantine is the
-/// Agent's own switch (a Codex MCP server, hook or skill, the owner's decision
-/// of 2026-09-28), the pair switches the Item off and back on.
+/// The buttons one Finding offers, labelled for the Simple Posture; the
+/// frame renders each pane's cards in the Posture in force
+/// ([`crate::actions::card_in`]).
 pub fn actions(finding: &RecordedFinding) -> Vec<Action> {
-    let toggle = neutralised_in_place(finding.kind);
-    let target = finding.id.as_str().to_string();
-    offers(finding)
-        .into_iter()
-        .map(|offer| {
-            let (command, label, confirm, conflict) = match offer {
-                Offer::Quarantine => (
-                    "quarantine",
-                    match (toggle, finding.source.as_str()) {
-                        (true, _) => "Switch this line off",
-                        (false, "drift") => "No, remove it",
-                        (false, _) if finding.switched => "Switch this off",
-                        (false, _) => "Quarantine",
-                    },
-                    Some("quarantine"),
-                    None,
-                ),
-                Offer::Restore => (
-                    "restore",
-                    match (toggle, finding.switched) {
-                        (true, _) => "Switch the line back on",
-                        (false, true) => "Switch it back on",
-                        (false, false) => "Restore",
-                    },
-                    None,
-                    Some("refuse"),
-                ),
-                Offer::ReEnable => ("re_enable", "Re-enable", None, None),
-                Offer::Trust => (
-                    "trust",
-                    match finding.category {
-                        Category::Threat => "Trust this version",
-                        Category::Exposure => "Keep it as it is",
-                    },
-                    Some("trust"),
-                    None,
-                ),
-                Offer::Acknowledge => ("acknowledge", "Yes, that was me", None, None),
-                Offer::Fix => ("fix", "Take this setting out", None, None),
-            };
-            Action {
-                command,
-                label: label.to_string(),
-                target: target.clone(),
-                conflict,
-                confirm,
-            }
-        })
-        .collect()
+    offered(finding, Posture::Simple)
 }
 
 /// The name a person knows an Item by: the last part of its locator.
@@ -422,56 +348,6 @@ fn note(finding: &RecordedFinding) -> &'static str {
     ""
 }
 
-/// What the Quarantine confirmation says: what is taken out, whether Agent
-/// sessions appear to be running (asked of the daemon just before), and for a
-/// project's Item that git will show the change.
-pub fn quarantine_confirmation(finding: &RecordedFinding, sessions: &Sessions) -> Value {
-    let what = match neutralised_in_place(finding.kind) {
-        true => format!(
-            "Switch off the line in {} '{}'? AgentSweep comments it out; switching it back on \
-             undoes that.",
-            finding.kind,
-            name_of(finding.item_id.as_str())
-        ),
-        false => format!(
-            "Quarantine {} '{}'? AgentSweep takes it out of where the Agent loads it; Restore \
-             puts it back.",
-            finding.kind,
-            name_of(finding.item_id.as_str())
-        ),
-    };
-    json!({
-        "question": what,
-        "sessions": sessions.sentence(),
-        "sessionsRunning": sessions.running.as_str(),
-        "project": match finding.item_id.is_project() {
-            true => "This file belongs to a project, so git will show the change. Restore undoes it.",
-            false => "",
-        },
-    })
-}
-
-/// What the Trust confirmation says: Trust is bound to this exact content.
-pub fn trust_confirmation(finding: &RecordedFinding) -> Value {
-    json!({
-        "question": match finding.category {
-            Category::Threat => format!(
-                "Trust this version of {} '{}'?",
-                finding.kind,
-                name_of(finding.item_id.as_str())
-            ),
-            Category::Exposure => format!(
-                "Keep {} '{}' as it is?",
-                finding.kind,
-                name_of(finding.item_id.as_str())
-            ),
-        },
-        "sessions": "",
-        "sessionsRunning": "",
-        "project": "Trust is bound to this exact content. Any change to it is checked afresh.",
-    })
-}
-
 /// One progress event on one line, as the command line interface prints it.
 pub fn progress_line(done: usize, total: usize) -> String {
     match total {
@@ -509,12 +385,10 @@ pub(crate) mod tests {
     use super::*;
 
     use agentsweep_core::envelope::Timestamp;
-    use agentsweep_core::eventlog::SessionsRunning;
     use agentsweep_core::finding::{FindingId, Severity, Tier};
     use agentsweep_core::item::ItemId;
     use agentsweep_core::scan_pass::ScanKind;
     use agentsweep_core::state::Trigger;
-    use agentsweep_ipc::protocol::AgentSessions;
 
     fn moment(text: &str) -> Timestamp {
         Timestamp::parse(text).expect("a readable moment")
@@ -630,198 +504,6 @@ pub(crate) mod tests {
             activity: Vec::new(),
             overview: Default::default(),
         }
-    }
-
-    fn commands(finding: &RecordedFinding) -> Vec<(&'static str, String)> {
-        actions(finding)
-            .into_iter()
-            .map(|action| (action.command, action.label))
-            .collect()
-    }
-
-    fn pairs(list: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
-        list.iter()
-            .map(|(command, label)| (*command, label.to_string()))
-            .collect()
-    }
-
-    /// Every source a Finding can have gets exactly the actions the daemon
-    /// allows on it, labelled from the vocabulary of spec section 8.5.
-    #[test]
-    fn each_source_offers_what_the_daemon_allows() {
-        let all = every_source();
-        assert_eq!(
-            commands(&all[0]),
-            pairs(&[
-                ("quarantine", "Quarantine"),
-                ("trust", "Trust this version")
-            ])
-        );
-        assert_eq!(
-            commands(&all[1]),
-            pairs(&[
-                ("quarantine", "Quarantine"),
-                ("trust", "Trust this version")
-            ])
-        );
-        assert_eq!(
-            commands(&all[2]),
-            pairs(&[
-                ("quarantine", "No, remove it"),
-                ("trust", "Trust this version"),
-                ("acknowledge", "Yes, that was me"),
-            ])
-        );
-        assert!(commands(&all[3]).is_empty(), "a Problem offers nothing");
-        assert_eq!(
-            commands(&all[4]),
-            pairs(&[
-                ("quarantine", "Quarantine"),
-                ("trust", "Trust this version")
-            ])
-        );
-        // Every action addresses the Finding it sits on, and a Quarantine and
-        // a Trust ask first.
-        for action in actions(&all[0]) {
-            assert_eq!(action.target, all[0].id.as_str());
-            assert!(action.confirm.is_some(), "{action:?}");
-        }
-    }
-
-    /// The fix of Exposures 0018 and 0019 and the Exposure wording of Trust.
-    #[test]
-    fn an_exposure_is_kept_or_fixed_and_never_quarantined() {
-        let fixable = recorded(
-            SETTING,
-            Kind::SettingsEntry,
-            "rule 0019",
-            Category::Exposure,
-            FindingState::Open,
-        );
-        assert_eq!(
-            commands(&fixable),
-            pairs(&[
-                ("trust", "Keep it as it is"),
-                ("fix", "Take this setting out")
-            ])
-        );
-        let other = recorded(
-            SETTING,
-            Kind::SettingsEntry,
-            "rule 0010",
-            Category::Exposure,
-            FindingState::Open,
-        );
-        assert_eq!(commands(&other), pairs(&[("trust", "Keep it as it is")]));
-    }
-
-    /// Repository Metadata and env files are neutralised in place: the
-    /// Quarantine switches the line off and the Restore switches it back on.
-    #[test]
-    fn a_never_auto_kind_is_a_toggle_for_its_line() {
-        for (item, kind) in [(GIT, Kind::RepositoryMetadata), (ENV, Kind::EnvFile)] {
-            assert!(neutralised_in_place(kind));
-            let open = recorded(
-                item,
-                kind,
-                "rule 0007",
-                Category::Threat,
-                FindingState::Open,
-            );
-            assert_eq!(
-                commands(&open),
-                pairs(&[
-                    ("quarantine", "Switch this line off"),
-                    ("trust", "Trust this version")
-                ])
-            );
-            assert!(!note(&open).is_empty());
-            let off = recorded(
-                item,
-                kind,
-                "rule 0007",
-                Category::Threat,
-                FindingState::Stopped,
-            );
-            assert_eq!(
-                commands(&off),
-                pairs(&[("restore", "Switch the line back on")])
-            );
-        }
-        assert!(!neutralised_in_place(Kind::Skill));
-    }
-
-    /// A Finding whose Quarantine is the Agent's own switch reads as a switch:
-    /// "Switch this off" while open, "Switch it back on" once stopped.
-    #[test]
-    fn a_switched_item_is_switched_off_and_back_on() {
-        let mut open = recorded(
-            "codex/user/mcp-server/~/.codex/config.toml#dropper",
-            Kind::McpServer,
-            "rule 0001",
-            Category::Threat,
-            FindingState::Open,
-        );
-        open.switched = true;
-        assert_eq!(
-            commands(&open),
-            pairs(&[
-                ("quarantine", "Switch this off"),
-                ("trust", "Trust this version")
-            ])
-        );
-        let mut off = recorded(
-            "codex/user/mcp-server/~/.codex/config.toml#dropper",
-            Kind::McpServer,
-            "rule 0001",
-            Category::Threat,
-            FindingState::Stopped,
-        );
-        off.switched = true;
-        assert_eq!(commands(&off), pairs(&[("restore", "Switch it back on")]));
-        off.switched = false;
-        assert_eq!(commands(&off), pairs(&[("restore", "Restore")]));
-    }
-
-    /// Stopped offers Restore (and Re-enable once a fixed version is there);
-    /// trusted, acknowledged and gone offer nothing.
-    #[test]
-    fn each_state_offers_what_the_daemon_allows() {
-        let mut stopped = recorded(
-            SKILL,
-            Kind::Plugin,
-            "rule 0001",
-            Category::Threat,
-            FindingState::Stopped,
-        );
-        assert_eq!(commands(&stopped), pairs(&[("restore", "Restore")]));
-        assert_eq!(actions(&stopped)[0].conflict, Some("refuse"));
-        stopped.fixed_version = "def".to_string();
-        assert_eq!(
-            commands(&stopped),
-            pairs(&[("restore", "Restore"), ("re_enable", "Re-enable")])
-        );
-        for state in [
-            FindingState::Trusted,
-            FindingState::Acknowledged,
-            FindingState::Gone,
-        ] {
-            let decided = recorded(SKILL, Kind::Skill, "rule 0001", Category::Threat, state);
-            assert!(commands(&decided).is_empty(), "{state}");
-        }
-        let mut managed = recorded(
-            "claude-code/managed/settings-entry/x#y",
-            Kind::SettingsEntry,
-            "rule 0001",
-            Category::Threat,
-            FindingState::Open,
-        );
-        managed.item_id = ItemId::from_recorded("claude-code/managed/settings-entry/x#y");
-        assert_eq!(
-            commands(&managed),
-            pairs(&[("trust", "Trust this version")])
-        );
-        assert!(note(&managed).contains("administers"));
     }
 
     /// Every open Finding of the status is in the window with its id and
@@ -1101,82 +783,33 @@ pub(crate) mod tests {
         assert_eq!(list.to_value()["actionsWait"], Value::Null);
     }
 
-    /// The Quarantine confirmation says whether Agent sessions appear to be
-    /// running, in the words every action result uses, and that git will show
-    /// the change for a project's Item.
+    /// The fixed note of a never-auto kind and of a Managed Item.
     #[test]
-    fn the_quarantine_confirmation_states_the_sessions() {
-        let finding = recorded(
-            SKILL,
-            Kind::Skill,
+    fn a_never_auto_kind_and_a_managed_item_carry_their_note() {
+        for (item, kind) in [(GIT, Kind::RepositoryMetadata), (ENV, Kind::EnvFile)] {
+            assert!(neutralised_in_place(kind));
+            let open = recorded(
+                item,
+                kind,
+                "rule 0007",
+                Category::Threat,
+                FindingState::Open,
+            );
+            assert!(!note(&open).is_empty());
+        }
+        assert!(!neutralised_in_place(Kind::Skill));
+        let mut managed = recorded(
+            "claude-code/managed/settings-entry/x#y",
+            Kind::SettingsEntry,
             "rule 0001",
             Category::Threat,
             FindingState::Open,
         );
-        let running = Sessions::of(vec![AgentSessions {
-            agent: "claude-code".to_string(),
-            running: SessionsRunning::Yes,
-            live: 2,
-        }]);
-        let asked = quarantine_confirmation(&finding, &running);
-        assert_eq!(asked["sessions"], running.sentence());
-        assert!(
-            asked["sessions"]
-                .as_str()
-                .expect("a sentence")
-                .starts_with("Agent sessions appear to be running: claude-code (2)")
-        );
-        assert_eq!(asked["sessionsRunning"], "yes");
-        assert_eq!(asked["project"], "");
-        assert!(
-            asked["question"]
-                .as_str()
-                .expect("a question")
-                .contains("'setup'")
-        );
-
-        let nobody = Sessions::of(vec![AgentSessions {
-            agent: "claude-code".to_string(),
-            running: SessionsRunning::No,
-            live: 0,
-        }]);
-        let project = recorded(
-            ENV,
-            Kind::EnvFile,
-            "rule 0007",
-            Category::Threat,
-            FindingState::Open,
-        );
-        let asked = quarantine_confirmation(&project, &nobody);
-        assert!(
-            asked["sessions"]
-                .as_str()
-                .expect("a sentence")
-                .starts_with("No Agent session")
-        );
-        assert!(
-            asked["question"]
-                .as_str()
-                .expect("a question")
-                .starts_with("Switch off the line")
-        );
-        assert!(
-            asked["project"]
-                .as_str()
-                .expect("a line")
-                .contains("git will show")
-        );
-
-        let unknown = quarantine_confirmation(&finding, &Sessions::unknown());
-        assert!(
-            unknown["sessions"]
-                .as_str()
-                .expect("a sentence")
-                .contains("could not tell")
-        );
+        managed.item_id = ItemId::from_recorded("claude-code/managed/settings-entry/x#y");
+        assert!(note(&managed).contains("administers"));
     }
 
-    /// Placeholder wording still keeps the house style: no em-dashes.
+    /// The list's own lines keep the house style: no em-dashes.
     #[test]
     fn no_string_carries_an_em_dash() {
         let mut list = Findings::new();
@@ -1191,7 +824,6 @@ pub(crate) mod tests {
         list.load(&status_of(all.clone()));
         let mut text = list.to_value().to_string();
         for finding in &all {
-            text.push_str(&quarantine_confirmation(finding, &Sessions::unknown()).to_string());
             text.push_str(&trust_confirmation(finding).to_string());
         }
         assert!(!text.contains('\u{2014}'));

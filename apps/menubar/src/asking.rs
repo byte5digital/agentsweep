@@ -18,11 +18,13 @@ use std::io::ErrorKind;
 use std::sync::Mutex;
 
 use agentsweep_core::eventlog::Outcome;
+use agentsweep_core::item::ItemId;
 use agentsweep_core::quarantine::{Conflict, RestoreReport};
 use agentsweep_ipc::protocol::{ActionReport, FolderScanResult, Sessions, SettingsState, Status};
 use agentsweep_ipc::{Client, ClientError};
 use serde_json::{Value, json};
 
+use crate::actions::{after_quarantine, sessions_sentence};
 use crate::link::Socket;
 
 /// One action, as the window asks for it.
@@ -193,9 +195,24 @@ pub fn scan_now_line(started: bool) -> &'static str {
     }
 }
 
-/// One action's answer as the window shows it: the daemon's sentence, the
-/// lines the command line interface prints under it, and whether Agent
-/// sessions appear to be running.
+/// The two choices a Restore conflict offers, as (label, conflict): each
+/// sends the Restore again with that choice (spec sections 5.4 and 8.5).
+pub const CONFLICT_CHOICES: [(&str, &str); 2] = [
+    ("Replace the new file", "replace"),
+    ("Restore beside it", "beside"),
+];
+
+/// One action's answer as the window shows it beside the Finding: the
+/// daemon's sentence, the lines under it, and the lines the command line
+/// interface prints, which go under Details (the owner's decision of
+/// 2026-10-14 for ticket 73).
+///
+/// The lines under the sentence say whether the Agent appears to be running
+/// in the window's words. After a Quarantine that was carried out they are
+/// its confirmation: the sessions sentence, the restart request and, on
+/// Project Scope, that git will show the change ([`after_quarantine`]). The
+/// conflict choices are there only when the daemon answered a Restore with a
+/// conflict.
 pub fn report_view(report: &ActionReport, target: &str) -> Value {
     let conflict = report.action == "restore"
         && report.result != Outcome::Ok
@@ -224,8 +241,24 @@ pub fn report_view(report: &ActionReport, target: &str) -> Value {
             }
         ));
     }
+    let done = report.result != Outcome::Failed;
+    let lines = match (report.action.as_str(), done) {
+        ("quarantine", true) => {
+            after_quarantine(&ItemId::from_recorded(&report.item_id), &report.sessions)
+        }
+        _ => vec![sessions_sentence(&report.sessions)],
+    };
+    let choices: Vec<Value> = match conflict {
+        true => CONFLICT_CHOICES
+            .iter()
+            .map(|(label, choice)| {
+                json!({ "label": label, "command": "restore", "conflict": choice, "target": target })
+            })
+            .collect(),
+        false => Vec::new(),
+    };
     json!({
-        "done": report.result != Outcome::Failed,
+        "done": done,
         "message": match conflict {
             // The daemon's sentence names the command line options; the
             // window offers the two choices as buttons instead.
@@ -234,9 +267,10 @@ pub fn report_view(report: &ActionReport, target: &str) -> Value {
                 .to_string(),
             false => report.message.clone(),
         },
+        "lines": lines,
         "details": details,
-        "sessions": report.sessions.sentence(),
         "conflict": conflict,
+        "choices": choices,
         "target": target,
     })
 }
@@ -246,9 +280,10 @@ pub fn refusal_view(error: &ClientError) -> Value {
     json!({
         "done": false,
         "message": refusal(error),
+        "lines": [],
         "details": [],
-        "sessions": "",
         "conflict": false,
+        "choices": [],
         "target": "",
     })
 }
@@ -344,13 +379,41 @@ mod tests {
                 "move-out ok  /home/.claude/skills/x",
             ]
         );
-        assert!(
-            view["sessions"]
-                .as_str()
-                .expect("a sentence")
-                .starts_with("Agent sessions appear to be running: claude-code (1)")
+        // After a Quarantine: the sessions sentence in the window's words
+        // and the restart request; a user-level skill has no git line.
+        assert_eq!(
+            view["lines"],
+            json!([
+                "1 Claude Code session appears to be running.",
+                "Restart it so it picks up the change.",
+            ])
         );
         assert_eq!(view["conflict"], false);
+        assert_eq!(view["choices"], json!([]));
+
+        // Any other answer carries the sessions sentence alone.
+        let trusted = report_view(&report("trust", Outcome::Ok, Vec::new()), "f");
+        assert_eq!(
+            trusted["lines"],
+            json!(["1 Claude Code session appears to be running."])
+        );
+        // A Quarantine that failed asks for no restart.
+        let failed = report_view(&report("quarantine", Outcome::Failed, Vec::new()), "f");
+        assert_eq!(
+            failed["lines"],
+            json!(["1 Claude Code session appears to be running."])
+        );
+    }
+
+    /// A project's Item adds that git will show the change.
+    #[test]
+    fn a_quarantine_in_a_project_says_git_will_show_it() {
+        let mut quarantined = report("quarantine", Outcome::Ok, Vec::new());
+        quarantined.item_id =
+            "claude-code/project:/src/demo/instruction-file/CLAUDE.md".to_string();
+        let view = report_view(&quarantined, "f");
+        let lines = view["lines"].as_array().expect("lines");
+        assert_eq!(lines.last().expect("a line"), crate::wording::PROJECT_LINE);
     }
 
     /// A Restore that met something else at the original place offers the
@@ -364,6 +427,29 @@ mod tests {
         assert_eq!(view["conflict"], true);
         assert_eq!(view["done"], false);
         assert_eq!(view["target"], "f");
+        // Each choice sends the Restore again with its own conflict answer.
+        let sent: Vec<ActionRequest> = view["choices"]
+            .as_array()
+            .expect("choices")
+            .iter()
+            .map(|choice| {
+                ActionRequest::of(
+                    choice["command"].as_str().expect("a command"),
+                    choice["target"].as_str().expect("a target"),
+                    choice["conflict"].as_str(),
+                )
+                .expect("an action")
+            })
+            .collect();
+        assert_eq!(
+            sent,
+            vec![
+                ActionRequest::Restore("f".to_string(), Conflict::Replace),
+                ActionRequest::Restore("f".to_string(), Conflict::Beside),
+            ]
+        );
+        assert_eq!(view["choices"][0]["label"], "Replace the new file");
+        assert_eq!(view["choices"][1]["label"], "Restore beside it");
         assert!(
             !view["message"]
                 .as_str()

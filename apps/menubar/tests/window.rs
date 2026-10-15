@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use agentsweep_core::finding::{Category, FindingState};
+use agentsweep_core::item::Kind;
 use agentsweep_core::keychain::MemoryKeySource;
 use agentsweep_core::pack::Manifest;
 use agentsweep_core::paths::DataDirectory;
@@ -28,13 +29,15 @@ use agentsweep_daemon::watcher::Timings;
 use agentsweep_ipc::Client;
 use agentsweep_ipc::peer::SameUser;
 use agentsweep_ipc::protocol::{Role, SettingsChange, StateEvent, Status};
+use agentsweep_menubar::actions::{after_quarantine, offered};
 use agentsweep_menubar::asking::{ActionRequest, Asking};
-use agentsweep_menubar::findings::{Findings, Follow, quarantine_confirmation};
+use agentsweep_menubar::findings::{Findings, Follow};
 use agentsweep_menubar::folder::result_view;
 use agentsweep_menubar::frame::Frame;
 use agentsweep_menubar::link::{Link, Socket, Update};
 use agentsweep_menubar::popover::View;
 use agentsweep_menubar::supervision::Unsupervised;
+use agentsweep_menubar::wording::PROJECT_LINE;
 use serde_json::Value;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -292,12 +295,10 @@ fn the_window_lists_the_status_and_follows_every_action_from_the_stream() {
         assert_eq!(card["state"], "open");
     }
 
-    // The Quarantine confirmation asks the daemon about sessions first.
-    let sessions = asking.sessions().expect("the sessions");
-    let confirmation = quarantine_confirmation(&skill, &sessions);
-    assert_eq!(confirmation["sessions"], sessions.sentence());
-
-    // Quarantine: stopped, with its Receipt, from the stream.
+    // Quarantine: stopped, with its Receipt, from the stream. Its answer
+    // carries the confirmation after a Quarantine: whether the Agent
+    // appears to be running, in the window's words, and no git line for a
+    // user-level skill.
     let quarantined = asking.act(&ActionRequest::Quarantine(skill.id.to_string()));
     assert_eq!(quarantined["done"], true, "{quarantined}");
     assert!(
@@ -307,10 +308,27 @@ fn the_window_lists_the_status_and_follows_every_action_from_the_stream() {
             .starts_with("Quarantined the skill 'setup'."),
         "{quarantined}"
     );
+    let sessions = asking.sessions().expect("the sessions");
+    assert_eq!(
+        quarantined["lines"],
+        serde_json::json!(after_quarantine(&skill.item_id, &sessions)),
+        "{quarantined}"
+    );
+    assert!(
+        !quarantined["lines"]
+            .to_string()
+            .contains("git will show the change")
+    );
     following.until(&mut list, &asking, "the skill stopped", |list| {
         list.get(skill.id.as_str())
             .is_some_and(|f| f.state == FindingState::Stopped && !f.receipt_id.is_empty())
     });
+    // The user took it out, so the stopped Item offers Restore, chosen from
+    // the actor the daemon sent and asked of nobody.
+    let stopped = list.get(skill.id.as_str()).expect("listed").clone();
+    let offered_now = offered(&stopped, Posture::Simple);
+    assert_eq!(offered_now[0].label, "Restore", "{offered_now:?}");
+    assert_eq!(offered_now[0].confirm, None);
     assert!(
         !sandbox.home.join(".claude/skills/setup").exists(),
         "moved out"
@@ -700,3 +718,183 @@ fn the_overview_shows_only_protection_off_until_the_daemon_answers() {
     );
     assert!(shown.rules_updated.is_some());
 }
+
+/// A registry that knows one project and holds one plain MCP server.
+fn registry_with(project: &std::path::Path, command: &str) -> String {
+    format!(
+        "{{\n  \"projects\": {{\n    \"{}\": {{ \"hasTrustDialogAccepted\": true }}\n  }},\n  \
+         \"mcpServers\": {{\n    \"tracker\": {{ \"command\": \"{command}\", \"args\": [\"--stdio\"] }}\n  }}\n}}\n",
+        project.display()
+    )
+}
+
+/// The rest of spec section 8.5 against a real daemon: the line switch of a
+/// never-auto kind off and back on, the Drift question answered with "Yes,
+/// that was me", and a Restore that meets something else at the original
+/// place, whose two choices appear only then and each send their Restore.
+/// Every move is seen from the stream.
+#[test]
+fn the_window_switches_a_line_answers_a_drift_question_and_offers_the_conflict_choices() {
+    let sandbox = Sandbox::new("vocabulary");
+    let project = sandbox.root.join("demo");
+    std::fs::create_dir_all(&project).expect("a project");
+    let env_file = project.join(".env");
+    std::fs::write(&env_file, b"CLAUDE_CONFIG_DIR=./agent-home\n").expect("a planted env file");
+    std::fs::write(
+        sandbox.home.join(".claude.json"),
+        registry_with(&project, "/opt/tools/tracker"),
+    )
+    .expect("a registry");
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let following = Following::start(&sandbox);
+    let mut list = Findings::new();
+    list.load(&asking.status().expect("a status"));
+
+    // The line switch: off, with the git line of a project's Item, and back
+    // on, the file as it was.
+    let env = list
+        .open()
+        .find(|finding| finding.kind == Kind::EnvFile)
+        .unwrap_or_else(|| panic!("the env file's Finding: {:?}", list.all()))
+        .clone();
+    let switch = offered(&env, Posture::Simple).remove(0);
+    assert_eq!(switch.label, "Switch this line off");
+    let off =
+        asking.act(&ActionRequest::of(switch.command, &switch.target, None).expect("an action"));
+    assert_eq!(off["done"], true, "{off}");
+    assert!(
+        off["lines"]
+            .as_array()
+            .expect("lines")
+            .iter()
+            .any(|line| line == PROJECT_LINE),
+        "{off}"
+    );
+    following.until(&mut list, &asking, "the line switched off", |list| {
+        state_of(list, env.id.as_str()) == Some(FindingState::Stopped)
+    });
+    let written = std::fs::read_to_string(&env_file).expect("the env file");
+    assert!(
+        written.starts_with("# agentsweep: quarantined "),
+        "{written}"
+    );
+    let stopped = list.get(env.id.as_str()).expect("listed").clone();
+    let back = offered(&stopped, Posture::Simple).remove(0);
+    assert_eq!(back.label, "Switch the line back on");
+    let on = asking
+        .act(&ActionRequest::of(back.command, &back.target, back.conflict).expect("an action"));
+    assert_eq!(on["done"], true, "{on}");
+    following.until(&mut list, &asking, "the line switched back on", |list| {
+        state_of(list, env.id.as_str()) == Some(FindingState::Open)
+    });
+    assert_eq!(
+        std::fs::read_to_string(&env_file).expect("the env file"),
+        "CLAUDE_CONFIG_DIR=./agent-home\n"
+    );
+
+    // The Drift question: the MCP server's command swapped under its name.
+    // Simple keeps Trust behind the technical details; "Yes, that was me"
+    // acknowledges it.
+    std::fs::write(
+        sandbox.home.join(".claude.json"),
+        registry_with(&project, "/opt/tools/tracker-two"),
+    )
+    .expect("a swapped command");
+    following.until(&mut list, &asking, "the Drift question", |list| {
+        list.open().any(|finding| finding.source == "drift")
+    });
+    let drift = list
+        .open()
+        .find(|finding| finding.source == "drift")
+        .expect("the Drift question")
+        .clone();
+    let shown: Vec<(&str, bool)> = offered(&drift, Posture::Simple)
+        .iter()
+        .map(|action| (action.label, action.technical))
+        .collect();
+    assert_eq!(
+        shown,
+        vec![
+            ("No, remove it", false),
+            ("Trust this version", true),
+            ("Yes, that was me", false)
+        ]
+    );
+    let yes = asking.act(&ActionRequest::Acknowledge(drift.id.to_string()));
+    assert_eq!(yes["done"], true, "{yes}");
+    following.until(&mut list, &asking, "the Drift acknowledged", |list| {
+        state_of(list, drift.id.as_str()) == Some(FindingState::Acknowledged)
+    });
+
+    // A Restore conflict: the skill quarantined, something else written in
+    // its place, and the Restore refused with the two choices.
+    let skill = list
+        .open()
+        .find(|finding| finding.item_id.as_str().ends_with("skills/setup"))
+        .expect("the planted skill's Finding")
+        .clone();
+    let quarantined = asking.act(&ActionRequest::Quarantine(skill.id.to_string()));
+    assert_eq!(quarantined["done"], true, "{quarantined}");
+    assert_eq!(quarantined["choices"], serde_json::json!([]));
+    following.until(&mut list, &asking, "the skill stopped", |list| {
+        state_of(list, skill.id.as_str()) == Some(FindingState::Stopped)
+    });
+    let place = sandbox.home.join(".claude/skills/setup");
+    std::fs::create_dir_all(&place).expect("the place again");
+    std::fs::write(place.join("SKILL.md"), BENIGN_SKILL).expect("something else in its place");
+    let refused = asking.act(&ActionRequest::Restore(
+        skill.id.to_string(),
+        Conflict::Refuse,
+    ));
+    assert_eq!(refused["conflict"], true, "{refused}");
+    let choices: Vec<(String, String)> = refused["choices"]
+        .as_array()
+        .expect("choices")
+        .iter()
+        .map(|choice| {
+            (
+                choice["label"].as_str().expect("a label").to_string(),
+                choice["conflict"].as_str().expect("a choice").to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        choices,
+        vec![
+            ("Replace the new file".to_string(), "replace".to_string()),
+            ("Restore beside it".to_string(), "beside".to_string()),
+        ]
+    );
+    let beside = &refused["choices"][1];
+    let request = ActionRequest::of(
+        beside["command"].as_str().expect("a command"),
+        beside["target"].as_str().expect("a target"),
+        beside["conflict"].as_str(),
+    )
+    .expect("an action");
+    assert_eq!(
+        request,
+        ActionRequest::Restore(skill.id.to_string(), Conflict::Beside)
+    );
+    let restored = asking.act(&request);
+    assert_eq!(restored["done"], true, "{restored}");
+    assert_eq!(restored["choices"], serde_json::json!([]));
+    assert!(
+        sandbox
+            .home
+            .join(".claude/skills/setup.restored/SKILL.md")
+            .is_file(),
+        "restored beside"
+    );
+    assert_eq!(
+        std::fs::read(place.join("SKILL.md")).expect("the new file"),
+        BENIGN_SKILL,
+        "the new file stays"
+    );
+    following.in_step(&mut list, &asking);
+}
+
+/// A skill that asks nothing suspicious, written where a quarantined one was.
+const BENIGN_SKILL: &[u8] =
+    b"---\nname: setup\ndescription: Set the project up.\n---\n\nRun the tests first.\n";

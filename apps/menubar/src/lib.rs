@@ -18,6 +18,8 @@
 //! - [`popover`]: the view the popover renders.
 //! - [`findings`]: the Findings window's list, kept from the status and the
 //!   subscribe stream, with the actions the daemon allows on each Finding.
+//! - [`actions`]: the buttons of spec section 8.5 on one Finding in a
+//!   Posture, and the confirmations before and after them.
 //! - [`frame`]: the window's sidebar, its counts, the two Finding panes and
 //!   the Posture the window is shown in.
 //! - [`overview`]: the Overview pane: the status sentence, the Agents, the
@@ -32,6 +34,7 @@
 
 #![warn(missing_docs)]
 
+pub mod actions;
 pub mod app;
 pub mod asking;
 pub mod findings;

@@ -25,7 +25,8 @@ use agentsweep_core::state::ScanSummary;
 use agentsweep_ipc::protocol::{SettingsState, StateEvent, Status};
 use serde_json::{Value, json};
 
-use crate::findings::{Findings, Follow, card};
+use crate::actions::card_in;
+use crate::findings::{Findings, Follow};
 use crate::overview::{self, OverviewView};
 use crate::popover::View;
 
@@ -271,7 +272,7 @@ impl Frame {
             self.findings
                 .open()
                 .filter(|f| f.category == category)
-                .map(card)
+                .map(|finding| card_in(finding, self.posture))
                 .collect()
         };
         value["posture"] = Value::from(self.posture.as_str());
@@ -438,7 +439,8 @@ mod tests {
     }
 
     /// Both Postures count the same: a Posture changes names, never what is
-    /// listed.
+    /// listed. The buttons on a card follow the Posture (spec section 8.5),
+    /// so the panes are compared by the Findings they hold.
     #[test]
     fn a_posture_changes_names_and_never_counts() {
         let mut frame = Frame::new();
@@ -446,11 +448,53 @@ mod tests {
         let counts = |frame: &Frame| -> Vec<Option<usize>> {
             frame.sidebar().iter().map(|entry| entry.count).collect()
         };
+        let listed = |frame: &Frame| -> Vec<Vec<String>> {
+            let panes = frame.to_value()["panes"].clone();
+            ["threats", "exposures"]
+                .iter()
+                .map(|pane| {
+                    panes[pane]
+                        .as_array()
+                        .expect("a pane")
+                        .iter()
+                        .map(|card| card["id"].as_str().expect("an id").to_string())
+                        .collect()
+                })
+                .collect()
+        };
         let simple = counts(&frame);
-        let simple_panes = frame.to_value()["panes"].clone();
+        let simple_panes = listed(&frame);
         frame.settings(&settings(Posture::Developer));
         assert_eq!(counts(&frame), simple);
-        assert_eq!(frame.to_value()["panes"], simple_panes);
+        assert_eq!(listed(&frame), simple_panes);
+    }
+
+    /// The panes carry the buttons of the Posture in force: Trust on a Drift
+    /// question sits behind the technical details in Simple only.
+    #[test]
+    fn the_panes_carry_the_buttons_of_the_posture() {
+        let mut frame = Frame::new();
+        frame.load(&status());
+        let trust_on_drift = |frame: &Frame| -> Value {
+            let value = frame.to_value();
+            let drift = value["panes"]["threats"]
+                .as_array()
+                .expect("threats")
+                .iter()
+                .find(|card| card["source"] == "drift")
+                .expect("the Drift question")
+                .clone();
+            drift["actions"]
+                .as_array()
+                .expect("actions")
+                .iter()
+                .find(|action| action["command"] == "trust")
+                .expect("Trust")
+                .clone()
+        };
+        assert_eq!(trust_on_drift(&frame)["technical"], true);
+        frame.settings(&settings(Posture::Developer));
+        assert_eq!(trust_on_drift(&frame)["technical"], false);
     }
 
     /// A Finding stopped on the stream leaves Needs your decision and its

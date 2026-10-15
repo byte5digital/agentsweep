@@ -18,12 +18,12 @@
 //!   sidebar with its counts, the Overview, the two Finding panes and the
 //!   Posture.
 //! - `folder`: the last Folder Scan's view, for a window that just loaded.
-//! - `sessions`: the Quarantine confirmation for one Finding, with whether
-//!   Agent sessions appear to be running, asked of the daemon just before.
 //! - `quarantine`, `restore`, `trust`, `acknowledge`, `fix`, `re_enable`: the
-//!   action requests, each answered with the daemon's sentence. A Quarantine
-//!   of a never-auto kind is the switch that neutralises its line in place,
-//!   and its Restore switches the line back on.
+//!   action requests, each answered with the daemon's sentence, the lines
+//!   under it (after a Quarantine, its confirmation) and, for a Restore that
+//!   met something else at the original place, the two conflict choices. A
+//!   Quarantine of a never-auto kind is the switch that neutralises its line
+//!   in place, and its Restore switches the line back on.
 //! - `copy_for_admin`: puts the message about a Managed Finding for whoever
 //!   administers the Mac on the clipboard (spec section 8.4).
 //! - `scan_now`: asks the daemon for a Full Scan; the progress arrives on the
@@ -52,7 +52,7 @@ use tauri::{
 use agentsweep_ipc::protocol::Message;
 
 use crate::asking::{ActionRequest, Asking, refusal, scan_now_line};
-use crate::findings::{Follow, quarantine_confirmation};
+use crate::findings::Follow;
 use crate::folder;
 use crate::frame::Frame;
 use crate::glyph::{self, Mark};
@@ -147,24 +147,6 @@ async fn findings(app: AppHandle) -> Result<Value, String> {
 #[tauri::command]
 fn folder(shell: tauri::State<'_, Shell>) -> Value {
     shell.folder.lock().expect("the folder view").clone()
-}
-
-/// The Quarantine confirmation for one Finding: what is taken out, and
-/// whether Agent sessions appear to be running, asked of the daemon now.
-#[tauri::command]
-async fn sessions(app: AppHandle, target: String) -> Result<Value, String> {
-    let finding = app
-        .state::<Shell>()
-        .frame
-        .lock()
-        .expect("the frame is not poisoned")
-        .findings()
-        .get(&target)
-        .cloned()
-        .ok_or_else(|| "That Finding is no longer listed.".to_string())?;
-    let asking = Arc::clone(&app.state::<Shell>().asking);
-    let sessions = blocking(move || asking.sessions()).await?;
-    Ok(quarantine_confirmation(&finding, &sessions))
 }
 
 /// Runs a blocking request off the main thread, its failure as a sentence.
@@ -553,7 +535,6 @@ pub fn run() {
             open_window,
             findings,
             folder,
-            sessions,
             quarantine,
             restore,
             trust,

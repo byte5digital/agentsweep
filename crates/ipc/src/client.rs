@@ -13,10 +13,12 @@ use std::path::{Path, PathBuf};
 use agentsweep_core::envelope::ChainId;
 use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::quarantine::Conflict;
+use agentsweep_core::settings::JudgementEngine;
 
 use crate::engine::{EngineChange, EngineState};
 use crate::gate::{GateRequest, GateVerdict};
 use crate::integrity::{ChainRecords, IntegrityAnswer};
+use crate::preview::RequestPreview;
 use crate::settings::{SettingsChange, SettingsState};
 
 use crate::protocol::{
@@ -388,6 +390,22 @@ impl Client {
         GateVerdict::from_value(&answer).ok_or_else(|| {
             ClientError::Unexpected("the Gate verdict could not be read".to_string())
         })
+    }
+
+    /// "Preview a request": what the daemon would hand `engine` about one
+    /// Item, by id, or about the fixed sample Item when `item` is None.
+    /// Nothing is sent to the engine and nothing is recorded.
+    pub fn preview_request(
+        &mut self,
+        item: Option<&str>,
+        engine: JudgementEngine,
+    ) -> Result<RequestPreview, ClientError> {
+        let answer = self.ask(Request::PreviewRequest {
+            item: item.map(str::to_string),
+            engine,
+        })?;
+        RequestPreview::from_value(&answer)
+            .ok_or_else(|| ClientError::Unexpected("the preview could not be read".to_string()))
     }
 
     fn ask(&mut self, request: Request) -> Result<serde_json::Value, ClientError> {

@@ -21,6 +21,7 @@ pub mod frame;
 pub mod gate;
 pub mod integrity;
 pub mod peer;
+pub mod preview;
 pub mod protocol;
 pub mod settings;
 pub mod socket;

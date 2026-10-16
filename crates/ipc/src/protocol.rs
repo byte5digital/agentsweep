@@ -32,11 +32,13 @@ use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::overview::Overview;
 use agentsweep_core::packs::PackOrigin;
 use agentsweep_core::quarantine::Conflict;
+use agentsweep_core::settings::{JUDGEMENT_ENGINE, JudgementEngine};
 use agentsweep_core::spend::{CapNotice, JudgementCap};
 use agentsweep_core::state::{IgnoredPack, RecordedFinding, ScanSummary, Trigger};
 
 pub use crate::engine::{EngineChange, EngineState};
 pub use crate::gate::{GateEvent, GateReason, GateRequest, GateTool, GateVerdict, McpServerRef};
+pub use crate::preview::{PreviewOutcome, RequestPreview};
 pub use crate::settings::{SettingsChange, SettingsState};
 
 /// Which peer is speaking. The daemon answers both the same way in this
@@ -338,6 +340,18 @@ pub enum Request {
     /// third and last request of this list that takes a path (ADR 0008).
     /// Answers with a [`GateVerdict`].
     Gate(GateRequest),
+    /// "Preview a request": exactly what the daemon would hand one Judgement
+    /// Engine about one Item, under that engine's budget, or that the Item is
+    /// too large for it (spec sections 4.4 and 8.10). Without an Item id it
+    /// previews the fixed sample Item shipped in the binary, which is what the
+    /// consent screen shows. Nothing is sent, cached or recorded. Answers with
+    /// a [`crate::preview::RequestPreview`].
+    PreviewRequest {
+        /// The Item, by id; absent for the sample Item.
+        item: Option<String>,
+        /// The engine whose budget the request is built under.
+        engine: JudgementEngine,
+    },
 }
 
 impl Request {
@@ -368,6 +382,7 @@ impl Request {
         "acknowledge-key-missing",
         "acknowledge-chain-broken",
         "gate",
+        "preview-request",
     ];
 
     /// The spelling a request carries.
@@ -398,6 +413,7 @@ impl Request {
             Request::AcknowledgeKeyMissing => "acknowledge-key-missing",
             Request::AcknowledgeChainBroken => "acknowledge-chain-broken",
             Request::Gate(_) => "gate",
+            Request::PreviewRequest { .. } => "preview-request",
         }
     }
 
@@ -469,6 +485,12 @@ impl Request {
                 map.insert("from".to_string(), Value::from(*from));
             }
             Request::Gate(gate) => gate.write_into(map),
+            Request::PreviewRequest { item, engine } => {
+                if let Some(item) = item {
+                    map.insert("item".to_string(), Value::from(item.as_str()));
+                }
+                map.insert(JUDGEMENT_ENGINE.to_string(), Value::from(engine.as_str()));
+            }
             _ => {}
         }
     }
@@ -554,6 +576,13 @@ impl Request {
             "acknowledge-key-missing" => Request::AcknowledgeKeyMissing,
             "acknowledge-chain-broken" => Request::AcknowledgeChainBroken,
             "gate" => Request::Gate(GateRequest::read_from(value)?),
+            "preview-request" => Request::PreviewRequest {
+                item: match value.get("item") {
+                    None | Some(Value::Null) => None,
+                    Some(item) => Some(item.as_str()?.to_string()),
+                },
+                engine: JudgementEngine::parse(text(JUDGEMENT_ENGINE)?)?,
+            },
             _ => return None,
         })
     }
@@ -2405,6 +2434,14 @@ mod tests {
                 cwd: "/Users/someone/src/demo".to_string(),
                 tool: None,
             }),
+            Request::PreviewRequest {
+                item: Some("claude-code/user/skill/~/.claude/skills/x".to_string()),
+                engine: JudgementEngine::Ollama,
+            },
+            Request::PreviewRequest {
+                item: None,
+                engine: JudgementEngine::Claude,
+            },
         ]
     }
 

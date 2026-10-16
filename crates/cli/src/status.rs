@@ -362,6 +362,7 @@ mod tests {
                 },
             ],
             ambiguous: Vec::new(),
+            checked: Vec::new(),
         };
         let mut health = Health::running();
         health.projects_gate_off = overview.projects_gate_off();

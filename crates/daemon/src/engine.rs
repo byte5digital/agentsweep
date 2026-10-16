@@ -165,6 +165,7 @@ impl Daemon {
             recorded,
             ollama: None,
             apple: None,
+            cloud_use: self.cloud_use_of(judgement),
         }
     }
 

@@ -53,6 +53,7 @@ use agentsweep_ipc::socket::{Connection, SocketListener};
 
 use crate::bundle_watch::{self, BundleWatch, Change, Own};
 use crate::change_scan::ChangeScan;
+use crate::cloud_caps::{Calendar, CloudLedger, SystemCalendar};
 use crate::due::{self, Occasion, PowerState, Schedule, SystemPower};
 use crate::full_scan::{FullScan, Progress, ScanRun};
 use crate::judgement_queue::{Awaiting, Engines, JudgementQueue, NoEngines, SystemEngines};
@@ -111,6 +112,10 @@ pub struct Tuning {
     /// developer run, so a test or a hand run never reaches an Ollama or the
     /// Claude API on this Mac unless it hands in a fake.
     pub engines: Option<Arc<dyn Engines>>,
+    /// Where today's date is read, in the Mac's local time zone: the day and
+    /// the month the cloud caps count by. The Mac's own clock unless a test
+    /// hands in one it moves.
+    pub calendar: Arc<dyn Calendar>,
 }
 
 impl Default for Tuning {
@@ -127,6 +132,7 @@ impl Default for Tuning {
             apple_helper: None,
             gate: crate::gate::bundled_command(),
             engines: None,
+            calendar: Arc::new(SystemCalendar),
         }
     }
 }
@@ -226,6 +232,10 @@ pub struct Daemon {
     /// The Items that awaited judgement when the last Scans looked at them,
     /// which a switch of engine feeds to the queue again. In memory only.
     pub(crate) awaiting: Mutex<Vec<Awaiting>>,
+    /// What the cloud caps count: rebuilt from the `judgement-spend` records
+    /// of the Event Log at start, extended by every request this daemon
+    /// settles.
+    pub(crate) spend: Mutex<CloudLedger>,
     /// Every state a client is shown, by the precedence of spec section 6.6.
     pub(crate) health: Mutex<Health>,
     /// Which chains started again under a new key without the user having
@@ -440,6 +450,7 @@ impl Daemon {
             }
         });
         let activity = activity_in_the_event_log(&directory, &*keys);
+        let spend = CloudLedger::in_the_event_log(&directory, &*keys);
         let now = (tuning.due.now)();
 
         let mut health = Health {
@@ -466,6 +477,7 @@ impl Daemon {
                 true => Health::feed_unreachable_at(state.feed.unreachable_since, now),
                 false => None,
             },
+            judgement_cap: None,
         };
         health.count_open(&state);
 
@@ -481,6 +493,7 @@ impl Daemon {
             engines,
             judgement_queue: Arc::new(JudgementQueue::new()),
             awaiting: Mutex::new(Vec::new()),
+            spend: Mutex::new(spend),
             health: Mutex::new(health),
             reset: Mutex::new(reset),
             writing: Mutex::new(()),

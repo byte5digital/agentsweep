@@ -22,7 +22,8 @@
 //! file, which a rebuilt state file leaves alone. What a Scan leaves awaiting
 //! judgement it feeds to the AI Judgement queue, which asks the active engine
 //! on threads of its own after the Scan has finished and opens a Finding when
-//! a malicious Verdict lands.
+//! a malicious Verdict lands. It holds the Claude engine to the cloud caps,
+//! counting what each request cost in the Event Log.
 //!
 //! The daemon has no asynchronous runtime: every part of it is a blocking
 //! thread, the socket is served through `interprocess` and the watcher gathers
@@ -52,6 +53,7 @@ pub mod actions;
 pub mod budgets;
 pub mod bundle_watch;
 pub mod change_scan;
+pub mod cloud_caps;
 pub mod due;
 pub mod engine;
 pub mod folder_scan;

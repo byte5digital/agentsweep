@@ -17,6 +17,13 @@
 //! it. An engine error is no Verdict and is handed over as such; nothing of
 //! it is cached and the Item is fed again by the next Scan.
 //!
+//! Before each request to the Claude engine starts, the queue asks its
+//! [`Landing`] whether the cloud caps let it (see [`crate::cloud_caps`]). A
+//! request that would start past a cap is not sent: the queue holds back
+//! everything still pending, and those Items get no Verdict and are fed again
+//! by the next Scan. The Items a cap held back, the per-Scan cap included,
+//! are the cap notice, which the queue reports as it moves.
+//!
 //! What is here holds no store and writes nothing. It knows the requests, who
 //! asks them and in what order, and how far it has got, which is the
 //! progress line of the subscribe stream ("AI check: 3 of 12").
@@ -34,11 +41,12 @@ use agentsweep_core::finding_facts::FindingFacts;
 use agentsweep_core::gate_facts::GateFacts;
 use agentsweep_core::item::{Item, ItemId};
 use agentsweep_core::judged::{Judge, judgement_finding};
-use agentsweep_core::judgement::{self, EngineError, JudgementEngine, NoVerdict, Verdict};
+use agentsweep_core::judgement::{self, EngineError, JudgementEngine, NoVerdict, Usage, Verdict};
 use agentsweep_core::judgement_request::{JudgementRequest, Normalisation};
 use agentsweep_core::keychain::ClaudeKeyStore;
 use agentsweep_core::ollama::{OllamaClient, OllamaEngine};
 use agentsweep_core::settings::{self, JudgementSettings};
+use agentsweep_core::spend::{CapNotice, JudgementCap};
 use agentsweep_core::state::{RecordedFinding, Trigger};
 use agentsweep_core::verdicts::{CachedVerdict, VerdictCache, VerdictCacheWriter};
 use agentsweep_ipc::protocol::StateEvent;
@@ -173,6 +181,9 @@ pub struct Asking {
     pub concurrency: usize,
     /// How many Items one Scan hands it.
     pub cap: usize,
+    /// True for the Claude engine: each request is admitted under the cloud
+    /// caps first and its usage is counted. Local engines are never metered.
+    pub metered: bool,
 }
 
 impl fmt::Debug for Asking {
@@ -181,6 +192,7 @@ impl fmt::Debug for Asking {
             .field("judge", &self.judge.label())
             .field("concurrency", &self.concurrency)
             .field("cap", &self.cap)
+            .field("metered", &self.metered)
             .finish()
     }
 }
@@ -191,17 +203,20 @@ impl Asking {
     /// local engine, [`CLOUD_CONCURRENCY`] at once and the setting's cap for
     /// the Claude engine.
     pub fn of(judge: Judge, asker: Asker, judgement: &JudgementSettings) -> Asking {
-        let (concurrency, cap) = match judgement.engine {
-            settings::JudgementEngine::Claude => {
-                (CLOUD_CONCURRENCY, judgement.caps.items_per_scan as usize)
-            }
-            _ => (1, LOCAL_ITEMS_PER_SCAN),
+        let (concurrency, cap, metered) = match judgement.engine {
+            settings::JudgementEngine::Claude => (
+                CLOUD_CONCURRENCY,
+                judgement.caps.items_per_scan as usize,
+                true,
+            ),
+            _ => (1, LOCAL_ITEMS_PER_SCAN, false),
         };
         Asking {
             judge,
             asker,
             concurrency,
             cap,
+            metered,
         }
     }
 
@@ -276,6 +291,12 @@ pub struct Answer {
     pub ask: Ask,
     /// The Verdict, checked, or why there is none.
     pub outcome: Result<Verdict, NoVerdict>,
+    /// True when the request was admitted under the cloud caps, and so is
+    /// to be settled.
+    pub metered: bool,
+    /// The usage the engine reported for it, which only the Claude engine
+    /// does.
+    pub usage: Option<Usage>,
 }
 
 /// Who takes the answers and hears how far the queue has got: the daemon.
@@ -286,6 +307,19 @@ pub trait Landing: Send + Sync {
 
     /// The queue has answered `done` of the `total` it holds.
     fn progress(&self, done: usize, total: usize);
+
+    /// Whether one more metered request may start now, or the cap it would
+    /// run past. Called on a worker thread, holding the queue's lock, before
+    /// the request is taken; an admitted request is settled when its answer
+    /// lands. Unmetered engines are never asked about.
+    fn admit(&self) -> Result<(), JudgementCap> {
+        Ok(())
+    }
+
+    /// The cap notice moved: Items a cap held back wait for the next Scan,
+    /// or, absent, nothing waits any more. Called holding no lock of the
+    /// queue's.
+    fn waiting(&self, _notice: Option<CapNotice>) {}
 }
 
 /// What a feed speaks for: a Full Scan for every Item, a Change Scan for the
@@ -326,6 +360,10 @@ struct Inner {
     workers: usize,
     /// How many answers landed since the queue was last empty.
     done: usize,
+    /// The Items a cap held back, which the next Scan feeds again.
+    waiting: BTreeSet<ItemId>,
+    /// The cap that held them back, the last one when several did.
+    held_by: Option<JudgementCap>,
 }
 
 impl Inner {
@@ -335,6 +373,26 @@ impl Inner {
 
     fn drained(&self) -> bool {
         self.pending.is_empty() && self.in_flight.is_empty()
+    }
+
+    /// The cap notice: how many Items a cap held back, and which cap.
+    fn notice(&self) -> Option<CapNotice> {
+        match (self.waiting.len(), self.held_by) {
+            (0, _) | (_, None) => None,
+            (waiting, Some(cap)) => Some(CapNotice { cap, waiting }),
+        }
+    }
+
+    /// Holds back everything still pending under `cap`: no request about
+    /// those Items is sent, none of their answers is applied, and the next
+    /// Scan feeds them again.
+    fn hold_back_everything(&mut self, cap: JudgementCap) {
+        for ask in std::mem::take(&mut self.pending) {
+            let item = ask.awaiting.item.id;
+            self.current.remove(&item);
+            self.waiting.insert(item);
+        }
+        self.held_by = Some(cap);
     }
 }
 
@@ -369,15 +427,17 @@ impl JudgementQueue {
     }
 
     /// Hands the queue the requests one Scan chose, under the engine that Scan
-    /// ran with. Another engine than the one asking now starts a new
-    /// generation and drops whatever was pending. What the feed speaks for
-    /// replaces what was pending about the same Items; a request already being
+    /// ran with, and the Items the per-Scan cap held back. Another engine
+    /// than the one asking now starts a new generation and drops whatever was
+    /// pending. What the feed speaks for replaces what was pending about the
+    /// same Items, and what a cap held back of them; a request already being
     /// asked is not asked twice. Starts as many worker threads as the engine
     /// may be asked at once, and no more.
     pub fn feed(
         self: &Arc<Self>,
         asking: Asking,
         asks: Vec<Ask>,
+        held_back: Vec<ItemId>,
         speaks_for: SpeaksFor<'_>,
         landing: Arc<dyn Landing>,
     ) {
@@ -391,7 +451,14 @@ impl JudgementQueue {
             inner.generation += 1;
             inner.pending.clear();
             inner.current.clear();
+            inner.waiting.clear();
         }
+        inner.waiting.retain(|item| !speaks_for.covers(item));
+        if !held_back.is_empty() {
+            inner.waiting.extend(held_back);
+            inner.held_by = Some(JudgementCap::Scan);
+        }
+        let notice = inner.notice();
         let fed: BTreeSet<(ItemId, String)> = asks.iter().map(Ask::key).collect();
         inner
             .pending
@@ -424,6 +491,7 @@ impl JudgementQueue {
             .min(inner.pending.len());
         inner.workers += starting;
         drop(inner);
+        landing.waiting(notice);
         for _ in 0..starting {
             self.start_a_worker(generation, Arc::clone(&landing));
         }
@@ -440,6 +508,12 @@ impl JudgementQueue {
         if removed || inner.pending.len() != before {
             landing.progress(inner.done, inner.total());
         }
+        let was_waiting = inner.waiting.remove(item);
+        let notice = inner.notice();
+        drop(inner);
+        if was_waiting {
+            landing.waiting(notice);
+        }
     }
 
     /// Drops everything pending and starts a new generation: what switching
@@ -451,6 +525,13 @@ impl JudgementQueue {
         inner.asking = None;
         inner.pending.clear();
         inner.current.clear();
+        inner.waiting.clear();
+        inner.held_by = None;
+    }
+
+    /// The cap notice as the queue stands: how many Items a cap held back.
+    pub fn notice(&self) -> Option<CapNotice> {
+        self.lock().notice()
     }
 
     /// True when this answer is about the request the latest feed stands
@@ -502,6 +583,7 @@ impl JudgementQueue {
     /// the answer over and counts it, until nothing is left to take.
     fn drain(&self, landing: Arc<dyn Landing>) {
         loop {
+            let mut stopped = None;
             let taken = {
                 let mut inner = self.lock();
                 // A switch to an engine asked fewer at once leaves a worker
@@ -510,7 +592,22 @@ impl JudgementQueue {
                     .asking
                     .as_ref()
                     .map_or(0, |asking| asking.concurrency.max(1));
-                let next = match inner.workers > allowed {
+                let surplus = inner.workers > allowed;
+                let metered = inner.asking.as_ref().is_some_and(|asking| asking.metered);
+                // A metered request is admitted under the cloud caps before
+                // it is taken; one that would start past a cap holds back
+                // everything pending.
+                let mut admitted = true;
+                if metered
+                    && !surplus
+                    && !inner.pending.is_empty()
+                    && let Err(cap) = landing.admit()
+                {
+                    inner.hold_back_everything(cap);
+                    stopped = Some((inner.notice(), inner.done, inner.total()));
+                    admitted = false;
+                }
+                let next = match surplus || !admitted {
                     true => None,
                     false => inner.pending.pop_front(),
                 };
@@ -530,10 +627,15 @@ impl JudgementQueue {
                     }
                 }
             };
+            if let Some((notice, done, total)) = stopped {
+                landing.waiting(notice);
+                landing.progress(done, total);
+            }
             let Some((ask, asking, generation)) = taken else {
                 return;
             };
-            let outcome = judgement::judge(&*asking.asker, &ask.request, &ask.awaiting.fired);
+            let (outcome, usage) =
+                judgement::judge_metered(&*asking.asker, &ask.request, &ask.awaiting.fired);
             let (item, hash) = ask.key();
             landing.landed(Answer {
                 generation,
@@ -541,6 +643,8 @@ impl JudgementQueue {
                 model: asking.judge.model.clone(),
                 ask,
                 outcome,
+                metered: asking.metered,
+                usage,
             });
             let mut inner = self.lock();
             inner.in_flight.remove(&(generation, item, hash));
@@ -581,6 +685,20 @@ impl Landing for Landed {
     fn progress(&self, done: usize, total: usize) {
         if let Some(daemon) = self.0.upgrade() {
             daemon.publish(StateEvent::JudgementProgress { done, total });
+        }
+    }
+
+    fn admit(&self) -> Result<(), JudgementCap> {
+        match self.0.upgrade() {
+            Some(daemon) => daemon.admit_a_cloud_request(),
+            // Nobody to settle an answer: nothing more is sent.
+            None => Err(JudgementCap::Scan),
+        }
+    }
+
+    fn waiting(&self, notice: Option<CapNotice>) {
+        if let Some(daemon) = self.0.upgrade() {
+            daemon.note_the_cap(notice);
         }
     }
 }
@@ -714,16 +832,20 @@ impl Daemon {
                 Some(Ask { awaiting, request })
             })
             .collect();
-        let offered = asks.len();
+        let offered: Vec<ItemId> = asks
+            .iter()
+            .map(|ask| ask.awaiting.item.id.clone())
+            .collect();
         let asks = chosen(asks, asking.cap);
-        if offered > asks.len() {
-            say!(
-                "the AI check reached its limit for this Scan: {} Items will be looked at next time",
-                offered - asks.len()
-            );
-        }
+        let asked: BTreeSet<&ItemId> = asks.iter().map(|ask| &ask.awaiting.item.id).collect();
+        let held_back: Vec<ItemId> = offered
+            .iter()
+            .filter(|item| !asked.contains(item))
+            .cloned()
+            .collect();
         let landing: Arc<dyn Landing> = Arc::new(Landed(Arc::downgrade(self)));
-        self.judgement_queue.feed(asking, asks, speaks_for, landing);
+        self.judgement_queue
+            .feed(asking, asks, held_back, speaks_for, landing);
     }
 
     /// Takes the pending request about one Item out of the queue: what a
@@ -745,6 +867,7 @@ impl Daemon {
     pub(crate) fn judge_again(self: &Arc<Daemon>) {
         let Some(in_force) = self.engine_in_force() else {
             self.judgement_queue.reset();
+            self.note_the_cap(None);
             return;
         };
         let awaiting = self
@@ -776,7 +899,10 @@ impl Daemon {
         }
         match in_force.asking {
             Some(asking) => self.ask(asking, misses, SpeaksFor::Everything),
-            None => self.judgement_queue.reset(),
+            None => {
+                self.judgement_queue.reset();
+                self.note_the_cap(None);
+            }
         }
     }
 
@@ -788,6 +914,10 @@ impl Daemon {
     /// as every writer does, so a Verdict that lands during a Scan is applied
     /// when that Scan has finished.
     fn land(self: &Arc<Daemon>, answer: Answer) {
+        if answer.metered {
+            let _writing = self.writing.lock().expect("the write lock is not poisoned");
+            self.settle_a_cloud_request(&answer.model, answer.usage);
+        }
         let item = answer.ask.awaiting.item.id.clone();
         let verdict = match answer.outcome {
             Ok(verdict) => verdict,
@@ -1057,6 +1187,7 @@ mod tests {
             asker: engine.clone(),
             concurrency: 1,
             cap: 25,
+            metered: false,
         };
         let first = ask("first");
         let second = ask("second");
@@ -1064,6 +1195,7 @@ mod tests {
         queue.feed(
             asking,
             vec![first, second],
+            Vec::new(),
             SpeaksFor::Everything,
             Arc::clone(&landing),
         );
@@ -1103,8 +1235,10 @@ mod tests {
                 asker: engine.clone(),
                 concurrency: 1,
                 cap: 25,
+                metered: false,
             },
             vec![one],
+            Vec::new(),
             SpeaksFor::Everything,
             landing,
         );
@@ -1114,6 +1248,118 @@ mod tests {
         assert!(queue.claim(generation, &item, &hash));
         assert!(!queue.claim(generation, &item, &hash));
         engine.open();
+    }
+
+    /// A landing that admits a fixed number of metered requests and refuses
+    /// the rest under the day cap, and keeps every cap notice it is told.
+    struct Rationed {
+        left: Mutex<usize>,
+        answers: Mutex<Vec<(bool, Option<Usage>)>>,
+        notices: Mutex<Vec<Option<CapNotice>>>,
+    }
+
+    impl Landing for Rationed {
+        fn landed(&self, answer: Answer) {
+            self.answers
+                .lock()
+                .expect("the list")
+                .push((answer.metered, answer.usage));
+        }
+
+        fn progress(&self, _done: usize, _total: usize) {}
+
+        fn admit(&self) -> Result<(), JudgementCap> {
+            let mut left = self.left.lock().expect("the ration");
+            match *left {
+                0 => Err(JudgementCap::Day),
+                _ => {
+                    *left -= 1;
+                    Ok(())
+                }
+            }
+        }
+
+        fn waiting(&self, notice: Option<CapNotice>) {
+            self.notices.lock().expect("the list").push(notice);
+        }
+    }
+
+    fn until_idle(queue: &JudgementQueue) {
+        for _ in 0..500 {
+            if !queue.busy() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the queue stays busy");
+    }
+
+    /// A metered request past a cap is never sent: the queue holds back
+    /// everything pending, reports how many wait, and a later feed that asks
+    /// them clears the notice. The per-Scan cap's held-back Items count too.
+    #[test]
+    fn a_request_past_a_cap_is_not_sent_and_everything_pending_waits() {
+        let engine = Arc::new(Gated::default());
+        engine.open();
+        let queue = Arc::new(JudgementQueue::new());
+        let rationed = Arc::new(Rationed {
+            left: Mutex::new(1),
+            answers: Mutex::new(Vec::new()),
+            notices: Mutex::new(Vec::new()),
+        });
+        let landing: Arc<dyn Landing> = rationed.clone();
+        let asking = Asking {
+            judge: judge(),
+            asker: engine.clone(),
+            concurrency: 1,
+            cap: 25,
+            metered: true,
+        };
+        let held = ask("held-by-the-scan").awaiting.item.id.clone();
+        queue.feed(
+            asking.clone(),
+            vec![ask("one"), ask("two"), ask("three")],
+            vec![held],
+            SpeaksFor::Everything,
+            Arc::clone(&landing),
+        );
+        until_idle(&queue);
+        assert_eq!(engine.asked.lock().expect("the list").len(), 1);
+        assert_eq!(
+            *rationed.answers.lock().expect("the list"),
+            vec![(true, None)],
+            "the one sent is settled"
+        );
+        assert_eq!(
+            queue.notice(),
+            Some(CapNotice {
+                cap: JudgementCap::Day,
+                waiting: 3
+            })
+        );
+        assert_eq!(
+            rationed.notices.lock().expect("the list").first(),
+            Some(&Some(CapNotice {
+                cap: JudgementCap::Scan,
+                waiting: 1
+            }))
+        );
+
+        *rationed.left.lock().expect("the ration") = 5;
+        queue.feed(
+            asking,
+            vec![ask("two"), ask("three")],
+            Vec::new(),
+            SpeaksFor::Everything,
+            Arc::clone(&landing),
+        );
+        assert_eq!(queue.notice(), None);
+        assert_eq!(
+            rationed.notices.lock().expect("the list").last(),
+            Some(&None)
+        );
+        until_idle(&queue);
+        assert_eq!(engine.asked.lock().expect("the list").len(), 3);
     }
 
     #[test]

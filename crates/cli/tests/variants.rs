@@ -494,9 +494,25 @@ mod bundle {
         root
     }
 
-    /// Runs a bare `scan` against the daemon with a deadline, so a stream
-    /// that never ends fails the test instead of hanging it.
+    /// Runs a bare `scan` against the daemon and returns the run that
+    /// started a Full Scan of its own. On a loaded machine the daemon's start
+    /// Full Scan may have published its summary but not yet left the queue,
+    /// and a `scan` asked in that moment rightly joins it; that run is asked
+    /// again rather than taken for the test's own Scan.
     fn bare_scan(daemon: &Daemon) -> Output {
+        for _ in 0..5 {
+            let output = bare_scan_once(daemon);
+            if !text(&output.stdout).starts_with("A Full Scan is already under way.") {
+                return output;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        panic!("every bare `scan` joined a Full Scan that was already under way");
+    }
+
+    /// Runs one bare `scan` against the daemon with a deadline, so a stream
+    /// that never ends fails the test instead of hanging it.
+    fn bare_scan_once(daemon: &Daemon) -> Output {
         let child = Command::new(this_build())
             .args(["scan", "--socket", &daemon.socket()])
             .stdout(Stdio::piped())

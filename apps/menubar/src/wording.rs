@@ -26,7 +26,7 @@ use agentsweep_core::rules::PHRASE_ITEM;
 use agentsweep_core::state::RecordedFinding;
 use serde_json::{Value, json};
 
-use crate::findings::{name_of, probation};
+use crate::findings::probation;
 
 /// The colour of the Severity chip: red for a Threat, amber for an Exposure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -351,31 +351,10 @@ fn noun(kind: Kind, project: bool) -> &'static str {
     }
 }
 
-/// The part of an Item id a person knows the Item by. A hook is named by the
-/// event it runs on, because the rest of its locator is a hash; a settings
-/// entry by its key without array positions; a plugin by its name without
-/// marketplace or version; everything else by the last part of its locator.
-/// No name holds a slash.
+/// The part of an Item id a person knows the Item by, as the daemon names it
+/// in an un-notified change too ([`agentsweep_ipc::notifications::item_name`]).
 pub(crate) fn name(kind: Kind, id: &str) -> String {
-    let locator = id.rsplit_once('#').map(|(_, after)| after);
-    let named = match (kind, locator) {
-        (Kind::Hook, Some(entry)) => entry.split('/').next().unwrap_or_default().to_string(),
-        (Kind::SettingsEntry, Some(pointer)) => pointer
-            .split('/')
-            .filter(|segment| !segment.is_empty() && !segment.bytes().all(|b| b.is_ascii_digit()))
-            .collect::<Vec<_>>()
-            .join("."),
-        (Kind::Plugin, _) => name_of(id)
-            .split('@')
-            .next()
-            .unwrap_or_default()
-            .to_string(),
-        _ => name_of(id).to_string(),
-    };
-    match named.is_empty() {
-        true => name_of(id).replace('/', " "),
-        false => named.replace('/', " "),
-    }
+    agentsweep_ipc::notifications::item_name(kind, id)
 }
 
 /// The title: a verdict sentence about a named thing, or a question for

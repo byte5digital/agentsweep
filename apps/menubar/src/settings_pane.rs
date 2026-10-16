@@ -308,6 +308,7 @@ mod tests {
                 recorded: 0,
                 ollama: None,
                 apple: None,
+                cloud_use: agentsweep_ipc::engine::CloudUse::default(),
             },
         }
     }

@@ -14,6 +14,7 @@ use agentsweep_core::settings::{
     CLAUDE_MODEL, CLOUD_CENTS_PER_MONTH, CLOUD_ITEMS_PER_DAY, CLOUD_ITEMS_PER_SCAN, CloudCaps,
     JUDGEMENT_ENGINE, JudgementEngine, OLLAMA_ADDRESS, OLLAMA_MODEL,
 };
+use agentsweep_core::spend::CapNotice;
 
 /// The field the engine state names the key's last four characters under.
 const CLAUDE_KEY_ENDING: &str = "claude_key_ending";
@@ -25,6 +26,68 @@ const RECORDED: &str = "recorded";
 const OLLAMA: &str = "ollama";
 /// The field Apple on-device's availability and its reason are named under.
 const APPLE: &str = "apple";
+/// The field what the caps count and the cap notice are named under.
+const CLOUD_USE: &str = "cloud_use";
+
+/// Where the cloud caps stand (spec section 4.4): what the counters rebuilt
+/// from the Event Log hold for today and this month, whether the Claude model
+/// in use is in the price table, and the cap notice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloudUse {
+    /// The Items the Claude API was asked about today, in local time.
+    pub items_today: u32,
+    /// What the Claude API was paid this calendar month, in millionths of a
+    /// dollar.
+    pub microdollars_this_month: u64,
+    /// False when the Claude model in use is not in the price table and is
+    /// counted at the most expensive model in it, which Settings says.
+    pub model_priced: bool,
+    /// The cap notice, absent while nothing waits.
+    pub judgement_cap: Option<CapNotice>,
+}
+
+impl Default for CloudUse {
+    fn default() -> CloudUse {
+        CloudUse {
+            items_today: 0,
+            microdollars_this_month: 0,
+            model_priced: true,
+            judgement_cap: None,
+        }
+    }
+}
+
+impl CloudUse {
+    fn to_value(self) -> Value {
+        let mut map = Map::new();
+        map.insert("items_today".to_string(), Value::from(self.items_today));
+        map.insert(
+            "judgement_cap".to_string(),
+            match &self.judgement_cap {
+                None => Value::Null,
+                Some(notice) => crate::protocol::cap_notice_to_value(notice),
+            },
+        );
+        map.insert(
+            "microdollars_this_month".to_string(),
+            Value::from(self.microdollars_this_month),
+        );
+        map.insert("model_priced".to_string(), Value::from(self.model_priced));
+        Value::Object(map)
+    }
+
+    fn from_value(value: &Value) -> Option<CloudUse> {
+        Some(CloudUse {
+            items_today: u32::try_from(value.get("items_today")?.as_u64()?).ok()?,
+            microdollars_this_month: value.get("microdollars_this_month")?.as_u64()?,
+            model_priced: value.get("model_priced")?.as_bool()?,
+            judgement_cap: match value.get("judgement_cap")? {
+                Value::Null => None,
+                notice => Some(crate::protocol::cap_notice_from_value(notice)?),
+            },
+        })
+    }
+}
 
 /// The choices one `engine` request moves. A field left out stays as it is;
 /// a request that moves nothing reads the engine state.
@@ -138,6 +201,9 @@ pub struct EngineState {
     /// when the daemon did not ask: only the answer to an `engine` request
     /// asks.
     pub apple: Option<AppleAvailability>,
+    /// Where the cloud caps stand. A daemon from before them sends none,
+    /// which reads as nothing counted.
+    pub cloud_use: CloudUse,
 }
 
 impl EngineState {
@@ -172,6 +238,7 @@ impl EngineState {
         if let Some(availability) = &self.apple {
             map.insert(APPLE.to_string(), availability_value(availability));
         }
+        map.insert(CLOUD_USE.to_string(), self.cloud_use.to_value());
         Value::Object(map)
     }
 
@@ -201,6 +268,10 @@ impl EngineState {
             apple: match value.get(APPLE) {
                 None | Some(Value::Null) => None,
                 Some(availability) => Some(read_availability(availability)?),
+            },
+            cloud_use: match value.get(CLOUD_USE) {
+                None | Some(Value::Null) => CloudUse::default(),
+                Some(cloud_use) => CloudUse::from_value(cloud_use)?,
             },
         })
     }
@@ -339,6 +410,7 @@ mod tests {
             recorded: 1,
             ollama: None,
             apple: None,
+            cloud_use: CloudUse::default(),
         };
         let value = state.to_value();
         assert_eq!(EngineState::from_value(&value), Some(state));
@@ -347,6 +419,52 @@ mod tests {
             ..EngineState::from_value(&value).expect("a state")
         };
         assert_eq!(EngineState::from_value(&none.to_value()), Some(none));
+    }
+
+    /// Spec section 4.4: the engine state carries what the caps counted,
+    /// whether the model in use is priced, and the cap notice; one from a
+    /// daemon from before the caps reads as nothing counted.
+    #[test]
+    fn the_engine_state_carries_the_cloud_use_and_an_older_one_reads_as_none() {
+        let mut state = EngineState::from_value(
+            &EngineState {
+                engine: JudgementEngine::Claude,
+                ollama_address: "127.0.0.1:11434".to_string(),
+                ollama_model: String::new(),
+                claude_model: "claude-custom".to_string(),
+                claude_model_in_use: "claude-custom".to_string(),
+                caps: CloudCaps::default(),
+                claude_key_ending: Some("4f2a".to_string()),
+                recorded: 0,
+                ollama: None,
+                apple: None,
+                cloud_use: CloudUse::default(),
+            }
+            .to_value(),
+        )
+        .expect("a state");
+        state.cloud_use = CloudUse {
+            items_today: 200,
+            microdollars_this_month: 4_200_000,
+            model_priced: false,
+            judgement_cap: Some(CapNotice {
+                cap: agentsweep_core::spend::JudgementCap::Day,
+                waiting: 3,
+            }),
+        };
+        let value = state.to_value();
+        assert_eq!(value["cloud_use"]["items_today"], 200);
+        assert_eq!(value["cloud_use"]["model_priced"], false);
+        assert_eq!(value["cloud_use"]["judgement_cap"]["waiting"], 3);
+        assert_eq!(EngineState::from_value(&value), Some(state.clone()));
+
+        let mut older = value;
+        older
+            .as_object_mut()
+            .expect("an object")
+            .remove("cloud_use");
+        let read = EngineState::from_value(&older).expect("a state");
+        assert_eq!(read.cloud_use, CloudUse::default());
     }
 
     #[test]
@@ -362,6 +480,7 @@ mod tests {
             recorded: 0,
             ollama: Some(OllamaPresence::Absent),
             apple: None,
+            cloud_use: CloudUse::default(),
         };
         assert_eq!(
             EngineState::from_value(&state.to_value()),
@@ -400,6 +519,7 @@ mod tests {
                 model_version: "26.6.2 (25G83)".to_string(),
                 context_size: Some(4096),
             }),
+            cloud_use: CloudUse::default(),
         };
         assert_eq!(
             EngineState::from_value(&state.to_value()),

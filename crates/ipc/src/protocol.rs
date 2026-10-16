@@ -32,6 +32,7 @@ use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::overview::Overview;
 use agentsweep_core::packs::PackOrigin;
 use agentsweep_core::quarantine::Conflict;
+use agentsweep_core::spend::{CapNotice, JudgementCap};
 use agentsweep_core::state::{IgnoredPack, RecordedFinding, ScanSummary, Trigger};
 
 pub use crate::engine::{EngineChange, EngineState};
@@ -870,6 +871,13 @@ pub fn health_to_value(health: &Health) -> Value {
     map.insert("headline".to_string(), Value::from(health.headline()));
     map.insert("items".to_string(), Value::from(health.items as u64));
     map.insert(
+        "judgement_cap".to_string(),
+        match &health.judgement_cap {
+            None => Value::Null,
+            Some(notice) => cap_notice_to_value(notice),
+        },
+    );
+    map.insert(
         "last_full_scan".to_string(),
         Value::from(
             health
@@ -1031,6 +1039,29 @@ pub fn health_from_value(value: &Value) -> Option<Health> {
         rule_feed: value.get("rule_feed")?.as_bool()?,
         ignored_pack,
         feed_unreachable,
+        // A daemon from before the cloud caps sends no cap notice.
+        judgement_cap: match value.get("judgement_cap") {
+            None | Some(Value::Null) => None,
+            Some(notice) => Some(cap_notice_from_value(notice)?),
+        },
+    })
+}
+
+/// One cap notice as the wire carries it: the cap, how many Items wait, and
+/// the fixed line a client shows.
+pub fn cap_notice_to_value(notice: &CapNotice) -> Value {
+    let mut map = Map::new();
+    map.insert("cap".to_string(), Value::from(notice.cap.as_str()));
+    map.insert("line".to_string(), Value::from(notice.line()));
+    map.insert("waiting".to_string(), Value::from(notice.waiting as u64));
+    Value::Object(map)
+}
+
+/// Reads back what [`cap_notice_to_value`] wrote.
+pub fn cap_notice_from_value(value: &Value) -> Option<CapNotice> {
+    Some(CapNotice {
+        cap: JudgementCap::parse(value.get("cap")?.as_str()?)?,
+        waiting: usize::try_from(value.get("waiting")?.as_u64()?).ok()?,
     })
 }
 
@@ -1973,6 +2004,7 @@ mod tests {
                     recorded: 0,
                     ollama: None,
                     apple: None,
+                    cloud_use: crate::engine::CloudUse::default(),
                 },
             }),
         }));
@@ -2679,6 +2711,40 @@ mod tests {
             }
             assert_eq!(Message::from_value(&bad), None, "{field}");
         }
+    }
+
+    /// Spec section 4.4: Health carries the cap notice with its fixed line,
+    /// and a Health from a daemon from before the caps reads as none.
+    #[test]
+    fn a_health_carries_the_cap_notice_and_an_older_one_reads_as_none() {
+        let health = Health {
+            judgement_cap: Some(CapNotice {
+                cap: JudgementCap::Month,
+                waiting: 4,
+            }),
+            ..Health::running()
+        };
+        let value = health_to_value(&health);
+        assert_eq!(value["judgement_cap"]["waiting"], 4);
+        assert_eq!(value["judgement_cap"]["cap"], "month");
+        assert_eq!(
+            value["judgement_cap"]["line"],
+            "The AI check reached its limit for this scan. 4 items will be looked at next time."
+        );
+        assert_eq!(health_from_value(&value), Some(health));
+
+        let mut older = value.clone();
+        older
+            .as_object_mut()
+            .expect("an object")
+            .remove("judgement_cap");
+        assert_eq!(
+            health_from_value(&older).and_then(|health| health.judgement_cap),
+            None
+        );
+        let mut wrong = value;
+        wrong["judgement_cap"]["cap"] = Value::from("week");
+        assert_eq!(health_from_value(&wrong), None);
     }
 
     /// Spec section 7.6: Health carries how many projects switched the check

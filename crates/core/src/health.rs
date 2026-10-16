@@ -25,6 +25,7 @@ use crate::finding::Category;
 use crate::pack::released_day;
 use crate::packs::PackOrigin;
 use crate::settings::Posture;
+use crate::spend::CapNotice;
 use crate::state::{IgnoredPack, State};
 
 /// The note a reset nobody answered leaves while an open Threat holds the
@@ -275,6 +276,11 @@ pub struct Health {
     /// Set once the Rule Feed has not answered for over thirty days: the
     /// moment it first failed to.
     pub feed_unreachable: Option<Timestamp>,
+    /// The cap notice: a cap of AI Judgement held Items back and this many
+    /// are waiting for the next Scan (spec section 4.4). Absent while nothing
+    /// waits. Not a rung: the Developer Posture shows it as a notice and the
+    /// Simple one as a line in Settings.
+    pub judgement_cap: Option<CapNotice>,
 }
 
 impl Default for Health {
@@ -302,6 +308,7 @@ impl Default for Health {
             rule_feed: true,
             ignored_pack: None,
             feed_unreachable: None,
+            judgement_cap: None,
         }
     }
 }

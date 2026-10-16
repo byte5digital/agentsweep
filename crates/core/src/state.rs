@@ -449,6 +449,57 @@ pub struct State {
     /// Band (spec section 8.1). Additive: a state file written before it
     /// reads as nothing known until the next Full Scan.
     pub overview: Overview,
+    /// What the user was told about that is not a Finding: the broken chains
+    /// and the projects that could not be checked yet (spec sections 6.7 and
+    /// 8.7). Each Finding carries its own `notified_at`. Additive: a state
+    /// file written before it reads as nothing told.
+    pub told: Told,
+}
+
+/// The notifications about something other than a Finding that the user was
+/// already told about, so neither fires twice.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Told {
+    /// The "records changed" notification last raised, by the id the daemon
+    /// gave it, which names every broken chain and where it broke.
+    pub records: BTreeSet<String>,
+    /// The project roots the "can't check N projects yet" notification
+    /// covered. A project that Needs Permission and is not among them is new.
+    pub permission: BTreeSet<String>,
+}
+
+impl Told {
+    /// True when nothing was told.
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty() && self.permission.is_empty()
+    }
+
+    /// The record as the file carries it.
+    pub fn to_value(&self) -> Value {
+        let list = |set: &BTreeSet<String>| {
+            Value::Array(set.iter().map(|one| Value::from(one.as_str())).collect())
+        };
+        let mut map = Map::new();
+        map.insert("permission".to_string(), list(&self.permission));
+        map.insert("records".to_string(), list(&self.records));
+        Value::Object(map)
+    }
+
+    /// Reads back what [`Told::to_value`] wrote.
+    pub fn from_value(value: &Value) -> Option<Told> {
+        let list = |field: &str| -> Option<BTreeSet<String>> {
+            value
+                .get(field)?
+                .as_array()?
+                .iter()
+                .map(|one| one.as_str().map(str::to_string))
+                .collect()
+        };
+        Some(Told {
+            records: list("records")?,
+            permission: list("permission")?,
+        })
+    }
 }
 
 /// A newer Rule Pack that was ignored because it needs a newer AgentSweep.
@@ -666,6 +717,9 @@ impl State {
             "scans".to_string(),
             Value::Array(self.scans.iter().map(ScanSummary::to_value).collect()),
         );
+        if !self.told.is_empty() {
+            map.insert("told".to_string(), self.told.to_value());
+        }
         Value::Object(map)
     }
 
@@ -717,6 +771,10 @@ impl State {
             None => Overview::default(),
             Some(overview) => Overview::read_from(overview)?,
         };
+        let told = match value.get("told") {
+            None => Told::default(),
+            Some(told) => Told::from_value(told)?,
+        };
         Some(State {
             findings,
             scans,
@@ -726,6 +784,7 @@ impl State {
             legacy_rule_feed,
             gate,
             overview,
+            told,
         })
     }
 }
@@ -1158,6 +1217,21 @@ mod tests {
         older.as_object_mut().expect("an object").remove("overview");
         let read = State::from_value(&older).expect("an older state file reads");
         assert_eq!(read.overview, Overview::default());
+    }
+
+    /// What the user was told about beside the Findings survives the file,
+    /// and a state file written before it reads as nothing told.
+    #[test]
+    fn what_was_told_round_trips_and_an_older_state_file_reads_as_nothing_told() {
+        let mut state = a_state();
+        state.told.records.insert("records/events@3".to_string());
+        state.told.permission.insert("/work/app".to_string());
+        assert_eq!(State::from_value(&state.to_value()), Some(state.clone()));
+
+        let mut older = state.to_value();
+        older.as_object_mut().expect("an object").remove("told");
+        let read = State::from_value(&older).expect("an older state file reads");
+        assert_eq!(read.told, Told::default());
     }
 
     #[test]

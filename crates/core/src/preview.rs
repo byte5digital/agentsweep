@@ -94,7 +94,7 @@ pub enum Preview {
     /// be handed it.
     Request {
         /// The redacted Judgement Request inside the user turn.
-        request: JudgementRequest,
+        request: Box<JudgementRequest>,
         /// The fixed system prompt and the user turn, under a fresh nonce.
         prompt: Prompt,
         /// What the request measured, as the builder measures it.
@@ -129,7 +129,7 @@ pub fn preview(judge: &Judge, item: &Item, fired: &[FiredHeuristic]) -> Result<P
             let prompt = Prompt::for_request(&request).map_err(|no| no.to_string())?;
             let tokens = ByteEstimate.tokens(request.serialised());
             Ok(Preview::Request {
-                request,
+                request: Box::new(request),
                 prompt,
                 tokens,
                 budget: judge.budget,
@@ -157,7 +157,7 @@ mod tests {
         match preview {
             Preview::Request {
                 request, prompt, ..
-            } => (request, prompt),
+            } => (*request, prompt),
             Preview::TooLarge { tokens, budget } => {
                 panic!("too large: {tokens} over {budget}")
             }

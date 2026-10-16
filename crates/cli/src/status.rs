@@ -442,6 +442,41 @@ mod tests {
         assert!(!rendered.contains("open Finding"), "{rendered}");
     }
 
+    /// The status prints what it printed before the Activity read every
+    /// record of the Event Log: a log that holds only Rule Pack records
+    /// prints the same lines as one that holds every kind, and as no
+    /// Activity at all. The Activity is the window's pane (spec section 8.1).
+    #[test]
+    fn the_activity_lines_leave_the_printed_status_as_it_was() {
+        use agentsweep_ipc::protocol::ActivityLine;
+
+        let status = |activity: Vec<ActivityLine>| Status {
+            health: Health::running(),
+            scan: Some(summary()),
+            findings: Vec::new(),
+            activity,
+            overview: Default::default(),
+        };
+        let pack = ActivityLine {
+            sequence: Some(0),
+            recorded_at: moment("2026-09-24T08:00:01.000Z"),
+            line: "Rule Pack 2 (fetched) is in force, released 2026-09-24.".to_string(),
+            action: "rule-pack".to_string(),
+            ..ActivityLine::default()
+        };
+        let restore = ActivityLine {
+            sequence: Some(1),
+            recorded_at: moment("2026-09-24T08:00:02.000Z"),
+            line: "You restored the skill 'setup'.".to_string(),
+            actor: "user".to_string(),
+            action: "restore".to_string(),
+            ..ActivityLine::default()
+        };
+        let before = render(&status(Vec::new()));
+        assert_eq!(render(&status(vec![pack.clone()])), before);
+        assert_eq!(render(&status(vec![pack, restore])), before);
+    }
+
     /// The status names the Rule Pack in force and the date of its signed
     /// release, and says so when the feed is off.
     #[test]

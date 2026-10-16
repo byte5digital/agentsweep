@@ -294,6 +294,7 @@ mod crates_io {
             "quarantine",
             "rule-feed",
             "gate",
+            "gate-hooks",
             "--developer-list-items",
         ] {
             let output = run(&this_build(), &[command]);

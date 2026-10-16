@@ -7,7 +7,8 @@
 //! It is a client of the daemon: `status`, which reaches the daemon and does
 //! nothing else; the action commands, each of which is one request to the
 //! daemon, the only process that quarantines, restores or trusts anything;
-//! `rule-feed`; `gate`, the hook both Agents run as the Gate; and a bare
+//! `rule-feed`; `gate`, the hook both Agents run as the Gate; `gate-hooks`,
+//! the Gate switch; and a bare
 //! `scan`, which asks the daemon for a Full Scan and follows it to the end. It
 //! runs `scan <dir>` in-process as well.
 //!
@@ -28,6 +29,8 @@ mod developer;
 mod folder_scan;
 #[cfg(feature = "bundle")]
 mod gate;
+#[cfg(feature = "bundle")]
+mod gate_hooks;
 #[cfg(feature = "bundle")]
 mod rule_feed;
 #[cfg(feature = "bundle")]
@@ -56,6 +59,10 @@ Usage:
                           The Gate, which the agents run as a hook: it reads
                           the event on stdin, asks the running AgentSweep and
                           answers the agent. It always exits 0.
+  agentsweep gate-hooks [on | off]
+                          Say whether the Gate's hooks are in Claude Code and
+                          Codex, or switch them on or off. Off takes them out
+                          and adds nothing back until you switch it on.
   agentsweep --version    Print the version.
   agentsweep --help       Print this message.
 
@@ -171,6 +178,7 @@ fn bundled(command: &str, arguments: &[String]) -> ExitCode {
         "status" => status(arguments),
         "rule-feed" => rule_feed(arguments),
         "gate" => gate(arguments),
+        "gate-hooks" => gate_hooks(arguments),
         command if actions::COMMANDS.contains(&command) => act(command, arguments),
         "--developer-list-items" => developer_list_items(arguments),
         "--developer-scan-items" => developer_scan_items(arguments),
@@ -265,6 +273,21 @@ fn rule_feed(arguments: &[String]) -> ExitCode {
         }
     };
     let (rendered, code) = rule_feed::run(&invocation);
+    print!("{rendered}");
+    ExitCode::from(code)
+}
+
+/// Asks the daemon where the Gate switch stands, or moves it.
+#[cfg(feature = "bundle")]
+fn gate_hooks(arguments: &[String]) -> ExitCode {
+    let invocation = match gate_hooks::parse(arguments) {
+        Ok(invocation) => invocation,
+        Err(reason) => {
+            eprintln!("agentsweep: {reason}\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    let (rendered, code) = gate_hooks::run(&invocation);
     print!("{rendered}");
     ExitCode::from(code)
 }
@@ -395,7 +418,7 @@ mod tests {
         /// with the codes every other command that reaches the daemon uses.
         #[test]
         fn the_usage_names_the_gate_in_one_entry() {
-            assert_eq!(USAGE.matches("agentsweep gate").count(), 1, "{USAGE}");
+            assert_eq!(USAGE.matches("agentsweep gate ").count(), 1, "{USAGE}");
             assert!(
                 USAGE.contains("agentsweep gate --agent <claude-code | codex>"),
                 "{USAGE}"
@@ -417,6 +440,13 @@ mod tests {
         fn the_usage_names_the_rule_feed_toggle() {
             assert!(USAGE.contains("agentsweep rule-feed [on | off]"));
             assert!(USAGE.contains("bundled rules are in"));
+        }
+
+        /// The Gate switch is in the help text, with what off means.
+        #[test]
+        fn the_usage_names_the_gate_switch() {
+            assert!(USAGE.contains("agentsweep gate-hooks [on | off]"));
+            assert!(USAGE.contains("Off takes them out"));
         }
 
         /// Every action command is in the help text.
@@ -447,6 +477,7 @@ mod tests {
                 "trust",
                 "rule-feed",
                 "gate",
+                "gate-hooks",
                 "--developer",
             ] {
                 assert!(!USAGE.contains(&format!("agentsweep {command}")), "{USAGE}");

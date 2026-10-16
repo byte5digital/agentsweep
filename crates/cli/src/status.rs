@@ -18,6 +18,11 @@ use agentsweep_core::state::{RecordedFinding, ScanSummary};
 use agentsweep_ipc::Client;
 use agentsweep_ipc::protocol::{Role, Status, offers};
 
+/// The line that says the Gate switch is off, in the Developer wording of
+/// spec section 8.10, with the command that switches it on.
+pub const GATE_HOOKS_OFF: &str =
+    "Gate: hooks in Claude Code and Codex are off (agentsweep gate-hooks on).";
+
 /// Asks the daemon and renders the answer.
 ///
 /// The socket is the documented one unless a socket is named, which is how a
@@ -64,6 +69,11 @@ pub fn render(status: &Status) -> String {
     let _ = writeln!(out, "{}", status.health.headline_in(Posture::Developer));
     for note in status.health.notes_in(Posture::Developer) {
         let _ = writeln!(out, "  {note}");
+    }
+    // The Gate switch is shown when it is off, never implied (spec section
+    // 8.10).
+    if !status.health.gate_hooks && !status.health.protection.is_off() {
+        let _ = writeln!(out, "  {GATE_HOOKS_OFF}");
     }
 
     // The projects whose own settings switch an Agent's hooks off, which the
@@ -328,6 +338,28 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("could not be added"), "{rendered}");
+    }
+
+    /// Spec section 8.10: a Gate switched off is said, not implied, and a Gate
+    /// that is on adds no line.
+    #[test]
+    fn a_gate_switched_off_is_said() {
+        let status = |gate_hooks: bool| Status {
+            health: Health {
+                gate_hooks,
+                ..Health::running()
+            },
+            scan: Some(summary()),
+            findings: Vec::new(),
+            activity: Vec::new(),
+            overview: Default::default(),
+        };
+        let rendered = render(&status(false));
+        assert!(
+            rendered.contains(&format!("  {GATE_HOOKS_OFF}\n")),
+            "{rendered}"
+        );
+        assert!(!render(&status(true)).contains("Gate:"));
     }
 
     /// Spec section 7.6: the projects that switched the check off are listed

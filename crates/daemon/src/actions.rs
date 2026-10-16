@@ -456,7 +456,8 @@ impl Daemon {
             | Request::Records { .. }
             | Request::AcknowledgeKeyMissing
             | Request::AcknowledgeChainBroken
-            | Request::Gate(_) => Err(RequestError::unknown(request.as_str())),
+            | Request::Gate(_)
+            | Request::PreviewRequest { .. } => Err(RequestError::unknown(request.as_str())),
         }
     }
 
@@ -566,7 +567,7 @@ impl Daemon {
 
     /// The pooled roots an Item of this id may need: its own project root,
     /// or none for the user's own Scope.
-    fn roots_for(&self, item_id: &ItemId) -> Vec<PathBuf> {
+    pub(crate) fn roots_for(&self, item_id: &ItemId) -> Vec<PathBuf> {
         self.pooled_roots()
             .into_iter()
             .filter(|root| item_id.in_scope(&Scope::Project(root.clone()).id_segment()))

@@ -1407,6 +1407,10 @@ impl Daemon {
             Request::AcknowledgeChainBroken => self.acknowledge_chain_broken(),
             // Answered here, from what the state holds, beside any Scan.
             Request::Gate(gate) => Ok(self.gate(gate).to_value()),
+            // Built here, beside any Scan: nothing is sent, cached or recorded.
+            Request::PreviewRequest { item, engine } => self
+                .preview_request(item.as_deref(), *engine)
+                .map(|preview| preview.to_value()),
             // Everything else acts, and is carried out where acting lives.
             _ => self.act(request),
         }

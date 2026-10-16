@@ -356,7 +356,7 @@ pub enum Request {
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 25] = [
+    pub const NAMES: [&'static str; 26] = [
         "status",
         "scan-now",
         "check-now",

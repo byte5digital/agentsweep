@@ -79,6 +79,11 @@ pub enum RecordKind {
     /// Pack change it is not an action on an Item, and the derived views pass
     /// it by.
     Integrity,
+    /// One request to the Claude API, on the Event Log: the local day it
+    /// was asked on, the model, the tokens the API reported and their cost,
+    /// never content (spec section 4.4). The cloud caps count from these.
+    /// Not an action on an Item either; the derived views pass it by.
+    JudgementSpend,
 }
 
 impl RecordKind {
@@ -89,6 +94,7 @@ impl RecordKind {
             RecordKind::ChainRestart => "chain-restart",
             RecordKind::RulePack => "rule-pack",
             RecordKind::Integrity => "integrity",
+            RecordKind::JudgementSpend => "judgement-spend",
         }
     }
 
@@ -99,6 +105,7 @@ impl RecordKind {
             "chain-restart" => Some(RecordKind::ChainRestart),
             "rule-pack" => Some(RecordKind::RulePack),
             "integrity" => Some(RecordKind::Integrity),
+            "judgement-spend" => Some(RecordKind::JudgementSpend),
             _ => None,
         }
     }

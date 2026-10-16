@@ -10,7 +10,9 @@
 //! A change of the Rule Pack in force is a record too, of its own kind
 //! (`rule-pack`, [`RulePackRecord`]) rather than an action: the Activity reads
 //! the withdrawn Rules and the Findings they took with them from it, and the
-//! derived views pass it by.
+//! derived views pass it by. So is each request to the Claude API
+//! (`judgement-spend`, [`SpendRecord`]): the cloud caps count Items and money
+//! from these records alone.
 //!
 //! Sensitive values never appear in a record. MCP environment variables,
 //! headers, tokens and the contents of an env file reach a record only through
@@ -31,6 +33,7 @@ use crate::item::{ItemId, Kind, sha256_hex};
 use crate::keychain::KeySource;
 use crate::packs::PackOrigin;
 use crate::paths::DataDirectory;
+use crate::spend::{SpendLedger, SpendRecord};
 
 /// Who caused the event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -887,6 +890,7 @@ impl EventLog {
         let mut events = Vec::with_capacity(verification.records.len());
         let mut rule_packs = Vec::new();
         let mut integrity = Vec::new();
+        let mut spends = Vec::new();
         let mut restarts = 0usize;
         let mut unreadable = 0usize;
         for record in &verification.records {
@@ -904,6 +908,13 @@ impl EventLog {
                             verified: record.verified,
                             record: change,
                         }),
+                        None => unreadable += 1,
+                    }
+                    continue;
+                }
+                RecordKind::JudgementSpend => {
+                    match SpendRecord::from_payload(&record.envelope.payload) {
+                        Some(spend) => spends.push(spend),
                         None => unreadable += 1,
                     }
                     continue;
@@ -939,6 +950,7 @@ impl EventLog {
             events,
             rule_packs,
             integrity,
+            spends,
             restarts,
             unreadable,
         })
@@ -971,6 +983,9 @@ pub struct EventLogView {
     /// Every answer to an integrity state, in the order written. The derived
     /// views never see these either.
     pub integrity: Vec<RecordedIntegrity>,
+    /// Every request to the Claude API, in the order written. The derived
+    /// views never see these; the cloud caps count from them.
+    pub spends: Vec<SpendRecord>,
     /// The hash of the last record in the file.
     pub head: String,
     /// How many records no key in hand can verify.
@@ -990,6 +1005,11 @@ impl EventLogView {
     /// Which content hashes carry Trust, rebuilt from the log.
     pub fn trust_table(&self) -> crate::derived::TrustTable {
         crate::derived::TrustTable::rebuild(&self.events)
+    }
+
+    /// The counters the cloud caps read, rebuilt from the spend records.
+    pub fn spend_ledger(&self) -> SpendLedger {
+        SpendLedger::of(&self.spends)
     }
 
     /// The Activity lines the changes of the Rule Pack stand for, each with
@@ -1016,6 +1036,7 @@ pub use writer::EventLogWriter;
 mod writer {
     use super::{Event, EventLog, RulePackRecord};
     use crate::integrity::IntegrityRecord;
+    use crate::spend::SpendRecord;
 
     use crate::chain::{ChainError, ChainState, ChainWriter, Verification};
     use crate::envelope::{Envelope, RecordKind};
@@ -1067,6 +1088,16 @@ mod writer {
         ) -> Result<Envelope, ChainError> {
             self.writer
                 .append_beside(RecordKind::RulePack, change.to_payload())
+        }
+
+        /// Appends one request to the Claude API, as a `judgement-spend`
+        /// record beside the events, and flushes it to the disk.
+        pub fn record_judgement_spend(
+            &mut self,
+            spend: &SpendRecord,
+        ) -> Result<Envelope, ChainError> {
+            self.writer
+                .append_beside(RecordKind::JudgementSpend, spend.to_payload())
         }
 
         /// Appends one answer to an integrity state, as an `integrity` record
@@ -1450,6 +1481,47 @@ mod tests {
         let activity = view.pack_activity();
         assert_eq!(activity.len(), 4);
         assert!(activity.iter().all(|(sequence, _, _)| *sequence == 1));
+    }
+
+    /// A `judgement-spend` record sits in the chain like a pack change: it
+    /// verifies, the derived views pass it by, and the cloud caps' counters
+    /// are rebuilt from it alone.
+    #[test]
+    fn a_judgement_spend_is_part_of_the_chain_and_the_caps_count_from_it() {
+        use crate::judgement::Usage;
+        use crate::spend::LocalDate;
+
+        let directory = TempDir::new().expect("a temporary directory");
+        let log = EventLog::at(directory.path().join("events.jsonl"));
+        let keys = MemoryKeySource::empty();
+        let (mut writer, _) = EventLogWriter::open(&log, &keys).expect("an open log");
+        writer
+            .append(&quarantine_event())
+            .expect("an appended event");
+        let today = LocalDate::new(2026, 10, 16);
+        let spend = SpendRecord::priced(
+            today,
+            "claude-sonnet-5",
+            Usage {
+                input_tokens: 1_000,
+                output_tokens: 100,
+            },
+        );
+        let written = writer
+            .record_judgement_spend(&spend)
+            .expect("an appended spend");
+        assert_eq!(written.record, RecordKind::JudgementSpend);
+        drop(writer);
+
+        let view = log.read(&keys).expect("a readable log");
+        assert_eq!(view.state, ChainState::Intact);
+        assert_eq!(view.unreadable, 0);
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.spends, vec![spend]);
+        assert_eq!(view.quarantine_manifest().len(), 1);
+        let ledger = view.spend_ledger();
+        assert_eq!(ledger.items_on(today), 1);
+        assert_eq!(ledger.spent_in_month_of(today), 3_000);
     }
 
     /// Compacting the Baseline anchors itself in the Event Log and leaves

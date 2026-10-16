@@ -71,6 +71,7 @@ pub mod rules;
 pub mod scan;
 pub mod scan_pass;
 pub mod settings;
+pub mod spend;
 pub mod state;
 pub mod user_rules;
 pub mod verdicts;

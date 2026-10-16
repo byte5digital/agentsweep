@@ -144,17 +144,18 @@ jobs:
           test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = "14.0"
           test "$(plutil -extract LSUIElement raw "$app/Contents/Info.plist")" = "true"
 
-      # Release checklist items 3 and 15: the daemon's signing identifier is
-      # frozen, because the Keychain key is bound to it. The daemon embeds an
-      # Info.plist naming it, so Tauri's own signing yields it in each
-      # architecture and nothing re-signs after Tauri. The same script checks
-      # that no binary carries entitlements, that each has the hardened
-      # runtime, and that the bundle verifies; the release draft runs it on the
-      # app, the DMG and the updater archive with the real identity.
-      - name: Test the bundle signature check
+      # The release bundle checker, release checklist items 2, 3, 14, 15 and
+      # 16, in ad hoc mode: every Mach-O in the bundle verifies strictly, is
+      # universal, has the hardened runtime and no entitlements, and the
+      # daemon carries its frozen signing identifier, because the Keychain key
+      # is bound to it. The daemon embeds an Info.plist naming it, so Tauri's
+      # own signing yields it in each architecture and nothing re-signs after
+      # Tauri. Ad hoc mode skips, and lists, the checks an ad hoc identity
+      # cannot pass; the release draft runs the same script in release mode.
+      - name: Test the release bundle checker
         run: .github/scripts/check-bundle-signature-test.sh
 
-      - name: Check the bundle's signature and the daemon's frozen signing identifier
+      - name: Check the bundle with the release bundle checker in ad hoc mode
         run: .github/scripts/check-bundle-signature.sh - target/universal-apple-darwin/release/bundle/macos/AgentSweep.app
 
       # Release checklist item 16, and the dependency list cargo auditable

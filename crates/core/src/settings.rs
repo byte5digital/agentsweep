@@ -10,8 +10,8 @@
 //! section 9.4), the Posture (spec section 8.2), the config-dir override per
 //! Agent (spec section 3.1) and the AI Judgement choices of spec section 4.4:
 //! the active Judgement Engine, the Ollama address and model, the Claude model
-//! id override and the three cloud caps. The Gate switch joins them in its
-//! milestone.
+//! id override and the three cloud caps, and the Gate switch of spec section
+//! 7 ("Stop the AI from using flagged items", section 8.10).
 //!
 //! A missing settings file means every default. A settings file that cannot
 //! be read back is reported rather than repaired: the daemon runs with the
@@ -38,6 +38,8 @@ use crate::paths::DataDirectory;
 pub const RULE_FEED: &str = "rule_feed";
 /// The key the app update check toggle is kept under.
 pub const UPDATE_CHECK: &str = "update_check";
+/// The key the Gate switch is kept under.
+pub const GATE_HOOKS: &str = "gate_hooks";
 /// The key the Posture is kept under.
 pub const POSTURE: &str = "posture";
 /// The key the config-dir overrides are kept under, by Agent id. It is absent
@@ -435,6 +437,11 @@ pub struct Settings {
     /// The app update check (spec section 9.4). On by default. The app reads
     /// it from the daemon; the daemon itself never asks for an update.
     pub update_check: bool,
+    /// The Gate switch (spec sections 7 and 8.10). On by default; off means
+    /// the daemon takes the Gate's entries and the Codex pin away from every
+    /// Agent and registers nothing until it is on again. It governs
+    /// registration only: the `gate` request answers the same either way.
+    pub gate_hooks: bool,
     /// The Posture (spec section 8.2), Simple by default.
     pub posture: Posture,
     /// The config-dir override per Agent, by Agent id (spec section 3.1).
@@ -449,6 +456,7 @@ impl Default for Settings {
         Settings {
             rule_feed: true,
             update_check: true,
+            gate_hooks: true,
             posture: Posture::Simple,
             config_dirs: BTreeMap::new(),
             judgement: JudgementSettings::default(),
@@ -463,6 +471,7 @@ impl Settings {
         let mut map = Map::new();
         map.insert(RULE_FEED.to_string(), Value::from(self.rule_feed));
         map.insert(UPDATE_CHECK.to_string(), Value::from(self.update_check));
+        map.insert(GATE_HOOKS.to_string(), Value::from(self.gate_hooks));
         map.insert(POSTURE.to_string(), Value::from(self.posture.as_str()));
         if !self.config_dirs.is_empty() {
             let overrides: Map<String, Value> = self
@@ -520,6 +529,9 @@ impl Settings {
         }
         if let Some(update_check) = map.get(UPDATE_CHECK) {
             settings.update_check = update_check.as_bool()?;
+        }
+        if let Some(gate_hooks) = map.get(GATE_HOOKS) {
+            settings.gate_hooks = gate_hooks.as_bool()?;
         }
         if let Some(posture) = map.get(POSTURE) {
             settings.posture = Posture::parse(posture.as_str()?)?;
@@ -738,6 +750,7 @@ mod tests {
                 "cloud_cents_per_month",
                 "cloud_items_per_day",
                 "cloud_items_per_scan",
+                "gate_hooks",
                 "judgement_engine",
                 "ollama_address",
                 "ollama_model",
@@ -762,6 +775,7 @@ mod tests {
         let chosen = Settings {
             rule_feed: false,
             update_check: false,
+            gate_hooks: false,
             posture: Posture::Developer,
             config_dirs: BTreeMap::new(),
             judgement: JudgementSettings {
@@ -1081,5 +1095,32 @@ mod tests {
                 ..Settings::default()
             })
         );
+    }
+
+    /// Spec sections 7 and 8.10: the Gate switch is on by default, round
+    /// trips through the file, and a file from before it reads it as on.
+    #[test]
+    fn the_gate_switch_is_on_by_default_and_round_trips() {
+        assert!(Settings::default().gate_hooks);
+        let (_temporary, file) = a_file();
+        std::fs::write(file.path(), b"{\n  \"rule_feed\": false\n}\n").expect("an older file");
+        assert!(file.read().expect("a readable settings file").gate_hooks);
+        let off = Settings {
+            gate_hooks: false,
+            ..Settings::default()
+        };
+        SettingsWriter::write(&file, &off).expect("a written settings file");
+        assert_eq!(file.read().expect("a readable settings file"), off);
+        let written: Value = serde_json::from_slice(&std::fs::read(file.path()).expect("the file"))
+            .expect("plain JSON");
+        assert_eq!(written[GATE_HOOKS], Value::Bool(false));
+    }
+
+    /// A mistyped Gate switch is not read as on.
+    #[test]
+    fn a_gate_switch_of_the_wrong_type_makes_the_file_malformed() {
+        let (_temporary, file) = a_file();
+        std::fs::write(file.path(), b"{\"gate_hooks\": \"off\"}").expect("a mistyped file");
+        assert!(matches!(file.read(), Err(SettingsError::Malformed(_))));
     }
 }

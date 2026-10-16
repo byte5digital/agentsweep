@@ -23,8 +23,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
+use agentsweep_core::apple_engine::{AppleEngine, AppleHelper};
 use agentsweep_core::claude_engine::ClaudeEngine;
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::finding::{FindingId, FindingState, FiredHeuristic, Standing};
@@ -90,11 +92,13 @@ pub trait Engines: Send + Sync {
 
 /// The engines the installed daemon asks: Ollama at the loopback address the
 /// settings name, under the tag and digest of the pulled model, and the
-/// Claude API with the key in the Keychain. Apple on-device is not asked yet:
-/// its client is a ticket of its own, and until it lands the Verdict cache is
-/// still looked up under it.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SystemEngines;
+/// Claude API with the key in the Keychain, and Apple on-device through the
+/// helper beside the daemon, under the OS model version its `check` names.
+#[derive(Clone, Debug, Default)]
+pub struct SystemEngines {
+    /// The Apple helper to ask, absent when none is beside the daemon.
+    pub apple_helper: Option<PathBuf>,
+}
 
 impl Engines for SystemEngines {
     fn open(
@@ -121,10 +125,17 @@ impl Engines for SystemEngines {
                     asker: Some(Arc::new(ClaudeEngine::new(model, Arc::clone(claude_key)))),
                 })
             }
-            settings::JudgementEngine::Apple => Ok(Opened {
-                model: judgement.model_of(judgement.engine).to_string(),
-                asker: None,
-            }),
+            settings::JudgementEngine::Apple => {
+                let helper = self
+                    .apple_helper
+                    .as_ref()
+                    .ok_or_else(|| EngineError::Unavailable("helper_missing".into()))?;
+                let engine = AppleEngine::new(AppleHelper::at(helper))?;
+                Ok(Opened {
+                    model: engine.model_id().to_string(),
+                    asker: Some(Arc::new(engine)),
+                })
+            }
         }
     }
 }
@@ -1103,5 +1114,23 @@ mod tests {
         assert!(queue.claim(generation, &item, &hash));
         assert!(!queue.claim(generation, &item, &hash));
         engine.open();
+    }
+
+    #[test]
+    fn the_installed_engines_ask_apple_only_through_a_helper_that_answers() {
+        let claude_key: Arc<dyn ClaudeKeyStore + Send + Sync> =
+            Arc::new(agentsweep_core::keychain::MemoryClaudeKeyStore::default());
+        let judgement = JudgementSettings {
+            engine: settings::JudgementEngine::Apple,
+            ..JudgementSettings::default()
+        };
+        let no_helper = SystemEngines::default().open(&judgement, &claude_key);
+        assert!(matches!(no_helper, Err(EngineError::Unavailable(_))));
+        let gone = tempfile::tempdir().expect("a temporary directory");
+        let missing = SystemEngines {
+            apple_helper: Some(gone.path().join("agentsweep-apple-judge")),
+        }
+        .open(&judgement, &claude_key);
+        assert!(missing.is_err());
     }
 }

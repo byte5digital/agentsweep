@@ -415,7 +415,9 @@ impl Daemon {
         });
         let engines: Arc<dyn Engines> = match (&tuning.engines, options.is_developer_run()) {
             (Some(engines), _) => Arc::clone(engines),
-            (None, false) => Arc::new(SystemEngines),
+            (None, false) => Arc::new(SystemEngines {
+                apple_helper: apple_helper.clone(),
+            }),
             (None, true) => Arc::new(NoEngines),
         };
         let (settings, settings_unreadable) = settings_at_start(&directory, &*keys, &mut state);

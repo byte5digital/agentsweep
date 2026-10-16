@@ -795,7 +795,7 @@ fn ollama_verdicts_are_cached_and_kept_under_the_tag_and_digest() {
         .expect("the settings are written");
     sandbox.ambiguous_skill("malicious-helper");
 
-    let daemon = sandbox.start_with(Arc::new(SystemEngines));
+    let daemon = sandbox.start_with(Arc::new(SystemEngines::default()));
     wait_until("the chat request", || {
         ollama.received("/api/chat").len() == 1
     });

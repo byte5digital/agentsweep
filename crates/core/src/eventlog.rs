@@ -892,12 +892,18 @@ impl EventLog {
         let mut integrity = Vec::new();
         let mut spends = Vec::new();
         let mut restarts = 0usize;
+        let mut chain_restarts = Vec::new();
         let mut unreadable = 0usize;
         for record in &verification.records {
             match record.envelope.record {
                 RecordKind::Entry => {}
                 RecordKind::ChainRestart => {
                     restarts += 1;
+                    chain_restarts.push(RecordedRestart {
+                        sequence: record.envelope.sequence,
+                        recorded_at: record.envelope.recorded_at,
+                        verified: record.verified,
+                    });
                     continue;
                 }
                 RecordKind::RulePack => {
@@ -952,9 +958,21 @@ impl EventLog {
             integrity,
             spends,
             restarts,
+            chain_restarts,
             unreadable,
         })
     }
+}
+
+/// One restart of the chain under a new key, as the Event Log holds it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordedRestart {
+    /// The record's position in the chain.
+    pub sequence: u64,
+    /// When it was written.
+    pub recorded_at: Timestamp,
+    /// Whether the key in hand verifies it.
+    pub verified: bool,
 }
 
 /// One answer to an integrity state as the Event Log holds it.
@@ -992,6 +1010,9 @@ pub struct EventLogView {
     pub unverified: usize,
     /// How many times the chain was restarted because the key went missing.
     pub restarts: usize,
+    /// Where each of those restarts sits in the chain, in the order written,
+    /// which is what the Activity names them by.
+    pub chain_restarts: Vec<RecordedRestart>,
     /// How many records carried a payload that is not what their kind says.
     pub unreadable: usize,
 }
@@ -1292,6 +1313,9 @@ mod tests {
         let view = log.read(&keys).expect("a readable log");
         assert_eq!(view.state, ChainState::Intact);
         assert_eq!(view.restarts, 1);
+        assert_eq!(view.chain_restarts.len(), 1);
+        assert_eq!(view.chain_restarts[0].sequence, 1, "between the two events");
+        assert!(view.chain_restarts[0].verified, "the new key wrote it");
         assert_eq!(view.events.len(), 2);
         assert!(!view.events[0].verified);
         assert!(view.events[1].verified);

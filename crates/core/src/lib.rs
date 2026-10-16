@@ -65,6 +65,7 @@ pub mod pack_archive;
 pub mod pack_signature;
 pub mod packs;
 pub mod paths;
+pub mod preview;
 pub mod provenance;
 pub mod quarantine;
 pub mod rules;

@@ -110,8 +110,9 @@ impl Judge {
     }
 }
 
-/// The budget of an engine, none for off.
-fn budget_of(engine: JudgementEngine) -> Option<usize> {
+/// The token budget an engine's Judgement Requests are built under, none
+/// for off.
+pub fn budget_of(engine: JudgementEngine) -> Option<usize> {
     match engine {
         JudgementEngine::Off => None,
         JudgementEngine::Apple => Some(APPLE_BUDGET),

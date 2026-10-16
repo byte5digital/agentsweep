@@ -338,27 +338,13 @@ fn check_the_gate(
     keys: &dyn KeySource,
     command: &GateCommand,
 ) -> Vec<GateLine> {
-    let host = machine.host(Vec::new());
-    let mut lines = Vec::new();
-    for adapter in agents() {
-        let descriptor = adapter.descriptor();
-        let detected = inventory
+    let detected = |agent: &str| {
+        inventory
             .agents
             .iter()
-            .any(|(agent, installed)| *installed && agent == descriptor.agent);
-        if !detected {
-            continue;
-        }
-        if let Some(trouble) = crate::gate::verify(&*adapter, &host, directory, keys, command) {
-            lines.push(GateLine {
-                agent: descriptor.agent.to_string(),
-                name: descriptor.display_name.to_string(),
-                trouble,
-            });
-        }
-    }
-    lines.sort_by_key(|line| line.trouble);
-    lines
+            .any(|(found, installed)| *installed && found == agent)
+    };
+    crate::gate::check_agents(machine, &detected, directory, keys, command)
 }
 
 /// What the Agents' own registries say this machine holds.

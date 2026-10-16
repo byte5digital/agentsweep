@@ -15,8 +15,10 @@
 //! Every Full Scan calls [`verify`] for every Agent it detected, before it
 //! enumerates (spec section 7.6): the mending write is then already in the
 //! Event Log when the Scan rebuilds its known actions, so the Scan that mends
-//! reads the fresh entries `unchanged`. The switch in Settings comes with its
-//! own ticket and calls [`register`] and [`remove`].
+//! reads the fresh entries `unchanged`. The Gate switch in Settings calls
+//! [`remove_everywhere`] when it goes off, which is also the one removal
+//! Uninstall reuses on every path (spec section 9.6), and
+//! [`check_detected`] when it goes on.
 
 use std::path::Path;
 
@@ -26,12 +28,13 @@ use agentsweep_core::eventlog::{Action, Actor, Event};
 use agentsweep_core::gate_registration::{
     AtomicWriter, GateCheck, GateCommand, GateEntry, GateError, GateWrite,
 };
-use agentsweep_core::health::GateTrouble;
+use agentsweep_core::health::{GateLine, GateTrouble};
 use agentsweep_core::host::Host;
 use agentsweep_core::item::Kind;
 use agentsweep_core::keychain::KeySource;
 use agentsweep_core::paths::DataDirectory;
 
+use crate::machine::{Machine, agents};
 use crate::stores::open_the_event_log;
 
 /// Why a Gate write or its record did not happen.
@@ -197,4 +200,99 @@ fn shown(entries: &[GateEntry]) -> String {
         .unwrap_or(Path::new(""))
         .display()
         .to_string()
+}
+
+/// Verifies and mends the Gate's registration with every Agent `installed`
+/// says is there, and answers with the Gate lines Health is to carry, worst
+/// first. An Agent that is not there is neither written to nor named.
+pub fn check_agents(
+    machine: &Machine,
+    installed: &dyn Fn(&str) -> bool,
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+    command: &GateCommand,
+) -> Vec<GateLine> {
+    let host = machine.host(Vec::new());
+    let mut lines = Vec::new();
+    for adapter in agents() {
+        let descriptor = adapter.descriptor();
+        if !installed(descriptor.agent) {
+            continue;
+        }
+        if let Some(trouble) = verify(&*adapter, &host, directory, keys, command) {
+            lines.push(GateLine {
+                agent: descriptor.agent.to_string(),
+                name: descriptor.display_name.to_string(),
+                trouble,
+            });
+        }
+    }
+    lines.sort_by_key(|line| line.trouble);
+    lines
+}
+
+/// The registration check outside a Full Scan, which is what switching the
+/// Gate on runs at once (spec section 7.6): every Agent is detected from
+/// disk, as a Full Scan detects it, and every one found is verified and
+/// mended.
+pub fn check_detected(
+    machine: &Machine,
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+    command: &GateCommand,
+) -> Vec<GateLine> {
+    let inventory = machine.inventory();
+    let found: Vec<&'static str> = agents()
+        .iter()
+        .filter(|adapter| adapter.detect(&inventory).installed)
+        .map(|adapter| adapter.descriptor().agent)
+        .collect();
+    check_agents(
+        machine,
+        &|agent| found.contains(&agent),
+        directory,
+        keys,
+        command,
+    )
+}
+
+/// What taking the Gate away from every Agent came to.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Removal {
+    /// How many entries were taken away, across every Agent. Each one
+    /// appended one `gate-removed` event.
+    pub removed: usize,
+    /// The Agents, by id, whose entries could not be taken away: a file that
+    /// does not parse, one that keeps changing, one that cannot be written,
+    /// or an Event Log that could not record the removal.
+    pub failed: Vec<String>,
+}
+
+/// Takes the Gate's entries and the Codex pin away from every Agent, detected
+/// or not, and records every entry taken away: what switching the Gate off
+/// does, and what Uninstall does on every path (spec sections 7.6 and 9.6).
+///
+/// Only the entries whose command, arguments and timeout are AgentSweep's
+/// go; the user's own hooks and pins stay, and a pin of a user's group that
+/// moved up is filed again under its new position.
+pub fn remove_everywhere(
+    machine: &Machine,
+    directory: &DataDirectory,
+    keys: &dyn KeySource,
+    command: &GateCommand,
+) -> Removal {
+    let host = machine.host(Vec::new());
+    let mut removal = Removal::default();
+    for adapter in agents() {
+        let agent = adapter.descriptor().agent;
+        match remove(&*adapter, &host, directory, keys, command) {
+            Ok(write) => removal.removed += write.removed.len(),
+            Err(GateWriteError::Gate(GateError::NoGate)) => {}
+            Err(error) => {
+                say!("the Gate could not be removed from {agent}: {error}");
+                removal.failed.push(agent.to_string());
+            }
+        }
+    }
+    removal
 }

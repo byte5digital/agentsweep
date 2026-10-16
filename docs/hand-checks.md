@@ -284,6 +284,24 @@ Clean up: `rm ~/.local/bin/agentsweep`, put back anything you moved aside, and r
 
 Seams in the suite: `cli_link::tests` in the app (a new link on a temporary home, a stale link of its own replaced, a file, a directory or another program's link never overwritten, the PATH line only when the directory is not on the PATH given), `settings_pane::tests` and the frame's tests (the pane from the daemon's answer and the Health note), and the app's `settings` integration tests (each choice through a real daemon, an unreadable settings file, Full Disk Access said by the Settings pane alone, the README section the link points at).
 
+## 14. The daemon brings the app back windowless when it has something to tell
+
+This check needs the hand install of section 1, because only an installed bundle is launched through LaunchServices and only the installed daemon launches anything; a developer run of the daemon never does. It plants one defanged Fixture skill under the real `~/.claude/skills`, the bad Fixture `skill-base64-pipe-bash` of Rule 0001, whose payload decodes to `echo`; the clean-up below removes it. Every Rule the bundle ships is on Probation, so the bundled pack flags the skill ("needs you") rather than quarantining it; under a Rule Pack that carries Rule 0001 stable, the same steps quarantine it and the class is "stopped automatically", with whether Agent sessions were running.
+
+Quit the app from the popover (**Quit AgentSweep (protection stays on)**) and check that `pgrep -x agentsweep-menubar` prints nothing. Then plant the skill:
+
+```sh
+mkdir -p ~/.claude/skills/agentsweep-hand-check
+cp rules/0001-decode-pipe-exec/bad/skill-base64-pipe-bash/tree/SKILL.md ~/.claude/skills/agentsweep-hand-check/
+```
+
+- [ ] Within a few seconds of the Change Scan, the daemon's log says it is launching the app windowless for one un-notified change, and `pgrep -fl agentsweep-menubar` shows the app running with `--windowless` among its arguments.
+- [ ] The menu bar icon is back with the exclamation mark, no window opened, the app has no Dock icon and no Cmd-Tab entry, and the app that had focus before still has it (`lsappinfo info -only ApplicationType -app agentsweep-menubar` says `UIElement`).
+- [ ] The app raises one notification for the skill, and quitting and reopening the app raises nothing twice. Raising it is the app's half of the notifications; until that half is built, the app comes back without raising anything.
+- [ ] Quit the app again and touch the skill without changing it (`touch ~/.claude/skills/agentsweep-hand-check/SKILL.md`): nothing new is un-notified, so the app is not launched a second time for the same change.
+
+Seams in the suite: the daemon's `notifications` integration tests (each class on a temporary home, `notified_at` written and kept across a restart, nothing for the Ambiguous Band or a daily Full Scan with nothing new, and the launcher seam called once with the bundle's own app and the windowless argument only while no app is subscribed), `notifications::tests` in the daemon (the class of every Finding state and source, records changed once per break, the permission count), `a_benign_or_an_unsure_verdict_and_the_ambiguous_band_leave_nothing_to_notify` in the daemon's AI Judgement queue tests, and `the_liveness_handle_sees_a_peer_hang_up` in the socket tests.
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.
@@ -309,6 +327,7 @@ Unregister both services from the bundle that registered them, then remove every
 ~/agentsweep-hand-check/AgentSweep.app/Contents/MacOS/agentsweep-menubar --developer-unregister
 pkill -x agentsweep-menubar; pkill -x agentsweepd
 rm -rf ~/agentsweep-hand-check ~/.Trash/AgentSweep.app
+rm -rf ~/.claude/skills/agentsweep-hand-check   # the Fixture skill of section 14
 rm -rf ~/Library/Application\ Support/de.byte5.agentsweep ~/Library/Logs/AgentSweep
 rm -rf ~/Library/Caches/de.byte5.agentsweep ~/Library/WebKit/de.byte5.agentsweep
 rm -rf ~/Library/Caches/agentsweep-menubar ~/Library/WebKit/agentsweep-menubar   # left by a run of the bare binary

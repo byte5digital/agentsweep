@@ -37,9 +37,7 @@ use agentsweep_core::derived::{QuarantineEntry, QuarantineManifest};
 use agentsweep_core::drift::{AcknowledgeError, Acknowledgement};
 use agentsweep_core::enforcement::{Cause, Enforcement, FIXABLE_EXPOSURES, may_quarantine};
 use agentsweep_core::envelope::Timestamp;
-use agentsweep_core::eventlog::{
-    Action, Actor, EventLog, EventLogView, Outcome, Primitive, ReceiptStep,
-};
+use agentsweep_core::eventlog::{Actor, EventLog, Outcome, Primitive, ReceiptStep};
 use agentsweep_core::finding::{
     Category, Finding, FindingId, FindingState, RuleStatus, Severity, Source,
 };
@@ -50,10 +48,10 @@ use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::quarantine::{Conflict, EnforcementError, Receipt, ReceiptId};
 use agentsweep_core::state::{RecordedFinding, StateFile, StateWriter};
 use agentsweep_ipc::protocol::{
-    ActionReport, ActivityLine, Request, RequestError, RevealedReceipt, Sessions, StateEvent,
-    receipts_to_value,
+    ActionReport, Request, RequestError, RevealedReceipt, Sessions, StateEvent, receipts_to_value,
 };
 
+use crate::activity::{name_of, named};
 use crate::full_scan::{Covering, survey};
 use crate::machine::{Machine, adapters};
 use crate::service::Daemon;
@@ -423,59 +421,9 @@ fn priority(finding: &RecordedFinding) -> u8 {
     }
 }
 
-/// The name a person knows an Item by: the last part of its locator.
-fn name_of(item_id: &str) -> &str {
-    let locator = item_id.rsplit(['/', '#']).next().unwrap_or(item_id);
-    if locator.is_empty() { item_id } else { locator }
-}
-
-/// An Item as a sentence names it: its kind in words, then its name.
-fn named(kind: Option<Kind>, item_id: &str) -> String {
-    match kind {
-        Some(kind) => format!(
-            "{} '{}'",
-            kind.id_segment().replace('-', " "),
-            name_of(item_id)
-        ),
-        None => format!("'{}'", name_of(item_id)),
-    }
-}
-
 /// The line a manual Quarantine of a project's Item adds (spec section 8.4).
 const PROJECT_LINE: &str =
     "This file belongs to a project, so git will show the change. Restore undoes it.";
-
-/// The Activity line one `purge` record stands for. It names the Item and the
-/// Receipt, never what the Item held.
-fn purge_line(kind: Option<Kind>, item_id: &str, receipt_id: &str) -> String {
-    format!(
-        "Deleted the {} from quarantine for good ({receipt_id}).",
-        named(kind, item_id)
-    )
-}
-
-/// The Activity lines the `purge` records of the Event Log stand for, each
-/// with the sequence and the moment of its record, in the order written.
-pub fn purge_activity(view: &EventLogView) -> Vec<ActivityLine> {
-    view.events
-        .iter()
-        .filter(|recorded| recorded.event.action == Action::Purge)
-        .map(|recorded| ActivityLine {
-            sequence: recorded.sequence,
-            recorded_at: recorded.recorded_at,
-            line: purge_line(
-                recorded.event.kind,
-                recorded
-                    .event
-                    .item_id
-                    .as_ref()
-                    .map(ItemId::as_str)
-                    .unwrap_or_default(),
-                &recorded.event.receipt_id,
-            ),
-        })
-        .collect()
-}
 
 impl Daemon {
     /// Carries out one action request.
@@ -996,7 +944,7 @@ impl Daemon {
         let sessions = sessions::detect(self.machine.home());
         let (mut enforcement, _) =
             Enforcement::open(&self.directory, &*self.keys).map_err(failed)?;
-        let written = enforcement.purge(&entry).map_err(failed)?;
+        enforcement.purge(&entry).map_err(failed)?;
         drop(enforcement);
 
         // Nothing of the Item is left to stop or to restore, so the Finding
@@ -1015,11 +963,6 @@ impl Daemon {
             recorded.facts.rule_withdrawn = false;
             gone.push(recorded.id.clone());
             true
-        });
-        self.note_activity(ActivityLine {
-            sequence: written.sequence,
-            recorded_at: written.recorded_at,
-            line: purge_line(entry.kind, entry.item_id.as_str(), &entry.receipt_id),
         });
         Ok(ActionReport {
             action: "purge".to_string(),

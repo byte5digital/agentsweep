@@ -837,7 +837,7 @@ fn a_withdrawn_rule_turns_its_open_finding_gone_and_leaves_a_quarantined_item_in
     let mut sequences = Vec::new();
     loop {
         match stream.next_event().expect("an event") {
-            Some(StateEvent::Activity { line, sequence }) => {
+            Some(StateEvent::Activity { line, sequence, .. }) => {
                 activity.push(line);
                 sequences.push(sequence);
             }
@@ -918,7 +918,7 @@ fn a_withdrawn_rule_turns_its_open_finding_gone_and_leaves_a_quarantined_item_in
         .find(|line| line.line.starts_with("Rule 0001 was withdrawn"))
         .expect("the withdrawal is still in the Activity");
     assert!(withdrawal.line.contains("dropper"), "{withdrawal:?}");
-    assert_eq!(withdrawal.sequence, recorded.sequence);
+    assert_eq!(withdrawal.sequence, Some(recorded.sequence));
     assert!(
         status
             .activity
@@ -1211,7 +1211,7 @@ fn switching_the_feed_off_records_the_bundled_pack_and_what_it_withdrew() {
     let mut sequences = Vec::new();
     loop {
         match stream.next_event().expect("an event") {
-            Some(StateEvent::Activity { line, sequence }) => {
+            Some(StateEvent::Activity { line, sequence, .. }) => {
                 activity.push(line);
                 sequences.push(sequence);
             }

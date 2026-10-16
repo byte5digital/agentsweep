@@ -200,6 +200,7 @@ impl ChangeScan<'_> {
             // project that changed its hook switch is among.
             project_hooks: survey.enumeration.project_hooks,
             awaiting: judged.awaiting,
+            notes: judged.notes,
         }))
     }
 }

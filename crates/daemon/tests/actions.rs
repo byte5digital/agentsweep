@@ -1437,7 +1437,7 @@ fn purge_deletes_a_quarantined_skill_for_good_and_its_finding_goes_with_an_activ
     let line = status
         .activity
         .iter()
-        .find(|line| line.sequence == record.sequence)
+        .find(|line| line.sequence == Some(record.sequence))
         .expect("an Activity line for the purge");
     assert!(
         line.line.contains("setup") && line.line.contains(&report.receipt_id),
@@ -1453,7 +1453,7 @@ fn purge_deletes_a_quarantined_skill_for_good_and_its_finding_goes_with_an_activ
                 assert_eq!(state, "gone");
                 told_gone = true;
             }
-            Some(StateEvent::Activity { line, sequence }) => {
+            Some(StateEvent::Activity { line, sequence, .. }) => {
                 assert_eq!(sequence, Some(record.sequence), "{line}");
                 told_line = true;
             }
@@ -1489,7 +1489,7 @@ fn purge_deletes_a_quarantined_skill_for_good_and_its_finding_goes_with_an_activ
             .status()
             .activity
             .iter()
-            .any(|line| line.sequence == record.sequence && line.line.contains("setup"))
+            .any(|line| line.sequence == Some(record.sequence) && line.line.contains("setup"))
     );
     assert_eq!(purges(&sandbox).len(), 1);
 }
@@ -1566,4 +1566,122 @@ fn untrust_of_a_trusted_skill_is_recorded_and_the_next_full_scan_quarantines_it_
         .filter(|recorded| recorded.event.action == Action::Untrust)
         .count();
     assert_eq!(untrusted, 1);
+}
+
+/// The Activity (spec section 8.1): on a temporary data directory whose
+/// Event Log holds one record of each action of spec section 5.5, the status
+/// carries one line per record, with that record's sequence and action. A
+/// live action then yields the same line on the stream as in the status,
+/// with the sequence of the record it wrote.
+#[test]
+fn every_record_is_one_activity_line_and_a_live_action_tells_the_same_line() {
+    use agentsweep_core::eventlog::{Event, EventLogWriter};
+    use agentsweep_core::finding::Tier;
+    use agentsweep_core::item::{ItemId, Kind, Scope};
+    use agentsweep_ipc::protocol::StateEvent;
+
+    let sandbox = Sandbox::with_a_planted_skill("activity");
+    let tracker = ItemId::new(
+        "claude-code",
+        &Scope::User,
+        Kind::McpServer,
+        "~/.claude.json#tracker",
+    );
+    let about = |action: Action, actor: Actor| {
+        let mut event = Event::new(action, actor)
+            .about(&tracker, Kind::McpServer, "sha256:abc")
+            .because_of("finding-1", Tier::Rules, 1)
+            .hiding("env.TOKEN", "not-a-real-token");
+        event.receipt_id = "r-activity".to_string();
+        event
+    };
+    let seeded = vec![
+        about(Action::Quarantine, Actor::User),
+        about(Action::Restore, Actor::User),
+        about(Action::ReEnable, Actor::User),
+        about(Action::Trust, Actor::User),
+        about(Action::Untrust, Actor::User),
+        about(Action::Purge, Actor::User),
+        about(Action::ReEnforce, Actor::Auto),
+        about(Action::Acknowledge, Actor::User),
+        Event::new(Action::EngineChanged, Actor::User)
+            .noting("change", "disabled")
+            .noting("from_engine", "apple")
+            .noting("to_engine", "off"),
+        Event::new(Action::BaselineCompacted, Actor::Auto).noting("dropped", "0"),
+        Event::new(Action::VerdictsCompacted, Actor::Auto)
+            .noting("old_records", "0")
+            .noting("new_records", "0"),
+        Event::new(Action::GateRegistered, Actor::Auto).noting("agent", "claude-code"),
+        Event::new(Action::GateRemoved, Actor::Auto).noting("agent", "codex"),
+    ];
+    {
+        let log = EventLog::in_data_directory(&sandbox.data());
+        let (mut writer, _) = EventLogWriter::open(&log, &sandbox.keys).expect("an open log");
+        for event in &seeded {
+            writer.append(event).expect("a seeded record");
+        }
+    }
+    let _daemon = sandbox.start();
+
+    let status = sandbox.status();
+    let view = sandbox.events();
+    assert_eq!(view.events.len(), seeded.len(), "the Scan wrote nothing");
+    for recorded in &view.events {
+        let lines: Vec<_> = status
+            .activity
+            .iter()
+            .filter(|line| line.sequence == Some(recorded.sequence))
+            .collect();
+        assert_eq!(lines.len(), 1, "one line for {:?}", recorded.event.action);
+        assert_eq!(lines[0].action, recorded.event.action.as_str());
+        assert!(lines[0].verified);
+        assert!(!lines[0].line.is_empty());
+    }
+    let wire: Vec<String> = status
+        .activity
+        .iter()
+        .map(|line| line.to_value().to_string())
+        .collect();
+    let wire = wire.join("\n");
+    assert!(!wire.contains("not-a-real-token"), "{wire}");
+    assert!(!wire.contains("env.TOKEN"), "{wire}");
+
+    // A live action: its line comes down the stream with its record's
+    // sequence, and reads as the status reads it.
+    let mut stream = Client::connect_at(&sandbox.socket, Role::App)
+        .expect("a client")
+        .subscribe()
+        .expect("a subscription");
+    let planted = finding_on(&sandbox.status(), "skills/setup").clone();
+    sandbox
+        .client()
+        .quarantine(planted.id.as_str())
+        .expect("a Quarantine");
+    let written = sandbox
+        .events()
+        .events
+        .last()
+        .cloned()
+        .expect("the Quarantine's record");
+    assert_eq!(written.event.action, Action::Quarantine);
+    let told = loop {
+        match stream.next_event().expect("an event") {
+            Some(StateEvent::Activity {
+                sequence, entry, ..
+            }) if sequence == Some(written.sequence) => break entry.expect("the whole line"),
+            Some(_) => {}
+            None => panic!("the stream ended before the line was told"),
+        }
+    };
+    let kept = sandbox
+        .status()
+        .activity
+        .into_iter()
+        .find(|line| line.sequence == Some(written.sequence))
+        .expect("the line in the status");
+    assert_eq!(*told, kept);
+    assert_eq!(kept.line, "You quarantined the skill 'setup'.");
+    assert_eq!(kept.actor, "user");
+    assert_eq!(kept.item_id, planted.item_id.as_str());
 }

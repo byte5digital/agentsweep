@@ -673,6 +673,7 @@ pub(crate) mod tests {
             list.apply(&StateEvent::Activity {
                 line: "Rule Pack 2 accepted.".to_string(),
                 sequence: Some(3),
+                entry: None,
             }),
             Follow::Nothing
         );

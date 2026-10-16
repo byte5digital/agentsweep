@@ -26,7 +26,7 @@ use agentsweep_core::chain::{ChainError, ChainState};
 use agentsweep_core::coverage::CoveragePlan;
 use agentsweep_core::derived::QuarantineEntry;
 use agentsweep_core::derived::{KnownActions, QuarantineManifest, TrustTable};
-use agentsweep_core::drift::Declarations;
+use agentsweep_core::drift::{Declarations, Note};
 use agentsweep_core::enforcement::primitives_for;
 use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::evaluation::{Evaluations, NoCache};
@@ -145,6 +145,10 @@ pub struct ScanRun {
     /// The Items it looked at that await judgement, which is what the AI
     /// Judgement queue is fed with: every one not marked answered.
     pub awaiting: Vec<Awaiting>,
+    /// The lines the Activity keeps that no record stands behind: a
+    /// consistent plugin update, content that changed back (spec section
+    /// 4.6.5).
+    pub notes: Vec<Note>,
 }
 
 /// What a Scan reports as it goes.
@@ -324,6 +328,7 @@ impl FullScan<'_> {
             gate_lines,
             project_hooks: survey.enumeration.project_hooks,
             awaiting: judged.awaiting,
+            notes: judged.notes,
         })
     }
 }
@@ -536,6 +541,9 @@ pub struct Judged {
     /// The Items it looked at that await judgement, an unsure Verdict from
     /// the cache marked answered.
     pub awaiting: Vec<Awaiting>,
+    /// The lines the Activity keeps that are not Findings: a consistent
+    /// plugin update, content that changed back.
+    pub notes: Vec<Note>,
 }
 
 /// Reading the stores, running one pass and writing what it decided.
@@ -791,6 +799,7 @@ impl Judgement<'_> {
             ambiguous,
             checked,
             awaiting,
+            notes: outcome.notes.clone(),
         })
     }
 }

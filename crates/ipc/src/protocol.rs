@@ -659,9 +659,9 @@ pub enum StateEvent {
         /// client that does not know it reads the id and the state as before.
         finding: Option<Box<RecordedFinding>>,
     },
-    /// A line for the Activity that is not a Finding: a Rule Pack accepted,
-    /// a Rule withdrawn with the Findings it took with it. It is the live
-    /// signal; what stays is the Event Log record the line was built from.
+    /// A line for the Activity: a record of the Event Log just written, or a
+    /// line a Scan left that no record stands behind. It is the live signal;
+    /// what stays is the Event Log record the line was built from.
     Activity {
         /// The line, free of content and of sensitive values.
         line: String,
@@ -669,6 +669,11 @@ pub enum StateEvent {
         /// client can tell it from the same line in the status. Absent for a
         /// line no record stands behind.
         sequence: Option<u64>,
+        /// The whole line as the status carries it, with its moment and its
+        /// technical columns. Additive: a daemon from before sends none, and
+        /// a client that does not know it reads the line and the sequence as
+        /// before.
+        entry: Option<Box<ActivityLine>>,
     },
     /// Health moved: a Scan started or ended, a chain was verified, the Rule
     /// Feed or the pack in force changed, or an action settled a Finding. It
@@ -721,9 +726,9 @@ pub struct Status {
     pub scan: Option<ScanSummary>,
     /// The Findings the last Scan left standing.
     pub findings: Vec<RecordedFinding>,
-    /// The Activity lines the Event Log keeps, oldest first: every change of
-    /// the Rule Pack in force, with what it withdrew, and every quarantined
-    /// Item deleted for good.
+    /// The Activity, oldest first: one line for every record of the Event
+    /// Log, and the lines this daemon's Scans left that no record stands
+    /// behind.
     pub activity: Vec<ActivityLine>,
     /// One record per Agent and per pooled project root from the last Full
     /// Scan, and the Items in the Ambiguous Band (spec section 8.1). Carried
@@ -732,34 +737,115 @@ pub struct Status {
     pub overview: Overview,
 }
 
-/// One Activity line read from the Event Log.
+/// One Activity line: one record of the Event Log as a person reads it, or a
+/// line a Scan left that no record stands behind (a consistent plugin update,
+/// a Finding gone, content changed back).
+///
+/// Everything here is free of content and of sensitive values (spec section
+/// 5.5): the line names the Item and what was done to it, and the technical
+/// columns the Developer Posture shows beside it are ids and hashes the
+/// record carries, never a sensitive field's hash.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivityLine {
-    /// The sequence of the record it was built from.
-    pub sequence: u64,
-    /// When that record was written.
+    /// The sequence of the record it was built from, absent for a line no
+    /// record stands behind.
+    pub sequence: Option<u64>,
+    /// When that record was written, or when the Scan that left the line ran.
     pub recorded_at: Timestamp,
     /// The line, free of content and of sensitive values.
     pub line: String,
+    /// Who caused it, as the record spells it (`auto`, `user`, `restore`),
+    /// empty where the record names nobody.
+    pub actor: String,
+    /// What the record is: the action of spec section 5.5, or the record kind
+    /// beside the events (`rule-pack`, `chain-restart`, `integrity`). Empty
+    /// for a line no record stands behind.
+    pub action: String,
+    /// The Item it is about, empty where it is about no single Item.
+    pub item_id: String,
+    /// The content hash the action was bound to, empty where none applies.
+    pub content_hash: String,
+    /// The Rule behind it, zero where no Rule applies.
+    pub rule_id: i64,
+    /// The Receipt it belongs to, empty where none applies.
+    pub receipt_id: String,
+    /// False for a record of an earlier key generation, which no key in hand
+    /// can verify: the line is shown with the unverified mark.
+    pub verified: bool,
+}
+
+impl Default for ActivityLine {
+    /// A verified line with nothing in it, which a test fills in.
+    fn default() -> ActivityLine {
+        ActivityLine {
+            sequence: None,
+            recorded_at: Timestamp::from_unix_ms(0),
+            line: String::new(),
+            actor: String::new(),
+            action: String::new(),
+            item_id: String::new(),
+            content_hash: String::new(),
+            rule_id: 0,
+            receipt_id: String::new(),
+            verified: true,
+        }
+    }
 }
 
 impl ActivityLine {
-    fn to_value(&self) -> Value {
+    /// The line as the wire carries it.
+    pub fn to_value(&self) -> Value {
         let mut map = Map::new();
+        map.insert("action".to_string(), Value::from(self.action.as_str()));
+        map.insert("actor".to_string(), Value::from(self.actor.as_str()));
+        map.insert(
+            "content_hash".to_string(),
+            Value::from(self.content_hash.as_str()),
+        );
+        map.insert("item_id".to_string(), Value::from(self.item_id.as_str()));
         map.insert("line".to_string(), Value::from(self.line.as_str()));
+        map.insert(
+            "receipt_id".to_string(),
+            Value::from(self.receipt_id.as_str()),
+        );
         map.insert(
             "recorded_at".to_string(),
             Value::from(self.recorded_at.to_string()),
         );
-        map.insert("sequence".to_string(), Value::from(self.sequence));
+        map.insert("rule_id".to_string(), Value::from(self.rule_id));
+        if let Some(sequence) = self.sequence {
+            map.insert("sequence".to_string(), Value::from(sequence));
+        }
+        map.insert("verified".to_string(), Value::from(self.verified));
         Value::Object(map)
     }
 
-    fn from_value(value: &Value) -> Option<ActivityLine> {
+    /// Reads back what [`ActivityLine::to_value`] wrote. The columns came
+    /// with the Activity pane, so a daemon from before sends only the line,
+    /// its moment and its sequence, which read as a verified line with no
+    /// columns.
+    pub fn from_value(value: &Value) -> Option<ActivityLine> {
+        let text = |field: &str| {
+            value
+                .get(field)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
         Some(ActivityLine {
-            sequence: value.get("sequence")?.as_u64()?,
+            sequence: value.get("sequence").and_then(Value::as_u64),
             recorded_at: Timestamp::parse(value.get("recorded_at")?.as_str()?)?,
             line: value.get("line")?.as_str()?.to_string(),
+            actor: text("actor"),
+            action: text("action"),
+            item_id: text("item_id"),
+            content_hash: text("content_hash"),
+            rule_id: value.get("rule_id").and_then(Value::as_i64).unwrap_or(0),
+            receipt_id: text("receipt_id"),
+            verified: value
+                .get("verified")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
         })
     }
 }
@@ -1728,10 +1814,17 @@ impl Message {
                             map.insert("finding".to_string(), finding.to_value());
                         }
                     }
-                    StateEvent::Activity { line, sequence } => {
+                    StateEvent::Activity {
+                        line,
+                        sequence,
+                        entry,
+                    } => {
                         map.insert("line".to_string(), Value::from(line.as_str()));
                         if let Some(sequence) = sequence {
                             map.insert("sequence".to_string(), Value::from(*sequence));
+                        }
+                        if let Some(entry) = entry {
+                            map.insert("entry".to_string(), entry.to_value());
                         }
                     }
                     StateEvent::HealthChanged { health } => {
@@ -1819,6 +1912,10 @@ impl Message {
                     "activity" => StateEvent::Activity {
                         line: text("line")?.to_string(),
                         sequence: value.get("sequence").and_then(Value::as_u64),
+                        entry: value
+                            .get("entry")
+                            .and_then(ActivityLine::from_value)
+                            .map(Box::new),
                     },
                     "health-changed" => StateEvent::HealthChanged {
                         health: Box::new(health_from_value(value.get("health")?)?),
@@ -1953,10 +2050,28 @@ mod tests {
         round_trip(Message::Event(StateEvent::Activity {
             line: "Rule Pack 2 accepted".to_string(),
             sequence: None,
+            entry: None,
         }));
         round_trip(Message::Event(StateEvent::Activity {
             line: "Rule 0001 was withdrawn by Rule Pack 2.".to_string(),
             sequence: Some(7),
+            entry: None,
+        }));
+        round_trip(Message::Event(StateEvent::Activity {
+            line: "You restored the skill 'setup'.".to_string(),
+            sequence: Some(9),
+            entry: Some(Box::new(ActivityLine {
+                sequence: Some(9),
+                recorded_at: Timestamp::parse("2026-09-24T08:00:01.000Z").expect("a moment"),
+                line: "You restored the skill 'setup'.".to_string(),
+                actor: "user".to_string(),
+                action: "restore".to_string(),
+                item_id: "claude-code/user/skill/~/.claude/skills/setup".to_string(),
+                content_hash: "abc".to_string(),
+                rule_id: 1,
+                receipt_id: "r-1".to_string(),
+                verified: false,
+            })),
         }));
         round_trip(Message::Event(StateEvent::HealthChanged {
             health: Box::new(Health {
@@ -2132,11 +2247,24 @@ mod tests {
             health,
             scan: Some(summary()),
             findings: Vec::new(),
-            activity: vec![ActivityLine {
-                sequence: 4,
-                recorded_at: moment("2026-09-24T08:00:01.000Z"),
-                line: "Rule 0001 was withdrawn by Rule Pack 2.".to_string(),
-            }],
+            activity: vec![
+                ActivityLine {
+                    sequence: Some(4),
+                    recorded_at: moment("2026-09-24T08:00:01.000Z"),
+                    line: "Rule 0001 was withdrawn by Rule Pack 2.".to_string(),
+                    action: "rule-pack".to_string(),
+                    verified: true,
+                    ..ActivityLine::default()
+                },
+                ActivityLine {
+                    sequence: None,
+                    recorded_at: moment("2026-09-24T08:00:02.000Z"),
+                    line: "Plugin warp updated 1.2 to 1.3".to_string(),
+                    item_id: "claude-code/user/plugin/warp@mkt".to_string(),
+                    verified: true,
+                    ..ActivityLine::default()
+                },
+            ],
             overview: Overview::default(),
         };
         let value = status.to_value();

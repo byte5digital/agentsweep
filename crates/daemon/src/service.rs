@@ -274,9 +274,9 @@ pub struct Daemon {
     /// just before the Full Scan the change brings, when the Findings it takes
     /// with it are the ones the last Scan left.
     pack_change: Mutex<Option<PendingPackChange>>,
-    /// The Activity lines the Event Log keeps, read once at start and
-    /// extended by every `rule-pack` and `purge` record this daemon writes.
-    activity: Mutex<Vec<ActivityLine>>,
+    /// The Activity: every line the Event Log stands for, followed after
+    /// every write, and the lines this daemon's Scans left beside them.
+    activity: Mutex<crate::activity::Kept>,
     /// True while a fetch is waiting out its jitter or running.
     fetch_pending: AtomicBool,
     /// Held by whatever decides which pack is in force from the toggle: the
@@ -449,7 +449,6 @@ impl Daemon {
                 from: (version, PackOrigin::Fetched),
             }
         });
-        let activity = activity_in_the_event_log(&directory, &*keys);
         let spend = CloudLedger::in_the_event_log(&directory, &*keys);
         let now = (tuning.due.now)();
 
@@ -481,7 +480,7 @@ impl Daemon {
         };
         health.count_open(&state);
 
-        Ok(Arc::new(Daemon {
+        let daemon = Arc::new(Daemon {
             directory,
             keys,
             machine,
@@ -506,7 +505,7 @@ impl Daemon {
             apple_helper,
             fetching: Mutex::new(()),
             pack_change: Mutex::new(pack_change),
-            activity: Mutex::new(activity),
+            activity: Mutex::new(crate::activity::Kept::default()),
             fetch_pending: AtomicBool::new(false),
             switching: Mutex::new(()),
             cache: Arc::new(EvaluationCache::new()),
@@ -517,7 +516,11 @@ impl Daemon {
             told: Mutex::new(None),
             leaving: AtomicBool::new(false),
             checking: AtomicBool::new(false),
-        }))
+        });
+        // The Activity starts as the Event Log stands, every line marked as
+        // its record is.
+        daemon.follow_the_event_log();
+        Ok(daemon)
     }
 
     /// The evaluation cache this daemon reads and fills.
@@ -614,7 +617,7 @@ impl Daemon {
                 .activity
                 .lock()
                 .expect("the Activity is not poisoned")
-                .clone(),
+                .lines(),
         }
     }
 
@@ -820,6 +823,14 @@ impl Daemon {
             *reset
         };
         let mut changed: Vec<(FindingId, String, Option<Box<RecordedFinding>>)> = Vec::new();
+        // What the Activity keeps of this Scan that no record stands behind:
+        // a consistent plugin update, content that changed back, and every
+        // Finding that went gone.
+        let mut lines: Vec<ActivityLine> = run
+            .notes
+            .iter()
+            .map(|note| crate::activity::of_note(note, run.summary.started_at))
+            .collect();
         let mut overview_changed = None;
         {
             let mut state = self.state.lock().expect("the state is not poisoned");
@@ -861,9 +872,13 @@ impl Daemon {
             }
             // A Finding the last Scan knew and this one did not derive at all
             // is gone, and the Activity keeps it.
-            for id in before.keys() {
+            for (id, was) in &before {
                 if !findings.iter().any(|finding| &finding.id == id) {
                     changed.push((id.clone(), "gone".to_string(), None));
+                    let known = state.findings.iter().find(|finding| &finding.id == id);
+                    if let Some(finding) = known.filter(|_| was != "gone") {
+                        lines.push(crate::activity::of_gone(finding, at));
+                    }
                 }
             }
 
@@ -967,6 +982,9 @@ impl Daemon {
         for (id, state, finding) in changed {
             self.publish(StateEvent::FindingChanged { id, state, finding });
         }
+        for line in lines {
+            self.keep_activity(line);
+        }
         if let Some(overview) = overview_changed {
             self.publish(StateEvent::OverviewChanged { overview });
         }
@@ -980,6 +998,10 @@ impl Daemon {
             self.compact(&run);
             self.compact_the_verdicts(&run);
         }
+        // Whatever the Scan wrote to the Event Log, an automatic Quarantine,
+        // a re-enforce, the Gate's registration or a compaction, is in the
+        // Activity before the Scan is told finished.
+        self.follow_the_event_log();
 
         self.publish(StateEvent::ScanFinished {
             summary: Box::new(run.summary),
@@ -1316,8 +1338,29 @@ impl Daemon {
         Ok(hello)
     }
 
-    /// Carries out one request.
+    /// Carries out one request, and follows the Event Log behind every one
+    /// that may have written to it.
     fn answer(self: &Arc<Daemon>, request: &Request) -> Result<serde_json::Value, RequestError> {
+        let answer = self.carry_out_request(request);
+        match request {
+            Request::Status
+            | Request::ScanNow
+            | Request::CheckNow
+            | Request::Subscribe
+            | Request::Sessions
+            | Request::Folder { .. }
+            | Request::Records { .. }
+            | Request::Gate(_) => {}
+            _ => self.follow_the_event_log(),
+        }
+        answer
+    }
+
+    /// Carries out one request.
+    fn carry_out_request(
+        self: &Arc<Daemon>,
+        request: &Request,
+    ) -> Result<serde_json::Value, RequestError> {
         match request {
             Request::Status => Ok(self.status().to_value()),
             Request::ScanNow => {
@@ -1467,32 +1510,6 @@ struct PendingPackChange {
 /// The Rules of one pack by id, with where each stands.
 fn rules_of(pack: &RulePack) -> PackRules {
     pack.metas().map(|meta| (meta.id, meta.status)).collect()
-}
-
-/// The Activity lines the Event Log keeps: every `rule-pack` record and
-/// every `purge`, each with its sequence, in the order written. A log that
-/// cannot be read has none to show; its state is the Health's to report.
-fn activity_in_the_event_log(directory: &DataDirectory, keys: &dyn KeySource) -> Vec<ActivityLine> {
-    match EventLog::in_data_directory(directory).read(keys) {
-        Ok(view) => {
-            let mut lines: Vec<ActivityLine> = view
-                .pack_activity()
-                .into_iter()
-                .map(|(sequence, recorded_at, line)| ActivityLine {
-                    sequence,
-                    recorded_at,
-                    line,
-                })
-                .collect();
-            lines.extend(crate::actions::purge_activity(&view));
-            lines.sort_by_key(|line| (line.recorded_at, line.sequence));
-            lines
-        }
-        Err(error) => {
-            say!("the Activity could not be read from the Event Log: {error}");
-            Vec::new()
-        }
-    }
 }
 
 /// The Rule Pack in force at start: the stored one when the feed is on and
@@ -1900,46 +1917,55 @@ impl Daemon {
             .collect();
         let written = open_the_event_log(&self.directory, &*self.keys)
             .and_then(|(mut writer, _)| writer.record_rule_pack(&record));
-        let envelope = match written {
-            Ok(envelope) => envelope,
+        if let Err(error) = written {
+            say!("the change of the Rule Pack could not be recorded: {error}");
+            return;
+        }
+        self.follow_the_event_log();
+    }
+
+    /// Reads the Event Log and keeps the Activity line of every record not
+    /// kept yet, sending each to every subscriber with its record's sequence.
+    ///
+    /// Every write to the Event Log is followed by this, wherever it was
+    /// made: an action, a Scan that acted by itself or compacted a store, a
+    /// change of the Judgement Engine or of the Rule Pack, the Gate's
+    /// registration, an answer to an integrity state. So the line on the
+    /// stream is the line the status carries, built from the same record.
+    /// A log that cannot be read has nothing to add; its state is the
+    /// Health's to report.
+    pub(crate) fn follow_the_event_log(&self) {
+        let mut kept = self.activity.lock().expect("the Activity is not poisoned");
+        let view = match EventLog::in_data_directory(&self.directory).read(&*self.keys) {
+            Ok(view) => view,
             Err(error) => {
-                say!("the change of the Rule Pack could not be recorded: {error}");
+                say!("the Activity could not be read from the Event Log: {error}");
                 return;
             }
         };
-        let lines: Vec<ActivityLine> = record
-            .activity()
-            .into_iter()
-            .map(|line| ActivityLine {
-                sequence: envelope.sequence,
-                recorded_at: envelope.recorded_at,
-                line,
-            })
-            .collect();
-        self.activity
-            .lock()
-            .expect("the Activity is not poisoned")
-            .extend(lines.iter().cloned());
-        for line in lines {
-            say!("{}", line.line);
-            self.publish(StateEvent::Activity {
-                line: line.line,
-                sequence: Some(line.sequence),
-            });
+        for line in kept.follow(crate::activity::of_the_event_log(&view)) {
+            self.tell_activity(line);
         }
     }
 
-    /// Keeps one Activity line an action's record stands for and sends it to
-    /// every subscriber with that record's sequence.
-    pub(crate) fn note_activity(&self, line: ActivityLine) {
-        say!("{}", line.line);
+    /// Keeps one Activity line a Scan left that no record stands behind, and
+    /// sends it to every subscriber.
+    fn keep_activity(&self, line: ActivityLine) {
         self.activity
             .lock()
             .expect("the Activity is not poisoned")
-            .push(line.clone());
+            .keep(line.clone());
+        self.tell_activity(line);
+    }
+
+    /// Sends one Activity line to every subscriber, and to the daemon's log:
+    /// a line is free of content and of sensitive values by construction.
+    fn tell_activity(&self, line: ActivityLine) {
+        say!("{}", line.line);
         self.publish(StateEvent::Activity {
-            line: line.line,
-            sequence: Some(line.sequence),
+            line: line.line.clone(),
+            sequence: line.sequence,
+            entry: Some(Box::new(line)),
         });
     }
 

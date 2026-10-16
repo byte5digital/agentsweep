@@ -50,6 +50,7 @@ macro_rules! say {
 }
 
 pub mod actions;
+pub mod activity;
 pub mod budgets;
 pub mod bundle_watch;
 pub mod change_scan;

@@ -397,6 +397,34 @@ dialog {
   margin-top: 8px;
 }
 
+/* The Activity pane (spec section 8.1): one line per record, newest first. */
+.activity {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.activity li {
+  padding: 6px 10px;
+  margin: 4px 0;
+  border-radius: 6px;
+  background: var(--card);
+}
+
+.activity li[data-focus="true"] {
+  outline: 2px solid var(--selected);
+}
+
+.activity .when {
+  margin-right: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.activity .chip {
+  margin-left: 6px;
+}
+
 /* The Settings pane (spec section 8.10): one block per setting. */
 
 .setting {

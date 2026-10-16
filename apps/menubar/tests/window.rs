@@ -953,3 +953,66 @@ fn the_window_switches_a_line_answers_a_drift_question_and_offers_the_conflict_c
 /// A skill that asks nothing suspicious, written where a quarantined one was.
 const BENIGN_SKILL: &[u8] =
     b"---\nname: setup\ndescription: Set the project up.\n---\n\nRun the tests first.\n";
+
+/// The Activity pane against a real daemon: a Quarantine's line arrives from
+/// the stream alone, on top of the list, as the status words it; the
+/// technical columns appear only once the Posture moves to Developer.
+#[test]
+fn the_activity_pane_follows_an_action_from_the_stream_newest_first() {
+    let sandbox = Sandbox::new("activity");
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let following = Following::start(&sandbox);
+
+    let status: Status = asking.status().expect("a status");
+    let mut frame = Frame::new();
+    frame.load(&status);
+    frame.settings(&asking.settings().expect("the settings"));
+    let before = frame.activity().lines().len();
+
+    let skill = status
+        .open()
+        .find(|finding| finding.item_id.as_str().ends_with("skills/setup"))
+        .expect("the planted skill's Finding")
+        .clone();
+    let quarantined = asking.act(&ActionRequest::Quarantine(skill.id.to_string()));
+    assert_eq!(quarantined["done"], true, "{quarantined}");
+    // Only `activity` events move the Activity: the frame is never loaded
+    // again here unless the stream asks for it.
+    following.until_frame(&mut frame, &asking, "the Quarantine's line", |frame| {
+        frame.activity().lines().len() > before
+    });
+    let view = frame.to_value();
+    let top = &view["activity"]["lines"][0];
+    assert_eq!(top["line"], "You quarantined the skill 'setup'.", "{view}");
+    assert!(top["technical"].is_null(), "Simple shows no columns: {top}");
+    assert!(top["sequence"].is_u64(), "{top}");
+    let kept = asking
+        .status()
+        .expect("a status")
+        .activity
+        .into_iter()
+        .find(|line| line.sequence == top["sequence"].as_u64())
+        .expect("the same line in the status");
+    assert_eq!(kept.line, "You quarantined the skill 'setup'.");
+
+    let mut other = Client::connect_at(&sandbox.socket, Role::App).expect("a second connection");
+    other
+        .change_settings(SettingsChange {
+            posture: Some(Posture::Developer),
+            ..SettingsChange::default()
+        })
+        .expect("the Posture moved");
+    following.until_frame(&mut frame, &asking, "the Developer Posture", |frame| {
+        frame.posture() == Posture::Developer
+    });
+    let top = frame.to_value()["activity"]["lines"][0].clone();
+    assert_eq!(top["technical"]["action"], "quarantine", "{top}");
+    assert_eq!(top["technical"]["itemId"], skill.item_id.as_str(), "{top}");
+    assert_eq!(
+        top["technical"]["receiptId"],
+        kept.receipt_id.as_str(),
+        "{top}"
+    );
+    assert!(!kept.receipt_id.is_empty(), "{kept:?}");
+}

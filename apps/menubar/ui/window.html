@@ -87,8 +87,14 @@
           <section class="pane" data-pane="quarantine" hidden>
             <h2 class="pane-title"></h2>
           </section>
+          <!-- The Event Log as the daemon worded it, newest first; the
+               Developer Posture adds each record's technical columns (spec
+               section 8.1). -->
           <section class="pane" data-pane="activity" hidden>
             <h2 class="pane-title"></h2>
+            <p class="muted empty" hidden>Nothing has happened yet.</p>
+            <ol class="activity" id="activity-lines"></ol>
+            <p class="muted" id="activity-note" hidden></p>
           </section>
           <section class="pane" data-pane="settings" hidden>
             <h2 class="pane-title"></h2>

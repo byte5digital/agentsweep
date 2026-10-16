@@ -388,6 +388,7 @@ function pane(id) {
 
 function select(id) {
   selectedPane = id;
+  activityFocus = null;
   if (view) {
     render(view);
   }
@@ -509,6 +510,84 @@ function renderOverview(overview) {
   $("scan-line").textContent = overview.scan.running ? overview.scan.progress : scanAnswer;
   $("overview-summary").textContent = overview.summary ?? "";
   $("overview-summary").hidden = overview.summary === null;
+}
+
+// The record the Activity pane was asked to show, or null: the integrity
+// flows open the pane at the break or at the restart record.
+let activityFocus = null;
+// True until the pane has scrolled to that record once.
+let activityScroll = false;
+
+// The technical columns the Developer Posture shows beside a line.
+const ACTIVITY_COLUMNS = [
+  ["action", "Action"],
+  ["itemId", "Item id"],
+  ["contentHash", "Content hash"],
+  ["ruleId", "Rule id"],
+  ["receiptId", "Receipt id"],
+];
+
+// The Activity pane (spec section 8.1): the daemon's lines, newest first,
+// each with its moment and its unverified mark, and in the Developer Posture
+// the record's technical columns beside it.
+function renderActivity(activity, loaded) {
+  const node = pane("activity");
+  node.querySelector(".empty").hidden = !loaded || !activity.empty;
+  const items = activity.lines.map((line) => {
+    const item = el("li");
+    if (line.sequence !== null) {
+      item.dataset.sequence = String(line.sequence);
+    }
+    const head = el("p");
+    head.append(el("span", "when", when(line.at)));
+    head.append(el("span", "", line.line));
+    if (line.mark !== null) {
+      head.append(el("span", "chip", line.mark));
+    }
+    item.append(head);
+    if (line.technical !== null) {
+      const table = el("table", "technical");
+      for (const [key, label] of ACTIVITY_COLUMNS) {
+        if (line.technical[key] === null) {
+          continue;
+        }
+        const tr = el("tr");
+        tr.append(el("th", "", label));
+        tr.append(el("td", "", line.technical[key]));
+        table.append(tr);
+      }
+      item.append(table);
+    }
+    return item;
+  });
+  $("activity-lines").replaceChildren(...items);
+  $("activity-note").hidden = activity.note === null;
+  $("activity-note").textContent = activity.note ?? "";
+  if (activityFocus !== null) {
+    // The first record at or after the one asked for, which is the oldest
+    // line still at or past it in a list that runs newest first.
+    const at = items
+      .filter((item) => item.dataset.sequence !== undefined && Number(item.dataset.sequence) >= activityFocus)
+      .pop();
+    if (at) {
+      at.dataset.focus = "true";
+      if (activityScroll) {
+        at.scrollIntoView({ block: "center" });
+        activityScroll = false;
+      }
+    }
+  }
+}
+
+// Opens the Activity pane at the record with this sequence, or at the
+// first one after it.
+function showActivityAt(sequence) {
+  select("activity");
+  activityFocus = sequence;
+  activityScroll = true;
+  if (view) {
+    render(view);
+  }
 }
 
 // The Settings pane (spec section 8.10). Every choice is sent to the daemon
@@ -664,6 +743,7 @@ function render(list) {
   for (const id of FINDING_PANES) {
     renderFindingPane(id, list.panes[id], list.loaded);
   }
+  renderActivity(list.activity, list.loaded);
   renderAmbiguousList(list.ambiguous);
   disableActions();
 }
@@ -712,5 +792,6 @@ $("scan-folder").addEventListener("click", () =>
 
 await listen("agentsweep://findings", (event) => render(event.payload));
 await listen("agentsweep://folder", (event) => renderFolder(event.payload));
+await listen("agentsweep://activity-at", (event) => showActivityAt(event.payload));
 renderFolder(await invoke("folder"));
 render(await invoke("findings"));

@@ -22,6 +22,8 @@
 //!   Posture, and the confirmations before and after them.
 //! - [`frame`]: the window's sidebar, its counts, the two Finding panes and
 //!   the Posture the window is shown in.
+//! - [`activity`]: the Activity pane: the Event Log's lines, newest first,
+//!   followed from the stream.
 //! - [`overview`]: the Overview pane: the status sentence, the Agents, the
 //!   last check, the Rule Pack's date and the Scan in hand.
 //! - [`wording`]: how a Finding reads in the Simple Posture, and the
@@ -43,6 +45,7 @@
 #![warn(missing_docs)]
 
 pub mod actions;
+pub mod activity;
 pub mod app;
 pub mod asking;
 pub mod cli_link;

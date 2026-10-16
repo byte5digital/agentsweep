@@ -26,6 +26,7 @@ use agentsweep_ipc::protocol::{SettingsState, StateEvent, Status};
 use serde_json::{Value, json};
 
 use crate::actions::card_in;
+use crate::activity::Activity;
 use crate::developer::{ambiguous_card, offers_reveal};
 use crate::findings::{Findings, Follow};
 use crate::overview::{self, OverviewView};
@@ -145,6 +146,8 @@ pub struct Frame {
     choices: Option<SettingsState>,
     /// Where the user's own rules folder is, for the Settings pane.
     rules_folder: Option<String>,
+    /// The Activity lines of the last status, followed from the stream.
+    activity: Activity,
 }
 
 /// A follow-up that at least sends the view again.
@@ -178,6 +181,12 @@ impl Frame {
         self.health = status.health.clone();
         self.overview = status.overview.clone();
         self.last_scan = status.scan.clone();
+        self.activity.load(status);
+    }
+
+    /// The Activity the Activity pane lists.
+    pub fn activity(&self) -> &Activity {
+        &self.activity
     }
 
     /// Takes every choice, the Posture among them, from a `settings` answer
@@ -219,6 +228,7 @@ impl Frame {
         self.health = Health::unreachable(reason);
         self.overview = Overview::default();
         self.last_scan = None;
+        self.activity.clear();
         match *self == was {
             true => Follow::Nothing,
             false => Follow::Render,
@@ -237,8 +247,9 @@ impl Frame {
     }
 
     /// Applies one state event: a moved choice may change the Posture, a
-    /// Health or an `overview-changed` event moves the Overview, and every
-    /// event but those two kinds goes to the list.
+    /// Health or an `overview-changed` event moves the Overview, an
+    /// `activity` event grows the Activity, and every other event goes to
+    /// the list.
     pub fn apply(&mut self, event: &StateEvent) -> Follow {
         match event {
             StateEvent::SettingsChanged { settings } => self.settings(settings),
@@ -266,6 +277,7 @@ impl Frame {
                 self.last_scan = Some((**summary).clone());
                 at_least_render(self.findings.apply(event))
             }
+            StateEvent::Activity { .. } => self.activity.apply(event),
             other => self.findings.apply(other),
         }
     }
@@ -313,6 +325,7 @@ impl Frame {
             }
         }
         value["overview"] = self.overview().to_value();
+        value["activity"] = self.activity.view(self.posture);
         value["settings"] = self.settings_pane();
         let pane = |category: Category| -> Vec<Value> {
             self.findings

@@ -558,6 +558,28 @@ fn usage_comes_back_with_every_answer_a_refusal_included() {
     assert_eq!(answer.usage, None);
 }
 
+/// The queue asks every engine through the trait, and the Claude engine
+/// hands the usage over with the checked Verdict, so the cloud caps count
+/// what the API reported.
+#[test]
+fn the_metered_judgement_carries_the_usage_with_the_verdict() {
+    let stand_in = StandIn::serving(vec![reply(200, message("end_turn", &malicious()))]);
+    let engine = stand_in.engine(Arc::default());
+    let (request, fired) = request();
+    let (verdict, usage) = crate::judgement::judge_metered(&engine, &request, &fired);
+    assert!(
+        matches!(verdict, Ok(Verdict::Malicious { .. })),
+        "{verdict:?}"
+    );
+    assert_eq!(
+        usage,
+        Some(Usage {
+            input_tokens: 1234,
+            output_tokens: 56
+        })
+    );
+}
+
 #[test]
 fn without_a_key_nothing_is_sent() {
     let stand_in = StandIn::serving(vec![reply(200, message("end_turn", &malicious()))]);

@@ -263,11 +263,29 @@ impl fmt::Display for EngineError {
 
 impl std::error::Error for EngineError {}
 
+/// The tokens one call to a Judgement Engine took, as the engine reports
+/// them. Only the Claude API reports any (its `usage`), and the cloud caps
+/// count spend from these, never from an estimate.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Usage {
+    /// `usage.input_tokens`.
+    pub input_tokens: u64,
+    /// `usage.output_tokens`.
+    pub output_tokens: u64,
+}
+
 /// One Judgement Engine: a Prompt in, the engine's raw answer or an engine
 /// error out. One Item per call, a fresh session, no tools.
 pub trait JudgementEngine {
     /// Asks the engine about the one Item in `prompt`.
     fn judge(&self, prompt: &Prompt) -> Result<String, EngineError>;
+
+    /// The same, with the usage the engine reported for the call. A local
+    /// engine reports none, which is the default; the Claude API engine
+    /// reports the `usage` of every answer it was billed for.
+    fn judge_metered(&self, prompt: &Prompt) -> (Result<String, EngineError>, Option<Usage>) {
+        (self.judge(prompt), None)
+    }
 }
 
 /// A Judgement Engine for tests: it answers from a script, one entry per
@@ -455,6 +473,22 @@ pub fn judge(
     let prompt = Prompt::for_request(request)?;
     let answer = engine.judge(&prompt);
     check(answer, request, fired)
+}
+
+/// The same, with the usage the engine reported for the call, which the
+/// cloud caps count. A request that could not be put into a Prompt reached no
+/// engine and used nothing.
+pub fn judge_metered(
+    engine: &dyn JudgementEngine,
+    request: &JudgementRequest,
+    fired: &[FiredHeuristic],
+) -> (Result<Verdict, NoVerdict>, Option<Usage>) {
+    let prompt = match Prompt::for_request(request) {
+        Ok(prompt) => prompt,
+        Err(no) => return (Err(no), None),
+    };
+    let (answer, usage) = engine.judge_metered(&prompt);
+    (check(answer, request, fired), usage)
 }
 
 /// The deterministic checks on one engine outcome, in their fixed order:

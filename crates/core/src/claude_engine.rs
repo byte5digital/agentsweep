@@ -36,6 +36,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+pub use crate::judgement::Usage;
 use crate::judgement::{EngineError, JudgementEngine, Prompt};
 use crate::judgement_request::{ByteEstimate, Normalisation, RequestBuilder};
 use crate::keychain::ClaudeKeyStore;
@@ -73,16 +74,6 @@ pub const LONGEST_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// The largest answer body read.
 const LARGEST_ANSWER: u64 = 1024 * 1024;
-
-/// The tokens one call to the Claude API took, as the API reports them in
-/// `usage`. Spend is computed from these, never from an estimate.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Usage {
-    /// `usage.input_tokens`.
-    pub input_tokens: u64,
-    /// `usage.output_tokens`.
-    pub output_tokens: u64,
-}
 
 /// What one call came to: the engine's outcome, and the usage the API
 /// reported with it.
@@ -289,6 +280,11 @@ impl ClaudeEngine {
 impl JudgementEngine for ClaudeEngine {
     fn judge(&self, prompt: &Prompt) -> Result<String, EngineError> {
         self.ask(prompt).outcome
+    }
+
+    fn judge_metered(&self, prompt: &Prompt) -> (Result<String, EngineError>, Option<Usage>) {
+        let answer = self.ask(prompt);
+        (answer.outcome, answer.usage)
     }
 }
 

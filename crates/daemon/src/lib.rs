@@ -66,6 +66,7 @@ pub mod integrity;
 pub mod judgement_queue;
 pub mod log;
 pub mod machine;
+pub mod notifications;
 pub mod options;
 pub mod overview;
 pub mod peer_check;

@@ -55,9 +55,14 @@ ureq ={ version = "3.4.2", default-features = false, features = ["rustls"] }
 # The peer check of ADR 0008: whether the process on the other end of the
 # socket carries byte5's code signature. Only the daemon asks.
 core-foundation = "0.10.1"
-# Low Power Mode, read off NSProcessInfo and nothing else. The smallest
-# binding that reaches it: one class, no AppKit and no run loop.
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSProcessInfo"] }
+# Low Power Mode, read off NSProcessInfo, and the strings, the URL and the
+# array the windowless launch below hands to NSWorkspace.
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSProcessInfo", "NSString", "NSURL"] }
+# The windowless launch of the application of the daemon's own bundle when
+# there is something to tell and no application listens (spec section 6.7):
+# LaunchServices through NSWorkspace, with activation off. Nothing else of
+# AppKit is used.
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSRunningApplication", "NSWorkspace", "block2"] }
 security-framework-sys = "2.17.0"
 
 [dev-dependencies]

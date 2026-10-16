@@ -44,12 +44,13 @@ use agentsweep_core::settings::{Settings, SettingsError, SettingsFile, SettingsW
 use agentsweep_core::state::{RecordedFinding, State, StateFile, StateWriter, Trigger};
 use agentsweep_core::verdicts;
 use agentsweep_ipc::gate::{GateRequest, GateVerdict};
+use agentsweep_ipc::notifications::changes_to_value;
 use agentsweep_ipc::peer::PeerCheck;
 use agentsweep_ipc::protocol::{
-    ActivityLine, Hello, Message, Refusal, Request, RequestError, StateEvent, Status,
+    ActivityLine, Hello, Message, Refusal, Request, RequestError, Role, StateEvent, Status,
     check_version, welcome,
 };
-use agentsweep_ipc::socket::{Connection, SocketListener};
+use agentsweep_ipc::socket::{Connection, Liveness, SocketListener};
 
 use crate::bundle_watch::{self, BundleWatch, Change, Own};
 use crate::change_scan::ChangeScan;
@@ -58,6 +59,7 @@ use crate::due::{self, Occasion, PowerState, Schedule, SystemPower};
 use crate::full_scan::{FullScan, Progress, ScanRun};
 use crate::judgement_queue::{Awaiting, Engines, JudgementQueue, NoEngines, SystemEngines};
 use crate::machine::Machine;
+use crate::notifications::Launch;
 use crate::options::{KeySourceChoice, Options};
 use crate::permission::{Access, Disk, Folders, proven_readable_classes};
 use crate::rule_feed::{self, Endpoints, FeedClient, FeedTuning, Fetched, Validators};
@@ -116,6 +118,12 @@ pub struct Tuning {
     /// the month the cloud caps count by. The Mac's own clock unless a test
     /// hands in one it moves.
     pub calendar: Arc<dyn Calendar>,
+    /// What launches the application windowless when there is something to
+    /// tell and no application listens (spec section 6.7). Absent means the
+    /// application of the daemon's own bundle through LaunchServices for the
+    /// installed daemon and nothing for a developer run, so a test or a hand
+    /// run never launches anything unless it hands in a fake.
+    pub launch: Option<Launch>,
 }
 
 impl Default for Tuning {
@@ -133,6 +141,7 @@ impl Default for Tuning {
             gate: crate::gate::bundled_command(),
             engines: None,
             calendar: Arc::new(SystemCalendar),
+            launch: None,
         }
     }
 }
@@ -149,6 +158,7 @@ impl std::fmt::Debug for Tuning {
             .field("apple_helper", &self.apple_helper)
             .field("gate", &self.gate)
             .field("engines", &self.engines.is_some())
+            .field("launch", &self.launch)
             .finish_non_exhaustive()
     }
 }
@@ -208,6 +218,22 @@ enum Work {
     Full(Trigger),
     /// A Change Scan of these paths.
     Change(Batch),
+}
+
+/// One listener to the state events: what it is, where its events go, and
+/// whether its peer is still there.
+struct Subscriber {
+    role: Role,
+    sender: Sender<StateEvent>,
+    liveness: Option<Liveness>,
+}
+
+impl Subscriber {
+    /// True once the peer has hung up, which a subscribed connection would
+    /// otherwise only show when the next event fails to reach it.
+    fn has_gone(&self) -> bool {
+        self.liveness.as_ref().is_some_and(Liveness::peer_has_gone)
+    }
 }
 
 /// Everything the daemon holds while it runs.
@@ -296,7 +322,13 @@ pub struct Daemon {
     /// The due check, started once.
     due: Mutex<Option<due::DueCheck>>,
     /// Everyone listening to the state events.
-    subscribers: Mutex<Vec<Sender<StateEvent>>>,
+    subscribers: Mutex<Vec<Subscriber>>,
+    /// What launches the application of this daemon's own bundle, absent
+    /// when nothing is launched.
+    pub(crate) launch: Option<Launch>,
+    /// The un-notified changes the application was last launched for, so
+    /// one change set launches it once. In memory only.
+    pub(crate) launched: Mutex<BTreeSet<String>>,
     /// The Health the subscribers were last told about, so a change is sent
     /// once and a Health that did not move is not sent at all.
     told: Mutex<Option<Health>>,
@@ -430,6 +462,11 @@ impl Daemon {
             }),
             (None, true) => Arc::new(NoEngines),
         };
+        let launch = tuning.launch.clone().or_else(|| {
+            (!options.is_developer_run())
+                .then(Launch::of_this_bundle)
+                .flatten()
+        });
         let (settings, settings_unreadable) = settings_at_start(&directory, &*keys, &mut state);
         let (pack, discarded) = pack_at_start(&directory, &bundled, &mut state, settings.rule_feed);
         // A stored pack discarded at start is recorded like an accepted one,
@@ -513,6 +550,8 @@ impl Daemon {
             watch: Mutex::new(None),
             due: Mutex::new(None),
             subscribers: Mutex::new(Vec::new()),
+            launch,
+            launched: Mutex::new(BTreeSet::new()),
             told: Mutex::new(None),
             leaving: AtomicBool::new(false),
             checking: AtomicBool::new(false),
@@ -852,7 +891,14 @@ impl Daemon {
             };
             findings.extend(run.standing.iter().map(|found| {
                 let first_seen = state.first_seen(&found.id).unwrap_or(at);
-                let notified = state.notified_at(&found.id);
+                // A Finding whose state moved is a change of its own and is
+                // told again: one told as needing the user's decision that a
+                // Rule leaving Probation then stopped is told as stopped
+                // automatically (spec section 6.4).
+                let notified = match before.get(&found.id) == Some(&found.state.to_string()) {
+                    true => state.notified_at(&found.id),
+                    false => None,
+                };
                 let mut recorded = RecordedFinding::of(found, first_seen).notified(notified);
                 if let Some(fixed) = run.fixed_versions.get(&recorded.receipt_id) {
                     recorded.fixed_version = fixed.clone();
@@ -1007,6 +1053,7 @@ impl Daemon {
             summary: Box::new(run.summary),
         });
         self.tell_health();
+        self.launch_when_unnotified();
     }
 
     /// Points the watcher at the roots this Full Scan declared.
@@ -1198,7 +1245,20 @@ impl Daemon {
             .subscribers
             .lock()
             .expect("the subscribers are not poisoned");
-        listening.retain(|subscriber| subscriber.send(event.clone()).is_ok());
+        listening.retain(|subscriber| subscriber.sender.send(event.clone()).is_ok());
+    }
+
+    /// True while an application holds a subscription and its peer is still
+    /// there. Listeners whose peer hung up are dropped on the way.
+    pub fn app_subscribed(&self) -> bool {
+        let mut listening = self
+            .subscribers
+            .lock()
+            .expect("the subscribers are not poisoned");
+        listening.retain(|subscriber| !subscriber.has_gone());
+        listening
+            .iter()
+            .any(|subscriber| subscriber.role == Role::App)
     }
 
     /// Tells every subscriber the Health as it stands now, when it differs
@@ -1237,12 +1297,16 @@ impl Daemon {
     }
 
     /// Adds one listener and answers with the end it reads from.
-    fn subscribe(&self) -> Receiver<StateEvent> {
+    fn subscribe(&self, role: Role, liveness: Option<Liveness>) -> Receiver<StateEvent> {
         let (sender, receiver) = channel();
         self.subscribers
             .lock()
             .expect("the subscribers are not poisoned")
-            .push(sender);
+            .push(Subscriber {
+                role,
+                sender,
+                liveness,
+            });
         receiver
     }
 
@@ -1250,14 +1314,17 @@ impl Daemon {
     /// requests, or the subscribe stream.
     pub fn serve(self: &Arc<Daemon>, mut connection: Connection) {
         let peer = connection.peer();
-        match self.shake_hands(&mut connection) {
-            Ok(hello) => say!("a {} of version {} connected", hello.role, hello.version),
+        let role = match self.shake_hands(&mut connection) {
+            Ok(hello) => {
+                say!("a {} of version {} connected", hello.role, hello.version);
+                hello.role
+            }
             Err(refusal) => {
                 say!("refused {peer}: {}", refusal.detail());
                 let _ = connection.send(&Message::Refused(refusal));
                 return;
             }
-        }
+        };
 
         loop {
             let message = match connection.receive() {
@@ -1279,7 +1346,7 @@ impl Daemon {
                 return;
             };
             if request == Request::Subscribe {
-                let receiver = self.subscribe();
+                let receiver = self.subscribe(role, connection.liveness());
                 let _ = connection.send(&Message::Response {
                     id,
                     result: Ok(serde_json::Value::Bool(true)),
@@ -1411,6 +1478,9 @@ impl Daemon {
             Request::PreviewRequest { item, engine } => self
                 .preview_request(item.as_deref(), *engine)
                 .map(|preview| preview.to_value()),
+            // Answered from what the state holds; reading writes nothing.
+            Request::Unnotified => Ok(changes_to_value(&self.unnotified())),
+            Request::Notified { ids } => Ok(serde_json::json!({ "notified": self.notified(ids) })),
             // Everything else acts, and is carried out where acting lives.
             _ => self.act(request),
         }

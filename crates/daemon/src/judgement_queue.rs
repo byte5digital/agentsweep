@@ -1045,6 +1045,7 @@ impl Daemon {
             self.publish(StateEvent::OverviewChanged { overview });
         }
         self.tell_health();
+        self.launch_when_unnotified();
     }
 }
 

@@ -457,7 +457,9 @@ impl Daemon {
             | Request::AcknowledgeKeyMissing
             | Request::AcknowledgeChainBroken
             | Request::Gate(_)
-            | Request::PreviewRequest { .. } => Err(RequestError::unknown(request.as_str())),
+            | Request::PreviewRequest { .. }
+            | Request::Unnotified
+            | Request::Notified { .. } => Err(RequestError::unknown(request.as_str())),
         }
     }
 

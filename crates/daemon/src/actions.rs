@@ -498,6 +498,7 @@ impl Daemon {
             | Request::CheckNow
             | Request::Subscribe
             | Request::RuleFeed { .. }
+            | Request::GateHooks { .. }
             | Request::Sessions
             | Request::Folder { .. }
             | Request::Engine { .. }

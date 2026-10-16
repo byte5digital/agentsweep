@@ -449,6 +449,7 @@ impl Daemon {
             projects_need_permission: crate::permission::needing_permission(&state.overview),
             gate_lines: Vec::new(),
             projects_gate_off: state.overview.projects_gate_off(),
+            gate_hooks: settings.gate_hooks,
             state_file,
             settings_unreadable,
             scanning: false,
@@ -728,8 +729,12 @@ impl Daemon {
                     workers,
                     progress: &watching,
                     acts: true,
-                    // The Gate is always on until its switch arrives.
-                    gate: self.tuning.gate.as_ref(),
+                    // Off, the check neither registers nor raises a line.
+                    gate: self
+                        .tuning
+                        .gate
+                        .as_ref()
+                        .filter(|_| self.gate_hooks_enabled()),
                 }
                 .run(trigger);
                 match run {
@@ -1318,6 +1323,13 @@ impl Daemon {
                 let enabled = match enabled {
                     Some(enabled) => self.set_rule_feed(*enabled),
                     None => self.rule_feed_enabled(),
+                };
+                Ok(serde_json::json!({ "enabled": enabled }))
+            }
+            Request::GateHooks { enabled } => {
+                let enabled = match enabled {
+                    Some(enabled) => self.set_gate_hooks(*enabled)?,
+                    None => self.gate_hooks_enabled(),
                 };
                 Ok(serde_json::json!({ "enabled": enabled }))
             }

@@ -241,6 +241,10 @@ pub struct Health {
     /// with their own settings: "Gate off in this project" (spec section
     /// 7.6). A state of those projects, never a Finding.
     pub projects_gate_off: usize,
+    /// Whether the Gate switch is on (spec sections 7 and 8.10). Off means the
+    /// Gate's entries were taken away and nothing registers them again, so a
+    /// client says "off" rather than implying the Gate stands. Not a rung.
+    pub gate_hooks: bool,
     /// What the state file was found to be.
     pub state_file: StateFileHealth,
     /// True when the settings file is there and cannot be read back: the
@@ -284,6 +288,7 @@ impl Default for Health {
             projects_need_permission: 0,
             gate_lines: Vec::new(),
             projects_gate_off: 0,
+            gate_hooks: true,
             state_file: StateFileHealth::Loaded,
             settings_unreadable: false,
             scanning: false,

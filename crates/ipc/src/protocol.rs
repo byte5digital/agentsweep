@@ -257,6 +257,16 @@ pub enum Request {
         /// The toggle's new position, absent to read it.
         enabled: Option<bool>,
     },
+    /// Read the Gate switch, or set it (spec sections 7 and 8.10). Off takes
+    /// the Gate's entries and the Codex pin away from every Agent and
+    /// registers nothing until it is on again; on registers the Gate with
+    /// every detected Agent at once. Answers with where the switch stands
+    /// afterwards. It governs registration only: a `gate` request is answered
+    /// the same either way.
+    GateHooks {
+        /// The switch's new position, absent to read it.
+        enabled: Option<bool>,
+    },
     /// Whether Agent sessions appear to be running right now, detected
     /// read-only the way every action detects it. What a client asks before
     /// it confirms a Quarantine, so the confirmation can say so (spec section
@@ -331,7 +341,7 @@ pub enum Request {
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 24] = [
+    pub const NAMES: [&'static str; 25] = [
         "status",
         "scan-now",
         "check-now",
@@ -346,6 +356,7 @@ impl Request {
         "untrust",
         "reveal-receipt",
         "rule-feed",
+        "gate-hooks",
         "sessions",
         "folder-scan",
         "engine",
@@ -375,6 +386,7 @@ impl Request {
             Request::Untrust { .. } => "untrust",
             Request::RevealReceipt { .. } => "reveal-receipt",
             Request::RuleFeed { .. } => "rule-feed",
+            Request::GateHooks { .. } => "gate-hooks",
             Request::Sessions => "sessions",
             Request::Folder { .. } => "folder-scan",
             Request::Engine { .. } => "engine",
@@ -440,6 +452,9 @@ impl Request {
             }
             Request::RuleFeed {
                 enabled: Some(enabled),
+            }
+            | Request::GateHooks {
+                enabled: Some(enabled),
             } => {
                 map.insert("enabled".to_string(), Value::from(*enabled));
             }
@@ -503,6 +518,12 @@ impl Request {
                 },
             },
             "rule-feed" => Request::RuleFeed {
+                enabled: match value.get("enabled") {
+                    None | Some(Value::Null) => None,
+                    Some(enabled) => Some(enabled.as_bool()?),
+                },
+            },
+            "gate-hooks" => Request::GateHooks {
                 enabled: match value.get("enabled") {
                     None | Some(Value::Null) => None,
                     Some(enabled) => Some(enabled.as_bool()?),
@@ -873,6 +894,7 @@ pub fn health_to_value(health: &Health) -> Value {
         "projects_gate_off".to_string(),
         Value::from(health.projects_gate_off as u64),
     );
+    map.insert("gate_hooks".to_string(), Value::from(health.gate_hooks));
     map.insert(
         "projects_need_permission".to_string(),
         Value::from(health.projects_need_permission as u64),
@@ -990,6 +1012,11 @@ pub fn health_from_value(value: &Value) -> Option<Health> {
         projects_gate_off: match value.get("projects_gate_off") {
             None => 0,
             Some(count) => count.as_u64()? as usize,
+        },
+        // A daemon from before the Gate switch always registered the Gate.
+        gate_hooks: match value.get("gate_hooks") {
+            None => true,
+            Some(switch) => switch.as_bool()?,
         },
         state_file: StateFileHealth::parse(text("state_file")?)?,
         settings_unreadable: value.get("settings_unreadable")?.as_bool()?,
@@ -2158,6 +2185,10 @@ mod tests {
             Request::RuleFeed {
                 enabled: Some(true),
             },
+            Request::GateHooks { enabled: None },
+            Request::GateHooks {
+                enabled: Some(false),
+            },
             Request::Sessions,
             Request::Folder {
                 path: "/Users/someone/src/demo".to_string(),
@@ -2670,6 +2701,60 @@ mod tests {
         assert_eq!(
             health_from_value(&older).map(|health| health.projects_gate_off),
             Some(0)
+        );
+    }
+
+    /// Spec sections 7 and 8.10: Health carries the Gate switch, so a client
+    /// can say "off" rather than imply it, and a Health from a daemon from
+    /// before reads as on.
+    #[test]
+    fn a_health_carries_the_gate_switch_and_an_older_one_reads_as_on() {
+        let health = Health {
+            gate_hooks: false,
+            ..Health::running()
+        };
+        let value = health_to_value(&health);
+        assert_eq!(value["gate_hooks"], false);
+        assert_eq!(health_from_value(&value), Some(health));
+
+        let mut older = value.clone();
+        older
+            .as_object_mut()
+            .expect("an object")
+            .remove("gate_hooks");
+        assert_eq!(
+            health_from_value(&older).map(|health| health.gate_hooks),
+            Some(true)
+        );
+    }
+
+    /// The `gate-hooks` request reads the switch or sets it, like
+    /// `rule-feed`, and carries no path.
+    #[test]
+    fn the_gate_hooks_request_round_trips_and_takes_no_path() {
+        for request in [
+            Request::GateHooks { enabled: None },
+            Request::GateHooks {
+                enabled: Some(false),
+            },
+            Request::GateHooks {
+                enabled: Some(true),
+            },
+        ] {
+            let mut map = Map::new();
+            request.write_into(&mut map);
+            assert_eq!(map["request"], "gate-hooks");
+            assert_eq!(Request::read_from(&Value::Object(map)), Some(request));
+        }
+        assert!(Request::NAMES.contains(&"gate-hooks"));
+        assert!(!Request::takes_a_path("gate-hooks"));
+        assert_eq!(
+            Request::read_from(&serde_json::json!({"request": "gate-hooks", "enabled": "off"})),
+            None
+        );
+        assert_eq!(
+            Request::read_from(&serde_json::json!({"request": "gate-hooks", "path": "/tmp"})),
+            None
         );
     }
 }

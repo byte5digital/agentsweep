@@ -249,6 +249,20 @@ impl Client {
         })
     }
 
+    /// Whether the Gate switch is on.
+    pub fn gate_hooks(&mut self) -> Result<bool, ClientError> {
+        self.feed(Request::GateHooks { enabled: None })
+    }
+
+    /// Turns the Gate switch on or off, and answers with where it stands now.
+    /// Off takes the Gate's entries away from every Agent; on registers them
+    /// with every detected Agent at once.
+    pub fn set_gate_hooks(&mut self, enabled: bool) -> Result<bool, ClientError> {
+        self.feed(Request::GateHooks {
+            enabled: Some(enabled),
+        })
+    }
+
     /// Whether Agent sessions appear to be running right now. Nothing is
     /// acted on; a client asks before it confirms a Quarantine.
     pub fn sessions(&mut self) -> Result<Sessions, ClientError> {

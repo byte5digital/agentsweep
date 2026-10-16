@@ -58,6 +58,7 @@ pub mod folder_scan;
 pub mod full_scan;
 pub mod gate;
 pub mod gate_answer;
+pub mod gate_switch;
 pub mod integrity;
 pub mod judgement_queue;
 pub mod log;

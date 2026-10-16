@@ -352,11 +352,24 @@ pub enum Request {
         /// The engine whose budget the request is built under.
         engine: JudgementEngine,
     },
+    /// Every change the user has not been told about yet, each in one of the
+    /// four notification classes of spec section 8.7 or the permission class
+    /// (spec section 6.7). Nothing is written. Answers with the changes as
+    /// [`crate::notifications::changes_to_value`] lays them out.
+    Unnotified,
+    /// The application raised these changes: the daemon writes `notified_at`
+    /// in the state file so none fires twice, also across a restart. An id
+    /// the daemon does not hold any more is passed over. Answers with how
+    /// many it took.
+    Notified {
+        /// The ids of the changes, as `unnotified` named them.
+        ids: Vec<String>,
+    },
 }
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 26] = [
+    pub const NAMES: [&'static str; 28] = [
         "status",
         "scan-now",
         "check-now",
@@ -383,6 +396,8 @@ impl Request {
         "acknowledge-chain-broken",
         "gate",
         "preview-request",
+        "unnotified",
+        "notified",
     ];
 
     /// The spelling a request carries.
@@ -414,6 +429,8 @@ impl Request {
             Request::AcknowledgeChainBroken => "acknowledge-chain-broken",
             Request::Gate(_) => "gate",
             Request::PreviewRequest { .. } => "preview-request",
+            Request::Unnotified => "unnotified",
+            Request::Notified { .. } => "notified",
         }
     }
 
@@ -490,6 +507,12 @@ impl Request {
                     map.insert("item".to_string(), Value::from(item.as_str()));
                 }
                 map.insert(JUDGEMENT_ENGINE.to_string(), Value::from(engine.as_str()));
+            }
+            Request::Notified { ids } => {
+                map.insert(
+                    "ids".to_string(),
+                    Value::Array(ids.iter().map(|id| Value::from(id.as_str())).collect()),
+                );
             }
             _ => {}
         }
@@ -582,6 +605,15 @@ impl Request {
                     Some(item) => Some(item.as_str()?.to_string()),
                 },
                 engine: JudgementEngine::parse(text(JUDGEMENT_ENGINE)?)?,
+            },
+            "unnotified" => Request::Unnotified,
+            "notified" => Request::Notified {
+                ids: value
+                    .get("ids")?
+                    .as_array()?
+                    .iter()
+                    .map(|id| id.as_str().map(str::to_string))
+                    .collect::<Option<Vec<_>>>()?,
             },
             _ => return None,
         })
@@ -2441,6 +2473,11 @@ mod tests {
             Request::PreviewRequest {
                 item: None,
                 engine: JudgementEngine::Claude,
+            },
+            Request::Unnotified,
+            Request::Notified { ids: Vec::new() },
+            Request::Notified {
+                ids: vec![finding.clone(), "permission/2/0123456789ab".to_string()],
             },
         ]
     }

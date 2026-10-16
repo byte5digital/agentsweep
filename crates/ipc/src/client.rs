@@ -18,6 +18,7 @@ use agentsweep_core::settings::JudgementEngine;
 use crate::engine::{EngineChange, EngineState};
 use crate::gate::{GateRequest, GateVerdict};
 use crate::integrity::{ChainRecords, IntegrityAnswer};
+use crate::notifications::{Unnotified, changes_from_value};
 use crate::preview::RequestPreview;
 use crate::settings::{SettingsChange, SettingsState};
 
@@ -341,6 +342,26 @@ impl Client {
     /// "Scan again, trusting nothing": answers the "records tampered" state.
     pub fn acknowledge_chain_broken(&mut self) -> Result<IntegrityAnswer, ClientError> {
         self.integrity(Request::AcknowledgeChainBroken)
+    }
+
+    /// Every change the user has not been told about yet (spec section 6.7).
+    pub fn unnotified(&mut self) -> Result<Vec<Unnotified>, ClientError> {
+        let answer = self.ask(Request::Unnotified)?;
+        changes_from_value(&answer).ok_or_else(|| {
+            ClientError::Unexpected("the un-notified changes could not be read".to_string())
+        })
+    }
+
+    /// Confirms that these changes were raised, so the daemon writes
+    /// `notified_at` and none fires twice. Answers with how many the daemon
+    /// took.
+    pub fn notified(&mut self, ids: &[String]) -> Result<usize, ClientError> {
+        let answer = self.ask(Request::Notified { ids: ids.to_vec() })?;
+        answer
+            .get("notified")
+            .and_then(serde_json::Value::as_u64)
+            .map(|taken| taken as usize)
+            .ok_or_else(|| ClientError::Unexpected("the answer could not be read".to_string()))
     }
 
     fn integrity(&mut self, request: Request) -> Result<IntegrityAnswer, ClientError> {

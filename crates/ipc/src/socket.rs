@@ -71,6 +71,25 @@ impl Connection {
         self.peer
     }
 
+    /// A second handle on this connection that says whether the peer has
+    /// hung up, without reading anything off it. What the daemon keeps beside
+    /// a subscription, so it can tell an application that quit from one that
+    /// still listens before the next event would have told it. Absent when
+    /// the socket cannot be duplicated.
+    pub fn liveness(&self) -> Option<Liveness> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsFd;
+
+            let Stream::UdSocket(socket) = &self.stream;
+            socket.as_fd().try_clone_to_owned().ok().map(Liveness)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     /// Sends one message.
     pub fn send(&mut self, message: &Message) -> io::Result<()> {
         write_frame(&mut self.stream, &message.to_value())
@@ -91,6 +110,50 @@ impl Connection {
                 io::ErrorKind::InvalidData,
                 format!("not a message of this protocol: {}", summarise(&value)),
             )),
+        }
+    }
+}
+
+/// Whether the peer of one connection is still there.
+///
+/// It holds a duplicate of the connection's descriptor and only ever peeks:
+/// a subscribed peer sends nothing after its `subscribe`, so a socket that
+/// reads as closed means the peer has gone, and one with nothing to read
+/// means it is still listening.
+#[derive(Debug)]
+pub struct Liveness(#[cfg(unix)] std::os::fd::OwnedFd);
+
+impl Liveness {
+    /// True once the peer has closed its end.
+    pub fn peer_has_gone(&self) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+
+            let fd = self.0.as_raw_fd();
+            let mut byte = [0u8; 1];
+            // SAFETY: the descriptor is owned by `self` and open for as long
+            // as it lives, and the buffer is one byte the call may write.
+            let read = unsafe {
+                libc::recv(
+                    fd,
+                    byte.as_mut_ptr().cast(),
+                    1,
+                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                )
+            };
+            match read {
+                0 => true,
+                n if n > 0 => false,
+                _ => !matches!(
+                    io::Error::last_os_error().kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            false
         }
     }
 }
@@ -364,6 +427,30 @@ mod tests {
             }
             other => panic!("expected a welcome, got {other:?}"),
         }
+    }
+
+    /// A subscription's second handle tells a peer that still listens from
+    /// one that hung up, without reading anything off the connection.
+    #[test]
+    fn the_liveness_handle_sees_a_peer_hang_up() {
+        let path = temporary_socket("liveness");
+        let listener = SocketListener::bind(&path).expect("a bound socket");
+        let (hang_up, hung_up) = std::sync::mpsc::channel::<()>();
+        let client = std::thread::spawn({
+            let path = path.clone();
+            move || {
+                let connection = connect(&path).expect("a connected client");
+                let _ = hung_up.recv();
+                drop(connection);
+            }
+        });
+
+        let served = listener.accept().expect("an accepted connection");
+        let liveness = served.liveness().expect("a second handle");
+        assert!(!liveness.peer_has_gone(), "the peer still listens");
+        hang_up.send(()).expect("the client is told");
+        client.join().expect("the client thread");
+        assert!(liveness.peer_has_gone(), "the peer hung up");
     }
 
     /// The vocabulary is closed on the wire as well as in the code: an object

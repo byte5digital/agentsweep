@@ -20,6 +20,7 @@ pub mod engine;
 pub mod frame;
 pub mod gate;
 pub mod integrity;
+pub mod notifications;
 pub mod peer;
 pub mod preview;
 pub mod protocol;
@@ -29,6 +30,7 @@ pub mod socket;
 pub use client::{Client, ClientError, Subscription};
 pub use frame::{MAX_FRAME, read_frame, write_frame};
 pub use integrity::{ChainRecords, IntegrityAnswer, RECORDS_PAGE, RecordLine};
+pub use notifications::{NotificationClass, Unnotified, WINDOWLESS};
 pub use peer::{Nobody, Peer, PeerCheck, SameUser};
 pub use protocol::{
     ActionReport, AgentSessions, DO_NOT_OPEN_YET, EngineChange, EngineState, FolderFinding,
@@ -37,7 +39,7 @@ pub use protocol::{
     RequestError, RevealedReceipt, Role, SAFE_TO_OPEN, Sessions, SettingsChange, SettingsState,
     StateEvent, Status, check_version, offers, welcome,
 };
-pub use socket::{Connection, SOCKET_NAME, SocketListener, connect, default_socket_path};
+pub use socket::{Connection, Liveness, SOCKET_NAME, SocketListener, connect, default_socket_path};
 
 #[cfg(test)]
 mod tests {

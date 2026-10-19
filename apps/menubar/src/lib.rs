@@ -52,6 +52,8 @@
 //!   cards, the Ollama confirmation, the Claude consent screen and the key
 //!   handed to the daemon once.
 //! - [`uninstall`]: **Uninstall AgentSweep…**, behind a Trash seam.
+//! - [`gate`]: the Gate's Health lines, "Gate off in this project" on the
+//!   Overview and the Gate switch in the Settings pane.
 //! - [`cli_link`]: **Install command line tool**, the link in
 //!   `~/.local/bin`.
 //! - [`notifications`]: what each un-notified change says when the app
@@ -74,6 +76,7 @@ pub mod developer;
 pub mod findings;
 pub mod folder;
 pub mod frame;
+pub mod gate;
 pub mod glyph;
 pub mod how_to;
 pub mod integrity;

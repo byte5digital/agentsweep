@@ -6,16 +6,19 @@
 //! Everything here is a pure function of what the daemon said: the Health,
 //! the Agent records of the last Full Scan, the last Scan's summary and the
 //! Scan in hand as the subscribe stream reports it. The status sentence is
-//! [`Health::headline`], the one the popover and the command line interface
-//! print. When the daemon is unreachable the pane says "Protection is off."
+//! [`Health::headline_in`] the Posture, the one the popover and the command
+//! line interface print. When the daemon is unreachable the pane says "Protection is off."
 //! and offers nothing else (spec section 6.2): no Agent, no date and neither
 //! Scan action.
 //!
 //! The integrity and Protection banners replace the status sentence here as
-//! in the popover ([`crate::banner`]). The lines for projects that Need
-//! Permission and for the Gate and the AI check progress line are other
-//! screens' (spec sections 8.1 and 8.6); the window leaves their places in
-//! the layout and this view carries nothing for them yet.
+//! in the popover ([`crate::banner`]). The Gate's Health lines the sentence
+//! does not say, and "Gate off in this project" for each project that
+//! switched the check off, come from [`crate::gate`] (spec sections 8.1 and
+//! 8.6); neither offers an action. The lines for projects that Need
+//! Permission and the AI check progress line are other screens'; the window
+//! leaves their places in the layout and this view carries nothing for them
+//! yet.
 
 use agentsweep_core::health::Health;
 use agentsweep_core::overview::{AgentRecord, Overview};
@@ -26,6 +29,7 @@ use serde_json::{Value, json};
 
 use crate::banner::{self, Daemon, Shown};
 use crate::findings::{ScanLine, count, progress_line};
+use crate::gate::{self, ProjectOff};
 
 /// One Agent as the Overview names it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,6 +69,12 @@ pub struct OverviewView {
     pub summary: Option<String>,
     /// The banner that replaces the sentence, when one stands.
     pub banner: Option<Shown>,
+    /// The Gate's Health lines the sentence does not say (spec section
+    /// 6.6), in the Posture.
+    pub gate_lines: Vec<String>,
+    /// "Gate off in this project", one per project that switched the check
+    /// off for itself (spec section 7.6). Shown, never fought: no action.
+    pub gate_off: Vec<ProjectOff>,
 }
 
 impl OverviewView {
@@ -88,6 +98,14 @@ impl OverviewView {
             "actions": self.actions,
             "scan": { "running": self.scanning, "progress": self.progress },
             "summary": self.summary,
+            "gate": {
+                "lines": self.gate_lines,
+                "projects": self
+                    .gate_off
+                    .iter()
+                    .map(|project| json!({ "project": project.project, "line": project.line }))
+                    .collect::<Vec<_>>(),
+            },
         })
     }
 }
@@ -130,11 +148,19 @@ pub fn view(
             progress: String::new(),
             summary: None,
             banner: banner::choose(health, &Daemon::Off).map(|banner| banner.shown(posture)),
+            gate_lines: Vec::new(),
+            gate_off: Vec::new(),
         };
     }
+    let sentence = health.headline_in(posture);
     OverviewView {
         off: false,
-        sentence: health.headline(),
+        gate_lines: gate::health_lines(health, posture)
+            .into_iter()
+            .filter(|line| *line != sentence)
+            .collect(),
+        gate_off: gate::projects_off(overview, posture),
+        sentence,
         agents: overview
             .agents
             .iter()
@@ -529,5 +555,67 @@ mod tests {
             let value = of_status(&status, posture).to_value().to_string();
             assert!(!value.contains('\u{2014}'), "{value}");
         }
+    }
+    /// Spec sections 7.6, 8.1 and 8.6: a project whose own settings switch
+    /// the check off is named with "Gate off in this project", and the line
+    /// carries nothing that could change the project's settings.
+    #[test]
+    fn a_project_with_the_gate_off_is_shown_and_not_fought() {
+        let mut status = status();
+        status.overview.projects[0].agents[0].gate_off = true;
+        status.health.projects_gate_off = 1;
+        status.health.open_threats = 0;
+        for (posture, project, sentence) in [
+            (Posture::Simple, "demo", "1 project switched off the check."),
+            (
+                Posture::Developer,
+                "~/work/demo (Claude Code)",
+                "Gate off in 1 project.",
+            ),
+        ] {
+            let view = of_status(&status, posture);
+            assert_eq!(view.sentence, sentence);
+            assert!(view.gate_lines.is_empty(), "the sentence says it once");
+            let value = view.to_value();
+            assert_eq!(
+                value["gate"]["projects"],
+                serde_json::json!([{ "project": project, "line": "Gate off in this project" }])
+            );
+            let entry = value["gate"]["projects"][0].as_object().expect("an entry");
+            assert_eq!(entry.len(), 2, "no action beside the line: {entry:?}");
+        }
+    }
+
+    /// The Gate lines the sentence does not say are listed on the Overview,
+    /// in the Posture's wording.
+    #[test]
+    fn the_gate_lines_under_a_worse_rung_are_listed() {
+        use agentsweep_core::health::{GateLine, GateTrouble};
+
+        let mut status = status();
+        status.health.projects_need_permission = 1;
+        status.health.projects_gate_off = 2;
+        status.health.gate_lines = vec![GateLine {
+            agent: "claude-code".to_string(),
+            name: "Claude Code".to_string(),
+            trouble: GateTrouble::RegistrationFailed,
+        }];
+        let simple = of_status(&status, Posture::Simple);
+        assert_eq!(
+            simple.gate_lines,
+            [
+                "2 projects switched off the check.",
+                "The check could not be added to Claude Code."
+            ]
+        );
+        let developer = of_status(&status, Posture::Developer);
+        assert_eq!(
+            developer.gate_lines,
+            [
+                "Gate off in 2 projects.",
+                "Gate registration failed: Claude Code."
+            ]
+        );
+        assert!(developer.gate_off.is_empty(), "no project record says so");
     }
 }

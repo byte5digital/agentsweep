@@ -5,9 +5,10 @@
 //! no progress count in either Posture; while a Scan runs the sentence is
 //! "Checking now." and nothing more.
 //!
-//! The sentence is [`Health::headline`], the one the command line interface
-//! prints, so the app and the terminal say the same thing about the same
-//! machine.
+//! The sentence is [`Health::headline_in`] the Posture, so the app and the
+//! command line interface say the same thing about the same machine; only
+//! the Gate lines read otherwise in the Developer Posture (spec section
+//! 6.6).
 
 use agentsweep_core::health::{Health, Rung};
 use agentsweep_core::settings::Posture;
@@ -73,8 +74,11 @@ impl Off {
 pub struct View {
     /// The orb, and the menu bar glyph with it.
     pub orb: Orb,
-    /// The one sentence.
+    /// The one sentence, as the Simple Posture says it.
     pub sentence: String,
+    /// The sentence in the Developer Posture where it reads otherwise, which
+    /// is only on the Gate rung (spec section 6.6).
+    pub developer_sentence: Option<String>,
     /// When the last Full Scan finished, RFC 3339, absent before the first.
     pub last_check: Option<String>,
     /// True when no daemon is there to answer: Protection is off, or the
@@ -109,6 +113,8 @@ impl View {
                 false => Orb::Clear,
             },
             sentence: health.headline(),
+            developer_sentence: Some(health.headline_in(Posture::Developer))
+                .filter(|developer| *developer != health.headline()),
             last_check: health.last_full_scan.map(|at| at.to_string()),
             protection_off: false,
             login_items: false,
@@ -131,6 +137,7 @@ impl View {
         View {
             orb: Orb::Off,
             sentence: health.headline(),
+            developer_sentence: None,
             last_check: None,
             protection_off: true,
             login_items: true,
@@ -149,6 +156,7 @@ impl View {
         View {
             orb: Orb::Off,
             sentence: health.headline(),
+            developer_sentence: None,
             last_check: None,
             protection_off: true,
             login_items: false,
@@ -163,6 +171,7 @@ impl View {
         View {
             orb: Orb::Updating,
             sentence: "AgentSweep is updating.".to_string(),
+            developer_sentence: None,
             last_check: None,
             protection_off: false,
             login_items: false,
@@ -178,6 +187,7 @@ impl View {
         View {
             orb: Orb::Updating,
             sentence: "AgentSweep registered its background item again.".to_string(),
+            developer_sentence: None,
             last_check: None,
             protection_off: false,
             login_items: false,
@@ -199,6 +209,14 @@ impl View {
         View::off(&Off::Unreachable("no daemon answered yet".to_string()))
     }
 
+    /// The sentence in a Posture.
+    pub fn sentence_in(&self, posture: Posture) -> &str {
+        match (posture, &self.developer_sentence) {
+            (Posture::Developer, Some(developer)) => developer,
+            _ => &self.sentence,
+        }
+    }
+
     /// The value the frontend receives in a Posture. A banner replaces the
     /// sentence and the line under it, so neither is sent beside one.
     pub fn to_value(&self, posture: Posture) -> Value {
@@ -206,7 +224,7 @@ impl View {
         let replaced = banner.is_some();
         json!({
             "orb": self.orb.as_str(),
-            "sentence": (!replaced).then_some(self.sentence.as_str()),
+            "sentence": (!replaced).then_some(self.sentence_in(posture)),
             "lastCheck": self.last_check,
             "protectionOff": self.protection_off,
             "loginItems": self.login_items,
@@ -481,5 +499,45 @@ mod tests {
             assert!(!view.sentence.contains('\u{2014}'));
             assert!(!view.detail.contains('\u{2014}'));
         }
+    }
+
+    /// Spec sections 6.6 and 8.6: the Gate lines in the popover, in the
+    /// wording of each Posture.
+    #[test]
+    fn the_gate_rung_reads_in_the_wording_of_each_posture() {
+        use agentsweep_core::health::{GateLine, GateTrouble};
+
+        let mut health = Health::running();
+        health.projects_gate_off = 2;
+        let view = View::of(&health);
+        assert_eq!(
+            view.to_value(Posture::Simple)["sentence"],
+            "2 projects switched off the check."
+        );
+        assert_eq!(
+            view.to_value(Posture::Developer)["sentence"],
+            "Gate off in 2 projects."
+        );
+
+        health.projects_gate_off = 0;
+        health.gate_lines = vec![GateLine {
+            agent: "claude-code".to_string(),
+            name: "Claude Code".to_string(),
+            trouble: GateTrouble::ManagedPolicy,
+        }];
+        let view = View::of(&health);
+        assert_eq!(view.orb, Orb::Attention);
+        assert_eq!(
+            view.to_value(Posture::Simple)["sentence"],
+            "Your organisation's policy blocks the check."
+        );
+        assert_eq!(
+            view.to_value(Posture::Developer)["sentence"],
+            "Gate blocked by managed policy."
+        );
+
+        // Every other rung reads the same in both.
+        let quiet = View::of(&Health::running());
+        assert_eq!(quiet.developer_sentence, None);
     }
 }

@@ -19,7 +19,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 use agentsweep_core::adapter::WatchRoots;
 use agentsweep_core::apple_engine::AppleHelper;
@@ -311,6 +311,9 @@ pub struct Daemon {
     activity: Mutex<crate::activity::Kept>,
     /// True while a fetch is waiting out its jitter or running.
     fetch_pending: AtomicBool,
+    /// Whether the first fetch still waits for the app's first settings
+    /// hand-over.
+    pub(crate) first_fetch: FirstFetch,
     /// Held by whatever decides which pack is in force from the toggle: the
     /// toggle itself, and a fetch putting what it accepted in force. Without
     /// it a fetch that read the toggle on could put its pack in force just
@@ -478,6 +481,14 @@ impl Daemon {
                 .flatten()
         });
         let (settings, settings_unreadable) = settings_at_start(&directory, &*keys, &mut state);
+        // Still no settings file: nothing has handed the user's choices over
+        // yet, so the first Rule Feed fetch waits for the app's first
+        // settings hand-over, or the hold at most (the owner's decision of
+        // 2026-10-14 for ticket 87).
+        let first_fetch_held = matches!(
+            SettingsFile::in_data_directory(&directory).read(),
+            Err(SettingsError::Missing)
+        ) && !tuning.feed.first_hold.is_zero();
         let (pack, discarded) = pack_at_start(&directory, &bundled, &mut state, settings.rule_feed);
         // A stored pack discarded at start is recorded like an accepted one,
         // before the first Full Scan: what it withdrew is measured against
@@ -554,6 +565,7 @@ impl Daemon {
             pack_change: Mutex::new(pack_change),
             activity: Mutex::new(crate::activity::Kept::default()),
             fetch_pending: AtomicBool::new(false),
+            first_fetch: FirstFetch::new(first_fetch_held),
             switching: Mutex::new(()),
             cache: Arc::new(EvaluationCache::new()),
             roots: Mutex::new(Vec::new()),
@@ -1608,6 +1620,49 @@ fn settings_at_start(
     }
 }
 
+/// The hold on the first Rule Feed fetch of a daemon that started with no
+/// settings file: released by the app's first settings hand-over.
+#[derive(Debug)]
+pub(crate) struct FirstFetch {
+    held: Mutex<bool>,
+    released: Condvar,
+}
+
+impl FirstFetch {
+    fn new(held: bool) -> FirstFetch {
+        FirstFetch {
+            held: Mutex::new(held),
+            released: Condvar::new(),
+        }
+    }
+
+    /// True while the first fetch waits for the hand-over.
+    fn held(&self) -> bool {
+        *self.held.lock().expect("the hold is not poisoned")
+    }
+
+    /// Releases the hold: the user's choices have been handed over.
+    pub(crate) fn release(&self) {
+        let mut held = self.held.lock().expect("the hold is not poisoned");
+        if std::mem::replace(&mut *held, false) {
+            say!("the settings were handed over; the first Rule Feed fetch is released");
+        }
+        self.released.notify_all();
+    }
+
+    /// Waits for the hand-over for `hold` at most. True when it came, false
+    /// when the hold ran out, which releases it too.
+    fn wait(&self, hold: std::time::Duration) -> bool {
+        let held = self.held.lock().expect("the hold is not poisoned");
+        let (mut held, timeout) = self
+            .released
+            .wait_timeout_while(held, hold, |held| *held)
+            .expect("the hold is not poisoned");
+        *held = false;
+        !timeout.timed_out()
+    }
+}
+
 /// A change of the Rule Pack in force that the Event Log is still to hear of.
 #[derive(Debug)]
 struct PendingPackChange {
@@ -1714,6 +1769,7 @@ impl Daemon {
     /// choice it holds. Every subscriber is told the choices as they stand.
     pub fn set_rule_feed(self: &Arc<Daemon>, enabled: bool) -> bool {
         let enabled = self.switch_rule_feed(enabled);
+        self.first_fetch.release();
         self.tell_settings();
         enabled
     }
@@ -1791,11 +1847,27 @@ impl Daemon {
             return;
         }
         let wait = rule_feed::jitter(self.tuning.feed.jitter);
+        let hold = self.tuning.feed.first_hold;
         let weak = Arc::downgrade(self);
         let started = std::thread::Builder::new()
             .name("agentsweep-rule-feed".to_string())
             .spawn(move || {
-                std::thread::sleep(wait);
+                // A first fetch still held waits for the hand-over, then for
+                // the jitter as any fetch does; a hold that runs out was the
+                // jitter window already, so the fetch goes out at once.
+                let held = weak
+                    .upgrade()
+                    .map(|daemon| daemon.first_fetch.held())
+                    .unwrap_or_default();
+                let released = match held {
+                    true => weak
+                        .upgrade()
+                        .is_some_and(|daemon| daemon.first_fetch.wait(hold)),
+                    false => true,
+                };
+                if released {
+                    std::thread::sleep(wait);
+                }
                 if let Some(daemon) = weak.upgrade() {
                     daemon.fetch_rule_feed();
                     daemon.fetch_pending.store(false, Ordering::SeqCst);

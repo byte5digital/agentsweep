@@ -169,6 +169,10 @@ impl Daemon {
         if wrote || feed_moved {
             self.tell_settings();
         }
+        // The first choice handed over releases a first Rule Feed fetch
+        // still held for it; the toggle has moved by now, so a feed switched
+        // off asks nothing.
+        self.first_fetch.release();
         Ok(self.settings_state())
     }
 

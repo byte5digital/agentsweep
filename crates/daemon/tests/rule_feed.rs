@@ -486,6 +486,21 @@ impl Sandbox {
     }
 
     fn start_at(&self, endpoints: Endpoints, at_start: bool) -> Background {
+        let jitter = match at_start {
+            true => Duration::ZERO,
+            false => Duration::from_secs(3_600),
+        };
+        self.start_tuned(endpoints, jitter, Duration::ZERO)
+    }
+
+    /// A daemon pointed at this feed whose first fetch, when it starts with
+    /// no settings file, is held for at most `hold` waiting for the app's
+    /// first settings hand-over. No jitter.
+    fn start_holding(&self, feed: &FeedServer, hold: Duration) -> Background {
+        self.start_tuned(feed.endpoints(), Duration::ZERO, hold)
+    }
+
+    fn start_tuned(&self, endpoints: Endpoints, jitter: Duration, hold: Duration) -> Background {
         let clock = self.clock.clone();
         let tuning = Tuning {
             watch: Timings::of(Duration::from_millis(100), Duration::from_millis(500)),
@@ -496,11 +511,9 @@ impl Sandbox {
             },
             feed: FeedTuning {
                 endpoints: Some(endpoints),
-                jitter: match at_start {
-                    true => Duration::ZERO,
-                    false => Duration::from_secs(3_600),
-                },
+                jitter,
                 every: Duration::from_secs(24 * 3_600),
+                first_hold: hold,
             },
             ..Tuning::default()
         };
@@ -1044,6 +1057,92 @@ fn the_fetch_is_one_request_with_no_identifiers_and_none_when_the_toggle_is_off(
         "{:?}",
         daemon.daemon().health().notes()
     );
+}
+
+/// A daemon that starts with no settings file holds its first fetch until
+/// the app's first settings hand-over, or the hold at most (the owner's
+/// decision of 2026-10-14). A hand-over that switches the feed off on
+/// onboarding screen 5 means no request at all, not even once the hold has
+/// passed; one that leaves it on releases the fetch at once.
+#[test]
+fn the_first_fetch_waits_for_the_settings_hand_over_and_none_when_it_says_off() {
+    use agentsweep_core::settings::Posture;
+    use agentsweep_ipc::protocol::SettingsChange;
+
+    let hold = Duration::from_millis(1_500);
+
+    // Switched off on screen 5: no request, before or after the hold.
+    let sandbox = Sandbox::with_a_planted_skill("held-off");
+    let feed = FeedServer::start();
+    feed.offer_index(1);
+    {
+        let daemon = sandbox.start_holding(&feed, hold);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(feed.seen().is_empty(), "held until the hand-over");
+        let state = sandbox
+            .client()
+            .change_settings(SettingsChange {
+                posture: Some(Posture::Developer),
+                rule_feed: Some(false),
+                update_check: Some(false),
+                ..SettingsChange::default()
+            })
+            .expect("the hand-over");
+        assert!(!state.rule_feed);
+        std::thread::sleep(hold + Duration::from_millis(700));
+        assert!(feed.seen().is_empty(), "{:?}", feed.seen());
+        assert!(!daemon.daemon().rule_feed_enabled());
+    }
+
+    // Left on: the hand-over releases the fetch well before the hold ends.
+    let sandbox = Sandbox::with_a_planted_skill("held-on");
+    let feed = FeedServer::start();
+    feed.offer_index(1);
+    {
+        let _daemon = sandbox.start_holding(&feed, Duration::from_secs(3_600));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(feed.seen().is_empty(), "held until the hand-over");
+        sandbox
+            .client()
+            .change_settings(SettingsChange {
+                posture: Some(Posture::Simple),
+                rule_feed: Some(true),
+                update_check: Some(true),
+                ..SettingsChange::default()
+            })
+            .expect("the hand-over");
+        assert!(until(|| feed.seen().len() == 1), "the released fetch");
+    }
+
+    // No hand-over: the fetch goes out once the hold has passed.
+    let sandbox = Sandbox::with_a_planted_skill("held-out");
+    let feed = FeedServer::start();
+    feed.offer_index(1);
+    {
+        let _daemon = sandbox.start_holding(&feed, hold);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(feed.seen().is_empty(), "held");
+        assert!(until(|| feed.seen().len() == 1), "the fetch after the hold");
+    }
+
+    // A daemon that starts with a settings file holds nothing.
+    let sandbox = Sandbox::with_a_planted_skill("held-not");
+    let feed = FeedServer::start();
+    feed.offer_index(1);
+    {
+        let _first = sandbox.start(&feed, false);
+        sandbox
+            .client()
+            .change_settings(SettingsChange {
+                posture: Some(Posture::Developer),
+                ..SettingsChange::default()
+            })
+            .expect("a settings file");
+    }
+    {
+        let _daemon = sandbox.start_holding(&feed, Duration::from_secs(3_600));
+        assert!(until(|| feed.seen().len() == 1), "no hold with settings");
+    }
 }
 
 /// The toggle is a choice the user made and lives in the settings file, so a

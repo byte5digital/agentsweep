@@ -124,6 +124,10 @@ pub struct FeedTuning {
     pub jitter: Duration,
     /// How long after one fetch the next one is due.
     pub every: Duration,
+    /// How long a daemon that starts with no settings file holds its first
+    /// fetch for the app's first settings hand-over: one hour, the jitter
+    /// window (the owner's decision of 2026-10-14). Zero holds nothing.
+    pub first_hold: Duration,
 }
 
 impl Default for FeedTuning {
@@ -132,6 +136,7 @@ impl Default for FeedTuning {
             endpoints: None,
             jitter: JITTER_AT_MOST,
             every: FETCH_EVERY,
+            first_hold: JITTER_AT_MOST,
         }
     }
 }

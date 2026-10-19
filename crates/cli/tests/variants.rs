@@ -334,6 +334,7 @@ mod crates_io {
             "rule-feed",
             "gate",
             "gate-hooks",
+            "uninstall",
             "--developer-list-items",
         ] {
             let output = run(&this_build(), &[command]);
@@ -617,6 +618,39 @@ mod bundle {
         assert_eq!(output.status.code(), Some(0), "{printed}");
         assert!(printed.contains("Last full Scan (scan-now)"), "{printed}");
         assert!(printed.ends_with("Nothing is open.\n"), "{printed}");
+    }
+
+    /// `agentsweep uninstall` without a flag is Keep: the daemon takes the
+    /// Gate it registered out of the temporary home's Claude Code settings,
+    /// keeps the data directory, takes no further work, and the command
+    /// ends by asking the user to move AgentSweep to the Trash.
+    #[test]
+    fn uninstall_without_a_flag_keeps_and_takes_the_gate_away() {
+        let daemon = Daemon::over(clean_home());
+        let settings = daemon._root.path().join("home/.claude/settings.json");
+        let gate_in = || {
+            fs::read_to_string(&settings)
+                .map(|text| text.contains("\"gate\""))
+                .unwrap_or(false)
+        };
+        assert!(gate_in(), "the Full Scan registered the Gate");
+
+        let output = run(&this_build(), &["uninstall", "--socket", &daemon.socket()]);
+        let printed = text(&output.stdout);
+        assert_eq!(output.status.code(), Some(0), "{printed}");
+        assert!(
+            printed.contains("The 0 quarantined items stay"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("move AgentSweep to the Trash"),
+            "{printed}"
+        );
+        assert!(!gate_in(), "the Gate entries are gone");
+        assert!(daemon._root.path().join("data/events.jsonl").is_file());
+
+        let refused = run(&this_build(), &["scan", "--socket", &daemon.socket()]);
+        assert_ne!(refused.status.code(), Some(0), "{}", text(&refused.stdout));
     }
 
     /// Runs the Gate as an Agent runs it, the event on stdin, under a home

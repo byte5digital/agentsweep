@@ -22,8 +22,10 @@
 //! so with the AI check off it prints the same in both. The AI check asks the
 //! Judgement Engine the settings file chooses: Ollama in both builds, Apple
 //! on-device in the in-bundle build, and the Claude engine only through the
-//! daemon, which is the one thing the in-bundle `scan <dir>` reaches it for. `uninstall`
-//! arrives with its own milestone.
+//! daemon, which is the one thing the in-bundle `scan <dir>` reaches it for.
+//! `uninstall` asks the daemon to take the Gate away and keep, restore or
+//! delete what is in quarantine, then tells the user to move the app to the
+//! Trash.
 
 #[cfg(feature = "bundle")]
 mod actions;
@@ -41,6 +43,8 @@ mod rule_feed;
 mod scan_now;
 #[cfg(feature = "bundle")]
 mod status;
+#[cfg(feature = "bundle")]
+mod uninstall;
 
 #[cfg(feature = "bundle")]
 use std::path::PathBuf;
@@ -74,6 +78,12 @@ Usage:
                           Say whether the Gate's hooks are in Claude Code and
                           Codex, or switch them on or off. Off takes them out
                           and adds nothing back until you switch it on.
+  agentsweep uninstall [--keep | --restore-all | --delete-everything]
+                          Take AgentSweep's hooks out of Claude Code and Codex
+                          and decide what happens to what is in quarantine:
+                          keep it (the default, so installing AgentSweep again
+                          picks it up), put it all back, or delete everything
+                          AgentSweep made. Then move AgentSweep to the Trash.
   agentsweep --version    Print the version.
   agentsweep --help       Print this message.
 
@@ -194,6 +204,7 @@ fn bundled(command: &str, arguments: &[String]) -> ExitCode {
         "rule-feed" => rule_feed(arguments),
         "gate" => gate(arguments),
         "gate-hooks" => gate_hooks(arguments),
+        "uninstall" => uninstall(arguments),
         command if actions::COMMANDS.contains(&command) => act(command, arguments),
         "--developer-list-items" => developer_list_items(arguments),
         "--developer-scan-items" => developer_scan_items(arguments),
@@ -343,6 +354,21 @@ fn gate_hooks(arguments: &[String]) -> ExitCode {
         }
     };
     let (rendered, code) = gate_hooks::run(&invocation);
+    print!("{rendered}");
+    ExitCode::from(code)
+}
+
+/// Uninstall through the daemon, then the step left to the user.
+#[cfg(feature = "bundle")]
+fn uninstall(arguments: &[String]) -> ExitCode {
+    let invocation = match uninstall::parse(arguments) {
+        Ok(invocation) => invocation,
+        Err(reason) => {
+            eprintln!("agentsweep: {reason}\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    let (rendered, code) = uninstall::run(&invocation);
     print!("{rendered}");
     ExitCode::from(code)
 }

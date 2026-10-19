@@ -92,6 +92,7 @@ pub mod link;
 pub mod notifications;
 pub mod onboarding;
 pub mod overview;
+pub mod permission;
 pub mod placement;
 pub mod popover;
 pub mod quarantine;

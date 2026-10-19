@@ -18,9 +18,8 @@
 //! 8.6); neither offers an action. The AI check's lines are
 //! [`crate::verdict`]'s: the cap line in both Postures, and the queue
 //! progress line in the Developer Posture, which the window's frame fills in
-//! from the stream. The lines for projects that Need Permission are another
-//! screen's; the window leaves their place in the layout and this view
-//! carries nothing for them yet.
+//! from the stream. The line for projects that Need Permission, with
+//! **Check now**, is [`crate::permission`]'s.
 
 use agentsweep_core::health::Health;
 use agentsweep_core::overview::{AgentRecord, Overview};
@@ -32,6 +31,7 @@ use serde_json::{Value, json};
 use crate::banner::{self, Daemon, Shown};
 use crate::findings::{ScanLine, count, progress_line};
 use crate::gate::{self, ProjectOff};
+use crate::permission::{self, CheckNow, PermissionView};
 
 /// One Agent as the Overview names it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,6 +84,9 @@ pub struct OverviewView {
     /// The fixed cap line while a cap of AI Judgement holds Items back, in
     /// both Postures ([`crate::verdict::cap_line`]).
     pub cap: Option<String>,
+    /// "N projects not checked" with **Check now**, absent when no project
+    /// Needs Permission and while Protection is off.
+    pub permission: Option<PermissionView>,
 }
 
 impl OverviewView {
@@ -117,6 +120,7 @@ impl OverviewView {
             },
             "aiCheck": self.ai_check,
             "cap": self.cap,
+            "permission": self.permission.as_ref().map(PermissionView::to_value),
         })
     }
 }
@@ -163,6 +167,7 @@ pub fn view(
             gate_off: Vec::new(),
             ai_check: None,
             cap: None,
+            permission: None,
         };
     }
     let sentence = health.headline_in(posture);
@@ -198,6 +203,7 @@ pub fn view(
         banner: banner::choose(health, &Daemon::Answering).map(|banner| banner.shown(posture)),
         ai_check: None,
         cap: crate::verdict::cap_line(health),
+        permission: permission::view(overview, posture, CheckNow::Idle),
     }
 }
 
@@ -284,7 +290,7 @@ mod tests {
     use super::*;
 
     use agentsweep_core::envelope::Timestamp;
-    use agentsweep_core::overview::{ProjectAgent, ProjectRecord};
+    use agentsweep_core::overview::{ProjectAgent, ProjectCheck, ProjectRecord};
     use agentsweep_core::packs::PackOrigin;
     use agentsweep_core::scan_pass::ScanKind;
     use agentsweep_core::state::Trigger;
@@ -557,6 +563,41 @@ mod tests {
         assert_eq!(value["scan"]["running"], false);
         assert_eq!(value["scan"]["progress"], "");
         assert!(value["summary"].is_string());
+    }
+
+    /// A project that Needs Permission: the popover's sentence is the Health
+    /// rung, never an all-clear, and the pane names the project per Posture.
+    #[test]
+    fn a_project_that_needs_permission_has_its_line_and_the_popovers_sentence() {
+        let mut status = status();
+        status.health.open_threats = 0;
+        status.health.projects_need_permission = 1;
+        status.overview.projects.push(ProjectRecord {
+            root: "/Users/someone/Documents/shop".to_string(),
+            agents: Vec::new(),
+            check: ProjectCheck::NeedsPermission,
+        });
+        let simple = of_status(&status, Posture::Simple);
+        assert_eq!(simple.sentence, "1 project needs permission.");
+        assert_eq!(simple.sentence, status.health.headline());
+        let line = simple.permission.expect("the line");
+        assert_eq!(line.line, "1 project not checked.");
+        assert_eq!(line.projects, vec!["shop"]);
+        let developer = of_status(&status, Posture::Developer);
+        assert_eq!(
+            developer.permission.expect("the line").projects,
+            vec!["/Users/someone/Documents/shop"]
+        );
+        assert!(of_status(&status, Posture::Simple).to_value()["permission"].is_object());
+
+        status.health = Health::unreachable("gone");
+        assert_eq!(of_status(&status, Posture::Simple).permission, None);
+    }
+
+    #[test]
+    fn a_status_with_no_such_project_has_no_permission_line() {
+        let value = of_status(&status(), Posture::Developer).to_value();
+        assert!(value["permission"].is_null());
     }
 
     #[test]

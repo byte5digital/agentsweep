@@ -34,6 +34,7 @@ use crate::developer::{ambiguous_card, offers_reveal};
 use crate::findings::{Findings, Follow};
 use crate::gate;
 use crate::overview::{self, OverviewView};
+use crate::permission::{self, CheckNow};
 use crate::popover::View;
 use crate::quarantine;
 use crate::settings_pane;
@@ -164,6 +165,8 @@ pub struct Frame {
     absent: Option<Banner>,
     /// How far the AI Judgement queue has got, from the stream.
     queue: Queue,
+    /// Where **Check now** stands in this run of the app.
+    check_now: CheckNow,
 }
 
 /// A follow-up that at least sends the view again.
@@ -401,8 +404,27 @@ impl Frame {
         }
         if !view.off {
             view.ai_check = verdict::progress_line(self.queue, self.posture);
+            view.permission = permission::view(&self.overview, self.posture, self.check_now);
         }
         view
+    }
+
+    /// Marks **Check now** sent, which disables it until the daemon
+    /// answers. False, and nothing changes, while one already waits.
+    pub fn check_now_sent(&mut self) -> bool {
+        match self.check_now {
+            CheckNow::Sending => false,
+            CheckNow::Idle | CheckNow::Answered => {
+                self.check_now = CheckNow::Sending;
+                true
+            }
+        }
+    }
+
+    /// Marks **Check now** answered: the button is offered again, and while
+    /// projects still Need Permission the link to System Settings shows.
+    pub fn check_now_answered(&mut self) {
+        self.check_now = CheckNow::Answered;
     }
 
     /// The Quarantine pane as it stands: every Item in quarantine and the
@@ -881,6 +903,47 @@ mod tests {
 
     /// The Agents, the progress and the last Scan follow the stream, and the
     /// sentence follows Health on it.
+    /// Check now is sent once and disabled until the daemon answers; the
+    /// link to System Settings shows after the answer while a project still
+    /// Needs Permission.
+    #[test]
+    fn check_now_waits_for_the_answer_and_then_offers_the_privacy_link() {
+        use agentsweep_core::overview::{ProjectCheck, ProjectRecord};
+        let mut status = Status {
+            health: Health::running(),
+            scan: None,
+            findings: Vec::new(),
+            activity: Vec::new(),
+            overview: Overview::default(),
+        };
+        status.overview.projects.push(ProjectRecord {
+            root: "/Users/someone/Documents/shop".to_string(),
+            agents: Vec::new(),
+            check: ProjectCheck::NeedsPermission,
+        });
+        let mut frame = Frame::new();
+        frame.load(&status);
+        let idle = frame.overview().permission.expect("the line");
+        assert!(idle.enabled && idle.privacy.is_none());
+
+        assert!(frame.check_now_sent());
+        assert!(!frame.check_now_sent(), "sent once while it waits");
+        let sending = frame.overview().permission.expect("the line");
+        assert!(!sending.enabled);
+        assert!(sending.privacy.is_none());
+
+        frame.check_now_answered();
+        let answered = frame.overview().permission.expect("the line");
+        assert!(answered.enabled);
+        assert!(answered.privacy.is_some());
+        assert!(frame.to_value()["overview"]["permission"]["privacy"].is_object());
+
+        // Once the project is checked, the line goes.
+        status.overview.projects[0].check = ProjectCheck::Checked;
+        frame.load(&status);
+        assert_eq!(frame.overview().permission, None);
+    }
+
     #[test]
     fn the_overview_follows_the_stream() {
         let mut frame = Frame::new();

@@ -433,6 +433,23 @@ The wording of every notification, for the owner to read on the dogfooding day (
 
 Seams in the suite: `notifications::tests` in the app (the title and body of each of the five classes, no AI wording for "needs you", no id or path in any notification, which stream events may carry one, and the activation that opens Needs your decision after a notification and nothing on an ordinary reopen), `window::tests` in the app (the windowless argument starts into the menu bar with no window, without it the app starts as before), `the_app_raises_each_change_once_on_launch_and_from_the_stream` in the app's `window` integration tests (a recording notifier against a real daemon on a temporary home: raised once on launch, nothing on a second launch, a new Finding raised from the stream), and the `LSUIElement` test of the app's launch agent module.
 
+## 18. The AI check in Settings, and one live Claude call with a real key
+
+This check needs the hand install of section 1 and, for its last half, a paid Claude API key of your own. It is the only place a real key and a real Claude call are used: the suite never makes the call, and its tests hand a defanged key to a daemon whose key store is held in memory. Never paste the key into a terminal, a file, a ticket or a log; type or paste it only into the consent screen's key field.
+
+- [ ] Settings shows the AI check with four cards: Apple on-device, Ollama on this Mac, Claude over the internet and Off, each with one line on what leaves the Mac, and exactly one selected. In the Simple Posture the section is called "AI check" and says it never decides anything by itself.
+- [ ] With Ollama running and a model of 4B or more pulled, choosing the Ollama card asks once, naming that model and saying Ollama is asked on this Mac only. Without Ollama, the card cannot be chosen and says why.
+- [ ] Under Advanced, typing `192.168.1.20:11434` as the Ollama address is refused at once with "Nothing was changed: ..." and the address stays as it was; `localhost:11434` is taken.
+- [ ] Choosing the Claude card opens the consent screen: a table of what, to whom, when and cost, the cost row naming 25 items per check, 200 per day and $5 per month. **Preview a request** shows the sample request, with `<redacted:type:len>` where a secret was. "I agree, turn it on" stays greyed out until something is typed into the key field.
+- [ ] Paste the key and press "I agree, turn it on": the field empties at once, the Claude card is selected, the line under the cards says the change was recorded, and the key reads "Key set, ending in ..." with its last four characters. Activity lists the key added and the engine turned on. The app shows nothing more of the key than those four characters, and `grep -r` over the data directory for the first eight characters of the key finds nothing.
+- [ ] Plant one defanged Item that lands in the Ambiguous Band (as in section 12) and press Scan now: the daemon makes one Claude call for it, the Developer Posture's Overview names Claude as the engine, and the Item ends with a Verdict or stays Ambiguous. Settings shows "Today 1 of 200 items" with this month's spend.
+- [ ] In the Developer Posture, Advanced shows "Claude model id (unsupported)" with the line that it is outside the eval. Leave it empty.
+- [ ] Press **Remove the key**: the Off card is selected, the key line is gone, the line says the change was recorded, and Activity lists the key removed and the engine turned off.
+
+Afterwards delete the planted Item and revoke the key in the Anthropic console if it was made for this check.
+
+Seams in the suite: `ai_check::tests` in the app (the four cards per Posture, an engine outside the eval bar or not measured disabled in Simple and warned in Developer, the Ollama confirmation naming the model the daemon reports, a non-loopback address refused before it is sent, the consent table and the three caps, the key line, the cap-reached and unpriced lines, the recorded line), and the app's `ai_check` integration tests against a daemon on a temporary home (the key handed over once and found in no app state, view or file afterwards, removing it turning the card to off, every engine change recorded, and the preview showing the daemon's redacted request verbatim).
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.

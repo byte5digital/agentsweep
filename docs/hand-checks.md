@@ -302,6 +302,16 @@ cp rules/0001-decode-pipe-exec/bad/skill-base64-pipe-bash/tree/SKILL.md ~/.claud
 
 Seams in the suite: the daemon's `notifications` integration tests (each class on a temporary home, `notified_at` written and kept across a restart, nothing for the Ambiguous Band or a daily Full Scan with nothing new, and the launcher seam called once with the bundle's own app and the windowless argument only while no app is subscribed), `notifications::tests` in the daemon (the class of every Finding state and source, records changed once per break, the permission count), `a_benign_or_an_unsure_verdict_and_the_ambiguous_band_leave_nothing_to_notify` in the daemon's AI Judgement queue tests, and `the_liveness_handle_sees_a_peer_hang_up` in the socket tests.
 
+## 15. Show me how to fix this opens the file in the default editor
+
+This check needs the hand install of section 1 and one Exposure Finding in Worth fixing. It plants nothing: use an Exposure the window already lists. If there is none, skip the check and note it under Record of runs; do not loosen your own settings to make one.
+
+- [ ] On the Exposure, **Show me how to fix this** comes first among its buttons and opens the how-to under them: a few plain sentences, the line "The file:" with the file's name only (for example `settings.json`), and **Open the file**. The how-to quotes no value from the file. No Exposure offers Quarantine; on an approvals or unrestricted-shell setting, **Take this setting out** is still there.
+- [ ] **Open the file** opens exactly that file in your default text editor (TextEdit unless you chose another for plain text), and the answer beside the Finding says it was opened. Nothing else opens, and the app asks for no permission to read the file.
+- [ ] In Settings, switch to the Developer Posture: the same how-to names the file by its full path, and **Open the file** opens the same file.
+
+Seams in the suite: `how_to::tests` in the app (the file by its name in Simple and its path in Developer, no sensitive value in the how-to, only an open Exposure with its how-to and its file offers one, and a fake Opener handed exactly the path the daemon sent, a path that does not exist, so the app never reads the file), `every_exposure_offers_its_how_to_and_never_quarantine` in the app's actions tests, `every_exposure_of_the_bundled_pack_carries_a_how_to` and the lint tests in the core's rules, and the how-to of Heuristic 0507 through a real daemon in the daemon's `finding_facts` integration tests.
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.

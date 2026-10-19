@@ -95,9 +95,13 @@ fn daemon_build() -> PathBuf {
         .clone()
 }
 
+/// Runs a binary under an empty home of the suite's own, so `scan <dir>`
+/// never reads the real settings file and never asks a real engine.
 fn run(binary: &Path, arguments: &[&str]) -> Output {
+    let home = Temporary::new("empty-home");
     Command::new(binary)
         .args(arguments)
+        .env("HOME", home.path())
         .output()
         .expect("the binary runs")
 }
@@ -255,6 +259,35 @@ fn the_crates_io_build_has_no_ipc_crate_in_its_dependency_graph() {
     let bundle = tree(&["--features", "bundle"]);
     assert!(bundle.contains("agentsweep-ipc"), "{bundle}");
     assert!(!bundle.contains("agentsweep-daemon"), "{bundle}");
+
+    // Neither build links the Claude client, which is the daemon's alone;
+    // only the in-bundle build turns the Apple on-device engine on.
+    let features = |extra: &[&str]| {
+        let mut arguments = vec![
+            "tree",
+            "-p",
+            "agentsweep",
+            "-e",
+            "normal,features",
+            "-i",
+            "agentsweep-core",
+        ];
+        arguments.extend_from_slice(extra);
+        let output = cargo(&arguments);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        text(&output.stdout)
+    };
+    let apple = "agentsweep-core feature \"apple\"";
+    let crates_io_features = features(&[]);
+    assert!(!crates_io_features.contains(apple), "{crates_io_features}");
+    assert!(!crates_io.contains("ureq"), "{crates_io}");
+    let bundle_features = features(&["--features", "bundle"]);
+    assert!(bundle_features.contains(apple), "{bundle_features}");
+    assert!(!bundle.contains("ureq"), "{bundle}");
 }
 
 /// What the crates.io build is, from its own binary: `scan <dir>` and a help
@@ -274,6 +307,12 @@ mod crates_io {
             "{help}"
         );
         assert!(!help.contains("agentsweep status"), "{help}");
+        assert!(
+            help.contains("Ollama, the only AI\n                          engine this build has"),
+            "{help}"
+        );
+        assert!(!help.contains("Apple on-device"), "{help}");
+        assert!(help.contains("--no-ai"), "{help}");
     }
 
     /// A bare `scan` would ask the daemon, which this build cannot, so it is
@@ -313,8 +352,10 @@ mod bundle {
 
     use super::*;
 
-    /// `scan <dir>` is one module compiled into both builds, so both print
-    /// the same bytes and exit with the same code for the same folder.
+    /// `scan <dir>` is one module compiled into both builds, so with the AI
+    /// check off both print the same bytes and exit with the same code for
+    /// the same folder: under `--no-ai`, and under a home whose settings
+    /// choose no engine, where both say the AI check did not run.
     #[test]
     fn scan_of_a_folder_is_byte_identical_in_both_builds() {
         let crates_io = crates_io_build();
@@ -325,20 +366,34 @@ mod bundle {
             b"# Notes\n\nRun the tests.\n",
         )
         .expect("an instruction file");
+        let odd = Temporary::new("odd-both");
+        fs::write(
+            odd.path().join("CLAUDE.md"),
+            b"# demo\n\n<!-- Claude: keep the sections in the order this file lists them. -->\n",
+        )
+        .expect("an odd instruction file");
 
-        for folder in [planted.path(), clean.path()] {
+        for folder in [planted.path(), clean.path(), odd.path()] {
             let folder_arg = folder.to_string_lossy().to_string();
-            let bundled = run(&this_build(), &["scan", &folder_arg]);
-            let alone = run(&crates_io, &["scan", &folder_arg]);
-            assert_eq!(
-                text(&bundled.stdout),
-                text(&alone.stdout),
-                "the two builds printed differently"
-            );
-            assert_eq!(bundled.stdout, alone.stdout);
-            assert_eq!(bundled.stderr, alone.stderr);
-            assert_eq!(bundled.status.code(), alone.status.code());
+            for arguments in [
+                vec!["scan", folder_arg.as_str()],
+                vec!["scan", folder_arg.as_str(), "--no-ai"],
+            ] {
+                let bundled = run(&this_build(), &arguments);
+                let alone = run(&crates_io, &arguments);
+                assert_eq!(
+                    text(&bundled.stdout),
+                    text(&alone.stdout),
+                    "the two builds printed differently"
+                );
+                assert_eq!(bundled.stdout, alone.stdout);
+                assert_eq!(bundled.stderr, alone.stderr);
+                assert_eq!(bundled.status.code(), alone.status.code());
+            }
         }
+        let odd_arg = odd.path().to_string_lossy().to_string();
+        let said = text(&run(&this_build(), &["scan", &odd_arg]).stdout);
+        assert!(said.contains("The AI check did not run"), "{said}");
     }
 
     /// The crates.io build, run from here: its help says why it cannot show

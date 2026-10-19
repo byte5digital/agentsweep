@@ -1,8 +1,9 @@
 //! The Folder Scan: one folder the user points at before an Agent opens it.
 //!
 //! It reads and judges but records nothing. No Baseline, no Trust, no
-//! Quarantine, no daemon: the whole pass runs in this process and writes not
-//! one byte. Its answer is "safe to open" or "do not open yet" (spec section
+//! Quarantine: the whole pass runs in this process and writes not one byte.
+//! Only the AI check of the in-bundle build reaches the daemon, and only for
+//! the Claude engine (see [`crate::judgement`]). Its answer is "safe to open" or "do not open yet" (spec section
 //! 8.9).
 //!
 //! It judges with the Rule Pack bundled in this binary, never a fetched one,
@@ -18,20 +19,88 @@ use agentsweep_adapter_claude_code::ClaudeCode;
 use agentsweep_adapter_codex::Codex;
 use agentsweep_adapter_workspace::Workspace;
 use agentsweep_core::adapter::{Enumeration, SurfaceAdapter};
-use agentsweep_core::finding::{Finding, FiredHeuristic, RuleStatus};
+use agentsweep_core::finding::{Finding, FiredHeuristic, RuleStatus, Tier};
 use agentsweep_core::heuristics::Band;
 use agentsweep_core::host::Host;
 #[cfg(test)]
 use agentsweep_core::item::BaselineState;
 use agentsweep_core::item::TreeCaps;
+use agentsweep_core::judgement::Verdict;
 use agentsweep_core::pack::Manifest;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::{ScanReport, scan_enumeration};
 
+use crate::judgement::{self, Judgement};
+
+/// How `scan <dir>` was asked.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Invocation {
+    /// The folder to scan.
+    pub directory: PathBuf,
+    /// `--no-ai`: ask no Judgement Engine.
+    pub no_ai: bool,
+    /// `--socket <path>`, the in-bundle build only: where the daemon answers
+    /// for the Claude engine, the documented socket unless named.
+    pub socket: Option<PathBuf>,
+}
+
+/// True when the arguments after `scan` name a folder, which makes it the
+/// Folder Scan rather than a bare `scan`.
+pub fn names_a_folder(arguments: &[String]) -> bool {
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--socket" => {
+                arguments.next();
+            }
+            flag if flag.starts_with("--") => {}
+            _ => return true,
+        }
+    }
+    false
+}
+
+/// Reads the arguments after `scan` of a Folder Scan: one folder, and
+/// `--no-ai` and, in the in-bundle build, `--socket <path>` in any order.
+// The in-bundle build takes the path after `--socket` from the iterator; the
+// crates.io build has no such option, so its loop reads as a plain `for`.
+#[cfg_attr(not(feature = "bundle"), allow(clippy::while_let_on_iterator))]
+pub fn parse(arguments: &[String]) -> Result<Invocation, String> {
+    let mut invocation = Invocation::default();
+    let mut directory = None;
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--no-ai" => invocation.no_ai = true,
+            #[cfg(feature = "bundle")]
+            "--socket" => match arguments.next() {
+                Some(path) => invocation.socket = Some(PathBuf::from(path)),
+                None => return Err("`--socket` takes a path".to_string()),
+            },
+            flag if flag.starts_with("--") => {
+                return Err(format!("`{flag}` is not an option of `scan <dir>`"));
+            }
+            folder if directory.is_none() => directory = Some(PathBuf::from(folder)),
+            _ => return Err("`scan` takes one folder".to_string()),
+        }
+    }
+    invocation.directory = directory.ok_or_else(|| "`scan` takes one folder".to_string())?;
+    Ok(invocation)
+}
+
 /// Runs a Folder Scan over one directory and returns what it found.
+#[cfg(test)]
 pub fn folder_scan(directory: &Path) -> Result<(PathBuf, ScanReport), Box<dyn Error>> {
     let (root, _, report) = folder_scan_under(directory, TreeCaps::default())?;
     Ok((root, report))
+}
+
+/// The same Folder Scan, answering with the Items it enumerated as well,
+/// which AI Judgement builds its requests from.
+pub fn folder_scan_with_items(
+    directory: &Path,
+) -> Result<(PathBuf, Enumeration, ScanReport), Box<dyn Error>> {
+    folder_scan_under(directory, TreeCaps::default())
 }
 
 /// The same Folder Scan with the caps every tree is read under given rather
@@ -75,7 +144,17 @@ fn folder_scan_under(
 
 /// Renders the result of a Folder Scan for the terminal. Matched text is never
 /// printed, so nothing sensitive leaves the scan.
+#[cfg(test)]
 pub fn render(root: &Path, report: &ScanReport) -> String {
+    render_with(root, report, &Judgement::NotAsked)
+}
+
+/// The same, with what the AI check came to: the contained reason beneath
+/// the Finding a malicious Verdict opened, a line for every Item asked about
+/// with the engine and model beside its Verdict, and the cap line or the one
+/// line that says the AI check did not run. With nothing asked it prints
+/// exactly what [`render`] prints.
+pub fn render_with(root: &Path, report: &ScanReport, judgement: &Judgement) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "AgentSweep scanned {}", root.display());
     let _ = writeln!(
@@ -110,9 +189,11 @@ pub fn render(root: &Path, report: &ScanReport) -> String {
         );
         let _ = writeln!(out, "  {}", finding.plain);
         evidence(&mut out, finding);
+        explanation(&mut out, finding, judgement);
     }
 
     ambiguous(&mut out, report);
+    ai_check(&mut out, judgement);
 
     let _ = writeln!(out);
     if report.is_clear() {
@@ -160,6 +241,59 @@ fn line_of(heuristic: &FiredHeuristic) -> String {
         "{:04}  weight {}  {}",
         heuristic.id, heuristic.weight, heuristic.plain
     )
+}
+
+/// The contained reason beneath the T3 Finding a malicious Verdict opened,
+/// labelled as the engine's, beneath the fired Heuristics' lines.
+fn explanation(out: &mut String, finding: &Finding, judgement: &Judgement) {
+    if finding.tier != Tier::AiJudgement {
+        return;
+    }
+    let Some(judged) = judgement.of(&finding.item_id) else {
+        return;
+    };
+    if let Some(Verdict::Malicious { reason, .. }) = &judged.verdict {
+        let _ = writeln!(out, "  AI explanation, from {}: {reason}", judged.label);
+    }
+}
+
+/// Every Item the AI check asked about, the engine and model beside its
+/// Verdict, then the cap line; or the one line that says it did not run.
+fn ai_check(out: &mut String, judgement: &Judgement) {
+    let judged = match judgement {
+        Judgement::NotAsked => return,
+        Judgement::DidNotRun => {
+            let _ = writeln!(out);
+            let _ = writeln!(out, "{}", judgement::DID_NOT_RUN);
+            return;
+        }
+        Judgement::Ran { judged, .. } => judged,
+    };
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "The AI check, {}:",
+        count(judged.len(), "Item asked", "Items asked")
+    );
+    for one in judged {
+        let id = one.item_id.as_str();
+        let name = Path::new(id)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let (word, wording) = match &one.verdict {
+            Some(Verdict::Malicious { .. }) => ("malicious", judgement::MALICIOUS),
+            Some(Verdict::Benign) => ("benign", judgement::BENIGN),
+            Some(Verdict::Unsure) => ("unsure", judgement::UNSURE),
+            None => ("no Verdict", judgement::NO_VERDICT),
+        };
+        let _ = writeln!(out, "  {} \u{b7} {}", finding_kind(id), name);
+        let _ = writeln!(out, "  {id}");
+        let _ = writeln!(out, "    {word}, from {}: {wording}", one.label);
+    }
+    if let Some(line) = judgement.cap_line() {
+        let _ = writeln!(out, "{line}");
+    }
 }
 
 /// The Items whose Score fell between the thresholds. They raise no Finding

@@ -17,9 +17,12 @@
 //! the daemon answers only the signed tools of its own bundle, so it cannot
 //! show status and its help text says so.
 //!
-//! `scan <dir>` is the Folder Scan in both. It runs entirely in this process,
-//! never reaches a daemon, never acts and writes nothing, and it is one module
-//! compiled into both builds, so it prints the same in both. `uninstall`
+//! `scan <dir>` is the Folder Scan in both. It runs in this process, never
+//! acts and writes nothing, and it is one module compiled into both builds,
+//! so with the AI check off it prints the same in both. The AI check asks the
+//! Judgement Engine the settings file chooses: Ollama in both builds, Apple
+//! on-device in the in-bundle build, and the Claude engine only through the
+//! daemon, which is the one thing the in-bundle `scan <dir>` reaches it for. `uninstall`
 //! arrives with its own milestone.
 
 #[cfg(feature = "bundle")]
@@ -31,6 +34,7 @@ mod folder_scan;
 mod gate;
 #[cfg(feature = "bundle")]
 mod gate_hooks;
+mod judgement;
 #[cfg(feature = "bundle")]
 mod rule_feed;
 #[cfg(feature = "bundle")]
@@ -38,6 +42,7 @@ mod scan_now;
 #[cfg(feature = "bundle")]
 mod status;
 
+#[cfg(feature = "bundle")]
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -53,8 +58,14 @@ Usage:
   agentsweep status       Show what AgentSweep is protecting and what it found.
   agentsweep scan         Ask the running AgentSweep for a full scan now and
                           follow it to the end.
-  agentsweep scan <dir>   Check one folder before you open it with an agent.
+  agentsweep scan <dir> [--no-ai]
+                          Check one folder before you open it with an agent.
                           This runs here, on its own, and records nothing.
+                          What is neither clear nor suspicious is put to the
+                          AI engine chosen in AgentSweep's settings: Ollama or
+                          Apple on-device here, the Claude API through the
+                          running AgentSweep, which holds the key. --no-ai
+                          asks no engine.
   agentsweep gate --agent <claude-code | codex>
                           The Gate, which the agents run as a hook: it reads
                           the event on stdin, asks the running AgentSweep and
@@ -139,8 +150,12 @@ const USAGE: &str = concat!(
 AgentSweep scans the local configuration surfaces of coding agents.
 
 Usage:
-  agentsweep scan <dir>   Check one folder before you open it with an agent.
-                          It runs here and records nothing.
+  agentsweep scan <dir> [--no-ai]
+                          Check one folder before you open it with an agent.
+                          It runs here and records nothing. What is neither
+                          clear nor suspicious is put to Ollama, the only AI
+                          engine this build has, when AgentSweep's settings
+                          name its address and model. --no-ai asks nothing.
   agentsweep --version    Print the version.
   agentsweep --help       Print this message.
 
@@ -201,9 +216,15 @@ fn not_a_command(command: &str) -> ExitCode {
 /// `scan <dir>` is the Folder Scan, in this process, in both builds. A bare
 /// `scan` asks the daemon for a Full Scan, which only the in-bundle build can.
 fn scan(arguments: &[String]) -> ExitCode {
-    match arguments {
-        [directory] if !directory.starts_with("--") => folder_scan(directory),
-        _ => scan_through_the_daemon(arguments),
+    if !folder_scan::names_a_folder(arguments) {
+        return scan_through_the_daemon(arguments);
+    }
+    match folder_scan::parse(arguments) {
+        Ok(invocation) => folder_scan(&invocation),
+        Err(reason) => {
+            eprintln!("agentsweep: {reason}\n\n{USAGE}");
+            ExitCode::from(USAGE_ERROR)
+        }
     }
 }
 
@@ -234,16 +255,50 @@ fn scan_through_the_daemon(_arguments: &[String]) -> ExitCode {
 }
 
 /// The Folder Scan: the same module, and so the same output, in both builds.
-fn folder_scan(directory: &str) -> ExitCode {
-    match folder_scan::folder_scan(&PathBuf::from(directory)) {
-        Ok((root, report)) => {
-            print!("{}", folder_scan::render(&root, &report));
-            ExitCode::from(folder_scan::exit_code(&report))
-        }
+/// Then, unless `--no-ai` was given, the AI check of what it left in the
+/// Ambiguous Band, with the engine the settings file chooses.
+fn folder_scan(invocation: &folder_scan::Invocation) -> ExitCode {
+    let directory = &invocation.directory;
+    let (root, enumeration, mut report) = match folder_scan::folder_scan_with_items(directory) {
+        Ok(scanned) => scanned,
         Err(error) => {
-            eprintln!("agentsweep: {directory} could not be scanned: {error}");
-            ExitCode::from(USAGE_ERROR)
+            eprintln!(
+                "agentsweep: {} could not be scanned: {error}",
+                directory.display()
+            );
+            return ExitCode::from(USAGE_ERROR);
         }
+    };
+    let judgement = match invocation.no_ai || report.ambiguous() == 0 {
+        true => judgement::Judgement::NotAsked,
+        false => ai_check(&enumeration, &mut report, invocation),
+    };
+    print!("{}", folder_scan::render_with(&root, &report, &judgement));
+    ExitCode::from(folder_scan::exit_code(&report))
+}
+
+/// Asks the engine the settings file chooses about the Items awaiting
+/// judgement, or says that the AI check did not run.
+fn ai_check(
+    enumeration: &agentsweep_core::adapter::Enumeration,
+    report: &mut agentsweep_core::scan::ScanReport,
+    invocation: &folder_scan::Invocation,
+) -> judgement::Judgement {
+    let normalisation = std::env::var_os("HOME")
+        .map(|home| agentsweep_core::judgement_request::Normalisation::of_home(home.as_ref()))
+        .unwrap_or_default();
+    let chosen = judgement::read_the_settings().and_then(|settings| {
+        judgement::choose(&settings, normalisation, invocation.socket.as_deref())
+    });
+    match chosen {
+        Some(mut chosen) => judgement::judge_the_folder(
+            enumeration,
+            report,
+            &chosen.judge,
+            chosen.asker.as_mut(),
+            chosen.cap,
+        ),
+        None => judgement::Judgement::DidNotRun,
     }
 }
 

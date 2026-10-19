@@ -58,6 +58,7 @@ pub mod judged;
 pub mod judgement;
 pub mod judgement_request;
 pub mod keychain;
+pub mod location;
 pub mod ollama;
 pub mod overview;
 pub mod pack;

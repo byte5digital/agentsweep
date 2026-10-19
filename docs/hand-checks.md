@@ -297,7 +297,7 @@ cp rules/0001-decode-pipe-exec/bad/skill-base64-pipe-bash/tree/SKILL.md ~/.claud
 
 - [ ] Within a few seconds of the Change Scan, the daemon's log says it is launching the app windowless for one un-notified change, and `pgrep -fl agentsweep-menubar` shows the app running with `--windowless` among its arguments.
 - [ ] The menu bar icon is back with the exclamation mark, no window opened, the app has no Dock icon and no Cmd-Tab entry, and the app that had focus before still has it (`lsappinfo info -only ApplicationType -app agentsweep-menubar` says `UIElement`).
-- [ ] The app raises one notification for the skill, and quitting and reopening the app raises nothing twice. Raising it is the app's half of the notifications; until that half is built, the app comes back without raising anything.
+- [ ] The app raises one notification for the skill, and quitting and reopening the app raises nothing twice. Section 17 checks the notification itself and the click on it.
 - [ ] Quit the app again and touch the skill without changing it (`touch ~/.claude/skills/agentsweep-hand-check/SKILL.md`): nothing new is un-notified, so the app is not launched a second time for the same change.
 
 Seams in the suite: the daemon's `notifications` integration tests (each class on a temporary home, `notified_at` written and kept across a restart, nothing for the Ambiguous Band or a daily Full Scan with nothing new, and the launcher seam called once with the bundle's own app and the windowless argument only while no app is subscribed), `notifications::tests` in the daemon (the class of every Finding state and source, records changed once per break, the permission count), `a_benign_or_an_unsure_verdict_and_the_ambiguous_band_leave_nothing_to_notify` in the daemon's AI Judgement queue tests, and `the_liveness_handle_sees_a_peer_hang_up` in the socket tests.
@@ -413,6 +413,26 @@ The two project folders sit in `~/agentsweep-hand-check` and go with it. Claude 
 
 Seams in the suite: `the_registered_gate_blocks_allows_and_fails_open_from_the_outside` in the CLI's `gate_end_to_end` tests (registration into both Agents' files on a temporary home, each registered command line run with recorded events: the project block with its count, the per-call deny, the silent allow, the allow after Quarantine and the fail-open message with the daemon stopped), the CLI's `gate` tests (what leaves the command and every answer it prints), the daemon's `gate`, `gate_registration`, `gate_registration_codex`, `gate_registration_check` and `gate_switch` tests, and the pin recipe's tests in the Codex adapter.
 
+## 17. The notification round trip after Quit
+
+This is the milestone's exit criterion "notification round trip after Quit". It needs the hand install of section 1, because macOS shows the notifications of a bundle only once Launch Services has registered it (stack research, unverified item 7); a bare binary or a developer run raises nothing visible. It plants the same defanged Fixture skill as section 14 and is cleaned up the same way. An automatic Quarantine needs a Rule Pack that carries Rule 0001 stable; with the bundled pack, where every Rule is on Probation, the skill is flagged instead and the notification is "needs you". Run it with a stable pack where you have one, and note under Record of runs which class you saw.
+
+Quit the app from the popover (**Quit AgentSweep (protection stays on)**), check that `pgrep -x agentsweep-menubar` prints nothing, and plant the skill as in section 14.
+
+- [ ] The app comes back windowless as in section 14, and macOS asks once whether AgentSweep may send notifications (allow it). Exactly one notification appears. Under a stable pack its title is "Stopped: the skill 'agentsweep-hand-check'" and its body says AgentSweep moved it out of the way by itself, whether Claude Code appears to be running and, where it may be, asks for a restart. Under the bundled pack its title is "The skill 'agentsweep-hand-check' needs your decision" and its body "Nothing was changed. Open AgentSweep to decide what happens to it." Neither names an id, a path, a Rule, a Score or AI.
+- [ ] Clicking the notification opens the Findings window on Needs your decision, and the app gains its Dock icon while the window is open. Close the window, then click the app in Finder: nothing opens beyond what the app does on an ordinary reopen.
+- [ ] Quit the app from the popover and open it again from Finder: no notification is raised a second time. Quit it once more and wait a minute: the daemon does not bring it back, since nothing new is un-notified.
+
+The wording of every notification, for the owner to read on the dogfooding day (spec section 8.7 and the owner's decision of 2026-10-14):
+
+- Stopped automatically: title "Stopped: the skill 'setup'"; body "AgentSweep moved it out of the way by itself." followed by one of "Claude Code appears to be running. Restart it so it picks up the change.", "No Claude Code session appears to be running." or "AgentSweep could not tell whether Claude Code is running. If it is open, restart it so it picks up the change." An Item of the workspace says "a coding agent" instead of the Agent's name.
+- Needs you, also for a late malicious Verdict: title "The skill 'setup' needs your decision"; body "Nothing was changed. Open AgentSweep to decide what happens to it."
+- Keeps coming back: title "The skill 'setup' keeps coming back"; body "AgentSweep removed it three times in the last hour and it came back each time, most likely from an agent session that is still open. Open AgentSweep to see what to do."
+- Records changed: title "AgentSweep's records were changed"; body "Something other than AgentSweep changed its records. Open AgentSweep to see what changed."
+- Permission: title "AgentSweep can't check 2 projects yet"; body "macOS has not let AgentSweep look there yet. Open AgentSweep and choose Check now."
+
+Seams in the suite: `notifications::tests` in the app (the title and body of each of the five classes, no AI wording for "needs you", no id or path in any notification, which stream events may carry one, and the activation that opens Needs your decision after a notification and nothing on an ordinary reopen), `window::tests` in the app (the windowless argument starts into the menu bar with no window, without it the app starts as before), `the_app_raises_each_change_once_on_launch_and_from_the_stream` in the app's `window` integration tests (a recording notifier against a real daemon on a temporary home: raised once on launch, nothing on a second launch, a new Finding raised from the stream), and the `LSUIElement` test of the app's launch agent module.
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.
@@ -429,6 +449,7 @@ The minimal app's layout and words are placeholders so that the Posture and word
 - [ ] Delete permanently, Reveal in Finder, Untrust and the "rule was withdrawn" line are not offered yet.
 - [x] Closing the window hides it; is that what a person expects of Cmd-W and of the red button, and does Cmd-Q from the regular app's menu quit the menu bar app too? (Decided 2026-10-14: Cmd-W and the red button hide the window, Cmd-Q quits the app and the daemon keeps running; checked by hand in section 7.)
 - [ ] Should Scan now's progress show in the popover, or only the sentence "Checking now."?
+- [ ] Do the notification sentences of section 17 read well, the sessions sentence in "stopped automatically" included?
 
 ## Clean up, completely
 

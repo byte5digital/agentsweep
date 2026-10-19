@@ -98,7 +98,8 @@ impl ActionRequest {
         }
     }
 
-    fn target(&self) -> &str {
+    /// The Finding the request acts on.
+    pub fn target(&self) -> &str {
         match self {
             ActionRequest::Quarantine(target)
             | ActionRequest::Restore(target, _)

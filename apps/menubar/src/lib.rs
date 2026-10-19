@@ -45,6 +45,9 @@
 //!   request, behind a Finder seam.
 //! - [`how_to`]: **Show me how to fix this** on an Exposure, and **Open the
 //!   file** behind an Opener seam; the app never reads the file.
+//! - [`false_alarm`]: the false-alarm report, a prefilled GitHub issue shown
+//!   in full and opened in the user's browser behind a Browser seam; the app
+//!   sends nothing.
 //! - [`folder`]: the answer of a Folder Scan as the window shows it.
 //! - [`settings_pane`]: the Settings pane: the Detail choice, the background
 //!   toggles, Advanced and what AgentSweep does not protect against.
@@ -75,6 +78,7 @@ pub mod asking;
 pub mod banner;
 pub mod cli_link;
 pub mod developer;
+pub mod false_alarm;
 pub mod findings;
 pub mod folder;
 pub mod frame;

@@ -27,6 +27,7 @@ pub mod preview;
 pub mod protocol;
 pub mod settings;
 pub mod socket;
+pub mod uninstall;
 
 pub use client::{Client, ClientError, Subscription};
 pub use frame::{MAX_FRAME, read_frame, write_frame};
@@ -38,7 +39,7 @@ pub use protocol::{
     FolderScanResult, GateEvent, GateReason, GateRequest, GateTool, GateVerdict, Hello,
     McpServerRef, Message, NOTHING_RECORDED, Offer, RESTART_AGENTSWEEP, Refusal, Request,
     RequestError, RevealedReceipt, Role, SAFE_TO_OPEN, Sessions, SettingsChange, SettingsState,
-    StateEvent, Status, check_version, offers, welcome,
+    StateEvent, Status, UninstallChoice, UninstallReport, check_version, offers, welcome,
 };
 pub use socket::{Connection, Liveness, SOCKET_NAME, SocketListener, connect, default_socket_path};
 

@@ -41,6 +41,7 @@ pub use crate::gate::{GateEvent, GateReason, GateRequest, GateTool, GateVerdict,
 pub use crate::judge::{JudgeAnswer, JudgeOutcome, JudgeRequest};
 pub use crate::preview::{PreviewOutcome, RequestPreview};
 pub use crate::settings::{SettingsChange, SettingsState};
+pub use crate::uninstall::{UninstallChoice, UninstallReport};
 
 /// Which peer is speaking. The daemon answers both the same way in this
 /// milestone; the role is carried because the notification flow of spec
@@ -372,11 +373,21 @@ pub enum Request {
     /// cached (spec section 4.4). Answers with a
     /// [`crate::judge::JudgeAnswer`].
     Judge(JudgeRequest),
+    /// Uninstall (spec section 9.6): the Gate's entries and the Codex pin
+    /// are taken away from every Agent, on every choice, and then the choice
+    /// about what is in Quarantine is applied. It carries the choice and
+    /// nothing else. From then on the daemon takes no further work and
+    /// answers nothing but `status` and `uninstall`, until it is unregistered
+    /// or its bundle is gone. Answers with an [`UninstallReport`].
+    Uninstall {
+        /// What happens to what is in Quarantine.
+        choice: UninstallChoice,
+    },
 }
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 29] = [
+    pub const NAMES: [&'static str; 30] = [
         "status",
         "scan-now",
         "check-now",
@@ -406,6 +417,7 @@ impl Request {
         "unnotified",
         "notified",
         "judge",
+        "uninstall",
     ];
 
     /// The spelling a request carries.
@@ -440,6 +452,7 @@ impl Request {
             Request::Unnotified => "unnotified",
             Request::Notified { .. } => "notified",
             Request::Judge(_) => "judge",
+            Request::Uninstall { .. } => "uninstall",
         }
     }
 
@@ -524,6 +537,9 @@ impl Request {
                 );
             }
             Request::Judge(judge) => judge.write_into(map),
+            Request::Uninstall { choice } => {
+                map.insert("choice".to_string(), Value::from(choice.as_str()));
+            }
             _ => {}
         }
     }
@@ -626,6 +642,9 @@ impl Request {
                     .collect::<Option<Vec<_>>>()?,
             },
             "judge" => Request::Judge(JudgeRequest::read_from(value)?),
+            "uninstall" => Request::Uninstall {
+                choice: UninstallChoice::parse(text("choice")?)?,
+            },
             _ => return None,
         })
     }
@@ -2518,7 +2537,39 @@ mod tests {
                 ids: vec![finding.clone(), "permission/2/0123456789ab".to_string()],
             },
             Request::Judge(a_judge_request()),
+            Request::Uninstall {
+                choice: UninstallChoice::RestoreAll,
+            },
+            Request::Uninstall {
+                choice: UninstallChoice::Keep,
+            },
+            Request::Uninstall {
+                choice: UninstallChoice::DeleteEverything,
+            },
         ]
+    }
+
+    /// Spec section 9.6: the `uninstall` request carries the choice and
+    /// nothing else, takes no path and no target, and a choice the daemon
+    /// does not know is not a request at all.
+    #[test]
+    fn the_uninstall_request_carries_the_choice_and_nothing_else() {
+        for choice in UninstallChoice::ALL {
+            let mut map = Map::new();
+            Request::Uninstall { choice }.write_into(&mut map);
+            let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(keys, vec!["choice", "request"]);
+            assert_eq!(map["choice"], choice.as_str());
+        }
+        assert!(!Request::takes_a_path("uninstall"));
+        for refused in [
+            serde_json::json!({"request": "uninstall"}),
+            serde_json::json!({"request": "uninstall", "choice": "everything"}),
+            serde_json::json!({"request": "uninstall", "choice": "keep", "path": "/tmp"}),
+        ] {
+            assert_eq!(Request::read_from(&refused), None, "{refused}");
+        }
     }
 
     /// A `judge` request about one odd instruction file, redacted and in its

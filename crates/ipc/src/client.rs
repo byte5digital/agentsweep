@@ -22,6 +22,7 @@ use crate::judge::{JudgeAnswer, JudgeRequest};
 use crate::notifications::{Unnotified, changes_from_value};
 use crate::preview::RequestPreview;
 use crate::settings::{SettingsChange, SettingsState};
+use crate::uninstall::{UninstallChoice, UninstallReport};
 
 use crate::protocol::{
     ActionReport, FolderScanResult, Hello, Message, Refusal, Request, RequestError,
@@ -210,6 +211,16 @@ impl Client {
     pub fn purge(&mut self, target: &str) -> Result<ActionReport, ClientError> {
         self.act(Request::Purge {
             target: target.to_string(),
+        })
+    }
+
+    /// Uninstall: the Gate's entries go from every Agent, then the choice
+    /// about what is in Quarantine is applied (spec section 9.6). What both
+    /// the Settings flow and `agentsweep uninstall` send.
+    pub fn uninstall(&mut self, choice: UninstallChoice) -> Result<UninstallReport, ClientError> {
+        let answer = self.ask(Request::Uninstall { choice })?;
+        UninstallReport::from_value(&answer).ok_or_else(|| {
+            ClientError::Unexpected("the Uninstall report could not be read".to_string())
         })
     }
 

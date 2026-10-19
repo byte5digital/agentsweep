@@ -62,10 +62,11 @@ security-framework = { version = "3.7.0", default-features = false, optional = t
 
 [features]
 # The write side of both chains and the Keychain-backed key source. The daemon
-# crate is the only crate that enables it, so neither the application nor the
-# CLI can compile a call that appends to the Event Log or the Baseline, or that
-# reads the login Keychain (spec section 6.2), or that sends a request to the
-# Claude API (spec section 4.4).
+# crate is the only shipped crate that enables it, so neither the application
+# nor the CLI can compile a call that appends to the Event Log or the Baseline,
+# or that reads the login Keychain (spec section 6.2), or that sends a request
+# to the Claude API (spec section 4.4). The build tool enables it too, for the
+# eval harness's Claude API runs, and ships nothing.
 daemon = ["dep:security-framework", "dep:ureq"]
 # The Apple on-device Judgement Engine, which spawns the Apple judgement
 # helper the bundle places beside the daemon and the CLI. The daemon and the

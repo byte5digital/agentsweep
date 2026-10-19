@@ -18,7 +18,11 @@ path = "src/main.rs"
 agentsweep-adapter-claude-code.workspace = true
 agentsweep-adapter-codex.workspace = true
 agentsweep-adapter-workspace.workspace = true
-agentsweep-core.workspace = true
+# The eval harness asks the three Judgement Engines by hand (spec section 4.4,
+# "Eval gate"): the Claude API client lives behind `daemon` and the Apple
+# helper behind `apple`. The eval takes its Claude key from a file or standard
+# input and never reads the Keychain, appends to a chain or writes a store.
+agentsweep-core = { workspace = true, features = ["apple", "daemon"] }
 flate2 = "1.1.10"
 # Only the checksum of the index a bad corpus sample's repository is laid out
 # with; no git binary is ever run.

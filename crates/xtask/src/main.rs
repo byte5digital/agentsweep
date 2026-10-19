@@ -8,10 +8,17 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use agentsweep_core::apple_engine::{AppleEngine, AppleHelper};
+use agentsweep_core::claude_engine::ClaudeEngine;
+use agentsweep_core::judged::{APPLE_BUDGET, CLAUDE_BUDGET, OLLAMA_BUDGET};
+use agentsweep_core::judgement::JudgementEngine;
+use agentsweep_core::keychain::{ClaudeKey, ClaudeKeyStore, MemoryClaudeKeyStore};
+use agentsweep_core::ollama::{OllamaClient, OllamaEngine};
 use agentsweep_core::pack::{Manifest, STATEMENT_FILE};
 use agentsweep_core::pack_signature::PINNED_KEYS;
 use agentsweep_core::rules::RulePack;
-use agentsweep_xtask::{bad, benign, corpus, iocs, pack_release, repo_root};
+use agentsweep_core::settings::{self, OllamaAddress};
+use agentsweep_xtask::{bad, benign, corpus, eval, iocs, pack_release, repo_root};
 
 const USAGE: &str = "\
 agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
@@ -26,6 +33,18 @@ agentsweep-xtask: build work for the Rule corpus and the Rule Pack.
                                 would see it and report per sample the fired Rules and
                                 Heuristics and the Band, and per ranked class whether
                                 the bad set is sufficient for an eval result to count
+    judgement-eval [options]    run one Judgement Engine over the three eval sets (the bad
+                                corpus with the bad Heuristic Fixtures, the benign corpus
+                                fetched from its pinned manifest, and every bad Item
+                                wrapped in the committed reviewer-directed wrappers) and
+                                write the report; nothing else is written or committed
+        --engine <e>            apple, ollama or claude
+        --model <m>             the Ollama model tag or the Claude model id
+        --key-file <file>       the Claude API key, read from this file
+        --key-stdin             the Claude API key, read from standard input
+        --apple-helper <path>   the Apple judgement helper (default: beside this tool)
+        --ollama-address <a>    the loopback address of Ollama (default 127.0.0.1:11434)
+        --report <file>         where the report is written
     render-iocs [--check]       render the Indicator Lists into rules 0900 to 0903,
                                 or with --check only report a stale rendering
     pack [options]              write a Rule Pack release: manifest.json, which the
@@ -66,6 +85,7 @@ fn main() -> ExitCode {
             run_benign_corpus(arguments.iter().any(|argument| argument == "--record"))
         }
         "bad-corpus" => run_bad_corpus(),
+        "judgement-eval" => run_judgement_eval(&arguments[1..]),
         "render-iocs" => render_iocs(arguments.iter().any(|argument| argument == "--check")),
         "pack" => build_pack(&arguments[1..]),
         "pack-gate" => gate_pack(&arguments[1..]),
@@ -181,6 +201,134 @@ fn run_bad_corpus() -> Result<String, String> {
     let pack = RulePack::bundled().map_err(|error| format!("{error}\n"))?;
     let report = bad::run(&root.join(bad::CORPUS), &root.join("rules"), &pack)?;
     Ok(report.render())
+}
+
+/// Runs one Judgement Engine over the three eval sets and writes the report
+/// to the path given (spec section 4.4, "Eval gate"). The key for a Claude
+/// run comes from a file or standard input, never from the Keychain; it is
+/// held in memory for the run and never printed.
+///
+/// Offline the benign set is skipped with a line saying so, unless the
+/// environment asks for the corpus by name, as the benign corpus run does.
+fn run_judgement_eval(arguments: &[String]) -> Result<String, String> {
+    let mut engine = None;
+    let mut model = String::new();
+    let mut key_file = None;
+    let mut key_stdin = false;
+    let mut apple_helper = None;
+    let mut ollama_address = None;
+    let mut report = None;
+    let mut rest = arguments.iter();
+    while let Some(argument) = rest.next() {
+        let mut value = || {
+            rest.next()
+                .cloned()
+                .ok_or_else(|| format!("{argument} takes a value\n\n{USAGE}"))
+        };
+        match argument.as_str() {
+            "--engine" => engine = Some(value()?),
+            "--model" => model = value()?,
+            "--key-file" => key_file = Some(PathBuf::from(value()?)),
+            "--key-stdin" => key_stdin = true,
+            "--apple-helper" => apple_helper = Some(PathBuf::from(value()?)),
+            "--ollama-address" => ollama_address = Some(value()?),
+            "--report" => report = Some(PathBuf::from(value()?)),
+            other => {
+                return Err(format!(
+                    "`{other}` is not an option of judgement-eval\n\n{USAGE}"
+                ));
+            }
+        }
+    }
+    let engine = engine.ok_or_else(|| format!("judgement-eval takes --engine\n\n{USAGE}"))?;
+    let report = report.ok_or_else(|| format!("judgement-eval takes --report\n\n{USAGE}"))?;
+    let refused = |error: &dyn std::fmt::Display| format!("the engine cannot be asked: {error}\n");
+
+    let asker: Box<dyn JudgementEngine>;
+    let (name, reported, budget) = match engine.as_str() {
+        "ollama" => {
+            if model.is_empty() {
+                return Err("an Ollama eval names its model with --model\n".to_string());
+            }
+            let address = match &ollama_address {
+                Some(text) => OllamaAddress::parse(text).map_err(|error| refused(&error))?,
+                None => OllamaAddress::default(),
+            };
+            let ollama = OllamaEngine::for_model(OllamaClient::new(&address), &model)
+                .map_err(|error| refused(&error))?;
+            let reported = ollama.model_id();
+            asker = Box::new(ollama);
+            (settings::JudgementEngine::Ollama, reported, OLLAMA_BUDGET)
+        }
+        "claude" => {
+            if model.is_empty() {
+                return Err("a Claude eval names its model with --model\n".to_string());
+            }
+            let text = match (&key_file, key_stdin) {
+                (Some(path), false) => fs::read_to_string(path)
+                    .map_err(|error| format!("{}: {error}\n", path.display()))?,
+                (None, true) => {
+                    let mut text = String::new();
+                    std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                        .map_err(|error| format!("standard input: {error}\n"))?;
+                    text
+                }
+                _ => {
+                    return Err(
+                        "a Claude eval takes its key from exactly one of --key-file and --key-stdin\n"
+                            .to_string(),
+                    );
+                }
+            };
+            let key = ClaudeKey::new(&text).map_err(|error| refused(&error))?;
+            let store = MemoryClaudeKeyStore::empty();
+            store.store(&key).map_err(|error| refused(&error))?;
+            asker = Box::new(ClaudeEngine::new(&model, std::sync::Arc::new(store)));
+            (
+                settings::JudgementEngine::Claude,
+                model.clone(),
+                CLAUDE_BUDGET,
+            )
+        }
+        "apple" => {
+            let helper = match apple_helper {
+                Some(path) => AppleHelper::at(path),
+                None => AppleHelper::beside_this_executable().ok_or_else(|| {
+                    "no Apple judgement helper beside this tool; name it with --apple-helper\n"
+                        .to_string()
+                })?,
+            };
+            let apple = AppleEngine::new(helper).map_err(|error| refused(&error))?;
+            let reported = apple.model_id().to_string();
+            asker = Box::new(apple);
+            (settings::JudgementEngine::Apple, reported, APPLE_BUDGET)
+        }
+        other => {
+            return Err(format!(
+                "`{other}` is not a Judgement Engine; the eval asks apple, ollama or claude\n"
+            ));
+        }
+    };
+
+    let under_eval = eval::Engine {
+        engine: name.as_str().to_string(),
+        model: reported,
+        budget,
+        asker: asker.as_ref(),
+    };
+    let required = std::env::var(benign::REQUIRED).is_ok_and(|value| !value.is_empty());
+    let ran = eval::run(
+        &repo_root(),
+        eval::Fetching::Network,
+        required,
+        &under_eval,
+        &report,
+    )?;
+    Ok(format!(
+        "{}\nwritten to {}\n",
+        ran.report.render(),
+        report.display()
+    ))
 }
 
 /// Renders every Indicator List, or reports the ones whose committed Rule is

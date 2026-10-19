@@ -459,7 +459,8 @@ impl Daemon {
             | Request::Gate(_)
             | Request::PreviewRequest { .. }
             | Request::Unnotified
-            | Request::Notified { .. } => Err(RequestError::unknown(request.as_str())),
+            | Request::Notified { .. }
+            | Request::Judge(_) => Err(RequestError::unknown(request.as_str())),
         }
     }
 

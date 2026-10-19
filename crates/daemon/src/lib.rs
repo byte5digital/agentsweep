@@ -55,6 +55,7 @@ pub mod budgets;
 pub mod bundle_watch;
 pub mod change_scan;
 pub mod cloud_caps;
+pub mod cloud_judgement;
 pub mod due;
 pub mod engine;
 pub mod folder_scan;

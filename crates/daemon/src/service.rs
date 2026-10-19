@@ -1481,6 +1481,9 @@ impl Daemon {
             // Answered from what the state holds; reading writes nothing.
             Request::Unnotified => Ok(changes_to_value(&self.unnotified())),
             Request::Notified { ids } => Ok(serde_json::json!({ "notified": self.notified(ids) })),
+            // Asked here, on this connection's thread, under the cloud caps:
+            // the command line waits for its Verdict.
+            Request::Judge(judge) => Ok(self.judge_for_the_command_line(judge).to_value()),
             // Everything else acts, and is carried out where acting lives.
             _ => self.act(request),
         }

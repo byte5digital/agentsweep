@@ -18,6 +18,7 @@ use agentsweep_core::settings::JudgementEngine;
 use crate::engine::{EngineChange, EngineState};
 use crate::gate::{GateRequest, GateVerdict};
 use crate::integrity::{ChainRecords, IntegrityAnswer};
+use crate::judge::{JudgeAnswer, JudgeRequest};
 use crate::notifications::{Unnotified, changes_from_value};
 use crate::preview::RequestPreview;
 use crate::settings::{SettingsChange, SettingsState};
@@ -427,6 +428,16 @@ impl Client {
         })?;
         RequestPreview::from_value(&answer)
             .ok_or_else(|| ClientError::Unexpected("the preview could not be read".to_string()))
+    }
+
+    /// Hands the daemon one redacted Judgement Request for the Claude engine
+    /// and waits for what came of it: a checked Verdict, no Verdict, or a
+    /// cloud cap that held it back. The key and the Claude client stay in the
+    /// daemon.
+    pub fn judge(&mut self, request: JudgeRequest) -> Result<JudgeAnswer, ClientError> {
+        let answer = self.ask(Request::Judge(request))?;
+        JudgeAnswer::from_value(&answer)
+            .ok_or_else(|| ClientError::Unexpected("the Verdict could not be read".to_string()))
     }
 
     fn ask(&mut self, request: Request) -> Result<serde_json::Value, ClientError> {

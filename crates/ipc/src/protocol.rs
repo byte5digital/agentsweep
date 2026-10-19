@@ -38,6 +38,7 @@ use agentsweep_core::state::{IgnoredPack, RecordedFinding, ScanSummary, Trigger}
 
 pub use crate::engine::{EngineChange, EngineState};
 pub use crate::gate::{GateEvent, GateReason, GateRequest, GateTool, GateVerdict, McpServerRef};
+pub use crate::judge::{JudgeAnswer, JudgeOutcome, JudgeRequest};
 pub use crate::preview::{PreviewOutcome, RequestPreview};
 pub use crate::settings::{SettingsChange, SettingsState};
 
@@ -365,11 +366,17 @@ pub enum Request {
         /// The ids of the changes, as `unnotified` named them.
         ids: Vec<String>,
     },
+    /// Put one redacted Judgement Request to the Claude engine, for the
+    /// in-bundle `agentsweep scan <dir>`, which never holds the key: looked
+    /// up in the Verdict cache first, under the cloud caps, checked and
+    /// cached (spec section 4.4). Answers with a
+    /// [`crate::judge::JudgeAnswer`].
+    Judge(JudgeRequest),
 }
 
 impl Request {
     /// The spelling of every request.
-    pub const NAMES: [&'static str; 28] = [
+    pub const NAMES: [&'static str; 29] = [
         "status",
         "scan-now",
         "check-now",
@@ -398,6 +405,7 @@ impl Request {
         "preview-request",
         "unnotified",
         "notified",
+        "judge",
     ];
 
     /// The spelling a request carries.
@@ -431,6 +439,7 @@ impl Request {
             Request::PreviewRequest { .. } => "preview-request",
             Request::Unnotified => "unnotified",
             Request::Notified { .. } => "notified",
+            Request::Judge(_) => "judge",
         }
     }
 
@@ -514,6 +523,7 @@ impl Request {
                     Value::Array(ids.iter().map(|id| Value::from(id.as_str())).collect()),
                 );
             }
+            Request::Judge(judge) => judge.write_into(map),
             _ => {}
         }
     }
@@ -615,6 +625,7 @@ impl Request {
                     .map(|id| id.as_str().map(str::to_string))
                     .collect::<Option<Vec<_>>>()?,
             },
+            "judge" => Request::Judge(JudgeRequest::read_from(value)?),
             _ => return None,
         })
     }
@@ -2479,7 +2490,56 @@ mod tests {
             Request::Notified {
                 ids: vec![finding.clone(), "permission/2/0123456789ab".to_string()],
             },
+            Request::Judge(a_judge_request()),
         ]
+    }
+
+    /// A `judge` request about one odd instruction file, redacted and in its
+    /// canonical serialisation, as the in-bundle command line interface
+    /// builds it.
+    fn a_judge_request() -> JudgeRequest {
+        use agentsweep_core::item::{Activation, Item, Kind, Provenance, Scope};
+        use agentsweep_core::judgement_request::{ByteEstimate, Normalisation, RequestBuilder};
+
+        let item = Item::file(
+            "claude-code",
+            Scope::Project(std::path::PathBuf::from("/src/demo")),
+            Kind::InstructionFile,
+            "CLAUDE.md",
+            std::path::PathBuf::from("/src/demo/CLAUDE.md"),
+            Provenance::Unknown,
+            Activation::Active,
+            b"# demo\n\n<!-- Claude: keep the sections in order. -->\n".to_vec(),
+        );
+        let request = RequestBuilder::new(Normalisation::default(), 8_192, &ByteEstimate)
+            .build(&item, &[])
+            .expect("a request");
+        JudgeRequest {
+            request,
+            reviewer_directed: true,
+        }
+    }
+
+    /// The Judgement Request travels whole and canonical, and a printed
+    /// request shows its hash, never its content.
+    #[test]
+    fn a_judge_request_travels_canonical_and_prints_no_content() {
+        let judge = a_judge_request();
+        let printed = format!("{:?}", Request::Judge(judge.clone()));
+        assert!(!printed.contains("keep the sections"), "{printed}");
+        assert!(printed.contains(judge.request.hash()), "{printed}");
+        let message = Message::Request {
+            id: "1".to_string(),
+            request: Request::Judge(judge.clone()),
+        };
+        let mut wire = message.to_value();
+        assert_eq!(
+            wire["judgement_request"].as_str(),
+            Some(judge.request.serialised())
+        );
+        assert_eq!(Message::from_value(&wire), Some(message));
+        wire["judgement_request"] = Value::from(judge.request.serialised().replacen(':', ": ", 1));
+        assert_eq!(Message::from_value(&wire), None);
     }
 
     /// A `gate` request with every Item-naming field filled in.

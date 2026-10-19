@@ -20,6 +20,7 @@ pub mod engine;
 pub mod frame;
 pub mod gate;
 pub mod integrity;
+pub mod judge;
 pub mod notifications;
 pub mod peer;
 pub mod preview;

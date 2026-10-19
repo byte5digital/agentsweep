@@ -1,6 +1,7 @@
 //! The Findings window against a real daemon: the list the app keeps from the
 //! status and the subscribe stream, the actions it sends, Reveal in Finder,
-//! the Overview pane, and the Folder Scan it asks for.
+//! the Overview pane, the Folder Scan it asks for, and the notifications it
+//! raises, through a notifier that only records them.
 //!
 //! The daemon runs in this process on a temporary home, a temporary data
 //! directory and a temporary socket, with its chain key held in memory.
@@ -34,8 +35,11 @@ use agentsweep_menubar::actions::{after_quarantine, offered};
 use agentsweep_menubar::asking::{ActionRequest, Asking};
 use agentsweep_menubar::findings::{Findings, Follow};
 use agentsweep_menubar::folder::result_view;
-use agentsweep_menubar::frame::Frame;
+use agentsweep_menubar::frame::{Frame, Pane};
 use agentsweep_menubar::link::{Link, Socket, Update};
+use agentsweep_menubar::notifications::{
+    Activation, NEEDS_YOU_BODY, Notice, Notifications, Notifier,
+};
 use agentsweep_menubar::popover::View;
 use agentsweep_menubar::reveal::{Finder, reveal_in_finder};
 use agentsweep_menubar::supervision::Unsupervised;
@@ -1137,4 +1141,102 @@ fn the_quarantine_pane_purges_a_quarantined_skill() {
         frame.to_value()["panes"]["quarantine"],
         serde_json::json!([])
     );
+}
+
+/// A notifier that records what it was asked to raise and posts nothing.
+#[derive(Clone, Default)]
+struct RecordingNotifier {
+    shown: Arc<Mutex<Vec<Notice>>>,
+    asked: Arc<AtomicU32>,
+}
+
+impl RecordingNotifier {
+    fn shown(&self) -> Vec<Notice> {
+        self.shown.lock().expect("the record").clone()
+    }
+}
+
+impl Notifier for RecordingNotifier {
+    fn ask_permission(&self) -> bool {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        true
+    }
+
+    fn show(&self, notice: &Notice) -> bool {
+        self.shown.lock().expect("the record").push(notice.clone());
+        true
+    }
+}
+
+#[test]
+fn the_app_raises_each_change_once_on_launch_and_from_the_stream() {
+    let sandbox = Sandbox::new("notify");
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let notifier = RecordingNotifier::default();
+    let notifications = Notifications::new(Box::new(notifier.clone()));
+    let following = Following::start(&sandbox);
+
+    // Launch: the Health that opens the subscription asks for what is
+    // un-notified. The planted skill needs a decision; the Exposure tells
+    // nothing.
+    let opening = following
+        .events
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the opening Health");
+    assert!(
+        matches!(opening, StateEvent::HealthChanged { .. }),
+        "{opening:?}"
+    );
+    assert_eq!(notifications.follow(&asking, &opening).expect("raised"), 1);
+    assert_eq!(
+        notifier.shown(),
+        vec![Notice {
+            title: "The skill 'setup' needs your decision".to_string(),
+            body: NEEDS_YOU_BODY.to_string(),
+        }]
+    );
+    assert_eq!(notifier.asked.load(Ordering::SeqCst), 1, "asked once");
+    assert_eq!(notifications.raise(&asking).expect("asked"), 0);
+
+    // A second launch, on a connection of its own, raises nothing and has
+    // nothing to ask permission for.
+    let second = RecordingNotifier::default();
+    let relaunched = Notifications::new(Box::new(second.clone()));
+    assert_eq!(relaunched.raise(&sandbox.asking()).expect("asked"), 0);
+    assert!(second.shown().is_empty());
+    assert_eq!(second.asked.load(Ordering::SeqCst), 0);
+
+    // A stream event: a second planted skill is raised once, as it arrives.
+    let deploy = sandbox.home.join(".claude/skills/deploy");
+    std::fs::create_dir_all(&deploy).expect("a skill directory");
+    std::fs::write(
+        deploy.join("SKILL.md"),
+        String::from_utf8_lossy(PLANTED_SKILL).replace("name: setup", "name: deploy"),
+    )
+    .expect("a second planted skill");
+    let deadline = Instant::now() + Duration::from_secs(180);
+    while notifier.shown().len() < 2 {
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "never raised: {:?}", notifier.shown());
+        if let Ok(event) = following.events.recv_timeout(left) {
+            notifications.follow(&asking, &event).expect("raised");
+        }
+    }
+    let shown = notifier.shown();
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    assert!(
+        shown[1].title.to_lowercase().contains("the skill 'deploy'"),
+        "{shown:?}"
+    );
+    assert_eq!(notifications.raise(&asking).expect("asked"), 0);
+    assert_eq!(notifier.asked.load(Ordering::SeqCst), 1, "asked once");
+
+    // A click on the notification brings the app to the front: the window
+    // opens on Needs your decision, once.
+    assert_eq!(
+        notifications.activated(Activation::BecameActive),
+        Some(Pane::Threats)
+    );
+    assert_eq!(notifications.activated(Activation::Reopen), None);
 }

@@ -26,6 +26,7 @@ use agentsweep_ipc::protocol::{Offer, Sessions, offers};
 use serde_json::{Value, json};
 
 use crate::findings::{card, neutralised_in_place};
+use crate::how_to::how_to;
 use crate::wording::{self, Named, PROJECT_LINE};
 
 /// The confirmation asked before an action's request goes out.
@@ -182,7 +183,8 @@ pub fn offered(finding: &RecordedFinding, posture: Posture) -> Vec<Action> {
 }
 
 /// One Finding as the window renders it in a Posture: the card, with the
-/// buttons and the confirmations that Posture offers.
+/// buttons and the confirmations that Posture offers, and on an open
+/// Exposure its how-to ([`crate::how_to`]).
 pub fn card_in(finding: &RecordedFinding, posture: Posture) -> Value {
     let mut value = card(finding);
     value["actions"] = Value::Array(
@@ -193,6 +195,9 @@ pub fn card_in(finding: &RecordedFinding, posture: Posture) -> Value {
     );
     value["trustConfirm"] = trust_confirmation(finding);
     value["restoreConfirm"] = restore_confirmation(finding);
+    value["howTo"] = how_to(finding, posture)
+        .map(|how_to| how_to.to_value())
+        .unwrap_or(Value::Null);
     value
 }
 
@@ -647,6 +652,52 @@ mod tests {
             Category::Exposure,
         );
         assert!(buttons(&problem, Posture::Simple).is_empty());
+    }
+
+    /// No Exposure of the bundled pack offers Quarantine in either Posture;
+    /// each offers its how-to with Open the file, and 0018 and 0019 on a
+    /// settings entry still offer their one-click fix (spec section 8.5).
+    #[test]
+    fn every_exposure_offers_its_how_to_and_never_quarantine() {
+        let pack = agentsweep_core::rules::RulePack::bundled().expect("the bundled pack");
+        let exposures: Vec<_> = pack
+            .metas()
+            .filter(|meta| meta.category == Category::Exposure)
+            .collect();
+        assert!(exposures.len() >= 6, "the v1 pack has six Exposures");
+        for meta in exposures {
+            for kind in meta.kinds.iter().copied() {
+                let mut exposure = open(
+                    SETTING,
+                    kind,
+                    &format!("rule {:04}", meta.id),
+                    Category::Exposure,
+                );
+                exposure.facts.fix = meta.fix.clone().unwrap_or_default();
+                exposure.facts.path = "/home/u/.claude/settings.json".to_string();
+                for posture in Posture::ALL {
+                    let shown = buttons(&exposure, posture);
+                    assert!(
+                        shown.iter().all(|(command, ..)| *command != "quarantine"),
+                        "{} on {kind}: {shown:?}",
+                        meta.name
+                    );
+                    let fixes = shown.iter().any(|(command, ..)| *command == "fix");
+                    assert_eq!(
+                        fixes,
+                        matches!(meta.id, 18 | 19) && kind == Kind::SettingsEntry,
+                        "{} on {kind}: {shown:?}",
+                        meta.name
+                    );
+                    let card = card_in(&exposure, posture);
+                    assert_eq!(card["howTo"]["label"], "Show me how to fix this");
+                    assert_eq!(card["howTo"]["open"], "Open the file");
+                    assert_eq!(card["howTo"]["steps"], meta.fix.as_deref().unwrap());
+                }
+            }
+        }
+        let threat = open(SKILL, Kind::Skill, "rule 0001", Category::Threat);
+        assert!(card_in(&threat, Posture::Simple)["howTo"].is_null());
     }
 
     /// The card a Posture renders carries that Posture's buttons.

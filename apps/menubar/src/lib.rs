@@ -34,6 +34,8 @@
 //!   Ambiguous Items it alone lists, and when Reveal in Finder is offered.
 //! - [`reveal`]: Reveal in Finder through the daemon's reveal-receipt
 //!   request, behind a Finder seam.
+//! - [`how_to`]: **Show me how to fix this** on an Exposure, and **Open the
+//!   file** behind an Opener seam; the app never reads the file.
 //! - [`folder`]: the answer of a Folder Scan as the window shows it.
 //! - [`settings_pane`]: the Settings pane: the Detail choice, the background
 //!   toggles, Advanced and what AgentSweep does not protect against.
@@ -56,6 +58,7 @@ pub mod findings;
 pub mod folder;
 pub mod frame;
 pub mod glyph;
+pub mod how_to;
 pub mod launch_agent;
 pub mod link;
 pub mod overview;

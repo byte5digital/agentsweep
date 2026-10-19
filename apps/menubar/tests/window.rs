@@ -640,6 +640,31 @@ fn the_simple_posture_words_the_findings_a_real_daemon_sends() {
     );
     assert_eq!(bypass["simple"]["chip"], "amber");
 
+    // The Exposure shows its Rule's how-to with the file by its name, and
+    // the Developer Posture names the same file by its path; the Threat has
+    // no how-to and offers Quarantine instead.
+    assert_eq!(bypass["howTo"]["label"], "Show me how to fix this");
+    assert_eq!(bypass["howTo"]["file"], "settings.json");
+    assert_eq!(bypass["howTo"]["open"], "Open the file");
+    assert!(
+        bypass["howTo"]["steps"]
+            .as_str()
+            .is_some_and(|steps| steps.starts_with("Open the file")),
+        "{bypass}"
+    );
+    assert!(skill["howTo"].is_null(), "{skill}");
+    let recorded = status
+        .findings
+        .iter()
+        .find(|finding| bypass["id"] == finding.id.as_str())
+        .expect("the same Exposure");
+    let developer_bypass = agentsweep_menubar::actions::card_in(recorded, Posture::Developer);
+    let path = developer_bypass["howTo"]["file"].as_str().expect("a path");
+    assert!(
+        path.starts_with('/') && path.ends_with("/.claude/settings.json"),
+        "{path}"
+    );
+
     for card in [&skill, &bypass] {
         let item_id = card["itemId"].as_str().expect("an Item id");
         let lines = card["simple"]["lines"].as_array().expect("lines");

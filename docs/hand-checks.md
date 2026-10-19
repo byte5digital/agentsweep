@@ -582,3 +582,21 @@ Every release draft runs the release checklist, section 9.3 of the specification
 - Every exception in `deny.toml` was read again if Tauri or yara-x moved since the last release, and each one's reason still holds.
 - For the first tagged release, `agentsweep-core` and the three adapter crates are publishable and are published to crates.io before the `agentsweep` CLI.
 - The Rule Feed's layout is the one the client reads: the index on the `feed` branch holds only the pack version, and each `rules-v<N>` release holds `manifest.json`, one `<KEY ID>.minisig` per signing key and an uncompressed `pack.tar` of the `rules/` and `iocs/` trees.
+
+## A dry run of the release workflow
+
+The app release workflow runs only on a pushed `v<semver>` tag, behind the `release` environment, so its first real run is the first draft. Everything in it except Apple's and GitHub's part can be run beforehand on a developer's machine, with the same scripts in the same order:
+
+```sh
+.github/scripts/release-dry-run.sh
+```
+
+It takes the tag to pretend was pushed as its argument, `v` and the workspace version by default, and holds it to the version gate first. It copies the source into a temporary directory and builds there: the universal auditable sidecars, then `tauri build` with the app and the DMG, signed ad hoc, and the updater archive signed with a throwaway updater key it generates in the same temporary directory. It stages the DMG, the updater archive and its `.sig` under their release names, signs the DMG ad hoc when Tauri left it unsigned, runs the release bundle checker in ad hoc mode on the app, the DMG and the updater archive (which includes the daemon's frozen identifier in each architecture), and writes and checks `latest.json`. It needs both Apple targets and cargo-auditable as for the release-like bundle above; on a machine with one Apple target, `TARGET=aarch64-apple-darwin` builds that one, and the checker then reports every executable as lacking x86_64 and fails for that alone. It never touches the Keychain, uploads nothing and leaves nothing outside the temporary directory but the release directory it names at the end. Tauri warns that the throwaway key does not match the updater public key the app pins; that is expected.
+
+What the dry run cannot stand in for, and only the first real draft shows:
+
+- Notarization of the app by Tauri and of the DMG by the workflow, and the staple on the DMG.
+- Gatekeeper's answer, `spctl -a -vv`, on the app and the DMG.
+- `Timestamp=` on every Mach-O, which needs a Developer ID signature: Tauri passes no `--timestamp` to codesign, and the release bundle checker fails the draft if any binary lacks it (spec section 12).
+- The identity as first authority, one Team ID on every binary, and the daemon's identifier in its designated requirement.
+- The attestations, the draft itself, and its asset listing, which shows whether the DMG, the updater archive, its `.sig` and `latest.json` all reached the draft (stack research, unverified item 9).

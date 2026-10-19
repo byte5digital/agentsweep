@@ -498,6 +498,20 @@ pub fn check(
     request: &JudgementRequest,
     fired: &[FiredHeuristic],
 ) -> Result<Verdict, NoVerdict> {
+    let reviewer_directed = fired.iter().any(|heuristic| heuristic.reviewer_directed);
+    check_flagged(outcome, request, reviewer_directed)
+}
+
+/// The same checks, told only whether a Heuristic marked
+/// `reviewer_directed` fired, which is all the reviewer-directed rule reads.
+/// The daemon checks the answers to the requests the in-bundle command line
+/// interface hands it this way: the request carries the fired Heuristics'
+/// ids and sentences, not their marks.
+pub fn check_flagged(
+    outcome: Result<String, EngineError>,
+    request: &JudgementRequest,
+    reviewer_directed: bool,
+) -> Result<Verdict, NoVerdict> {
     let text = outcome.map_err(NoVerdict::Engine)?;
     let answer = parse_answer(&text).map_err(NoVerdict::Unparsable)?;
     match answer.verdict {
@@ -511,9 +525,7 @@ pub fn check(
                 evidence: answer.evidence,
             })
         }
-        VerdictWord::Benign if fired.iter().any(|heuristic| heuristic.reviewer_directed) => {
-            Ok(Verdict::Unsure)
-        }
+        VerdictWord::Benign if reviewer_directed => Ok(Verdict::Unsure),
         VerdictWord::Benign => Ok(Verdict::Benign),
         VerdictWord::Unsure => Ok(Verdict::Unsure),
     }

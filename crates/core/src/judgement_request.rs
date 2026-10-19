@@ -263,6 +263,52 @@ impl JudgementRequest {
         self.content.iter().any(|piece| piece.windowed)
     }
 
+    /// Reads a request back from its canonical serialisation, as the daemon
+    /// reads the one the in-bundle command line interface hands it for the
+    /// Claude engine. Text that is not exactly the canonical serialisation of
+    /// a request is refused, so what is hashed and sent is what was built.
+    pub fn from_serialised(text: &str) -> Option<JudgementRequest> {
+        let value: Value = serde_json::from_str(text).ok()?;
+        let string = |from: &Value, field: &str| -> Option<String> {
+            from.get(field)?.as_str().map(str::to_string)
+        };
+        let facts = value.get("facts")?;
+        let facts = RequestFacts {
+            kind: string(facts, "kind")?,
+            shape: string(facts, "shape")?,
+            scope: string(facts, "scope")?,
+            provenance: string(facts, "provenance")?,
+            activation: string(facts, "activation")?,
+            activation_reason: string(facts, "activation_reason")?,
+        };
+        let heuristics = value
+            .get("heuristics")?
+            .as_array()?
+            .iter()
+            .map(|line| {
+                Some(RequestHeuristic {
+                    id: line.get("id")?.as_i64()?,
+                    plain: string(line, "plain")?,
+                    excerpt: string(line, "excerpt")?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let content = value
+            .get("content")?
+            .as_array()?
+            .iter()
+            .map(|part| {
+                Some(RequestContent {
+                    file: string(part, "file")?,
+                    text: string(part, "text")?,
+                    windowed: part.get("windowed")?.as_bool()?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let request = JudgementRequest::assemble(facts, heuristics, content);
+        (request.serialised == text).then_some(request)
+    }
+
     fn assemble(
         facts: RequestFacts,
         heuristics: Vec<RequestHeuristic>,

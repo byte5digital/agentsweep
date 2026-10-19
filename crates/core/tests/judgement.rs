@@ -14,7 +14,8 @@ use agentsweep_core::item::{
 };
 use agentsweep_core::judgement::{
     CATEGORIES, Category, EngineError, JudgementEngine, NoVerdict, PROMPT_VERSION, Prompt,
-    REASON_CHARS, ScriptedEngine, Verdict, judge, judgement_severity, parse_answer, verdict_schema,
+    REASON_CHARS, ScriptedEngine, Verdict, check_flagged, judge, judgement_severity, parse_answer,
+    verdict_schema,
 };
 use agentsweep_core::judgement_request::{
     ByteEstimate, JudgementRequest, Normalisation, RequestBuilder,
@@ -336,6 +337,28 @@ fn a_benign_answer_without_a_reviewer_directed_heuristic_is_benign() {
         &fired,
     );
     assert_eq!(verdict, Ok(Verdict::Benign));
+}
+
+/// The daemon checks the answer to a request the command line interface
+/// handed it knowing only whether a reviewer-directed Heuristic fired: the
+/// same rule, the same quote check.
+#[test]
+fn the_checks_told_only_the_reviewer_directed_mark_judge_alike() {
+    let (request, _) = plain_suspicion();
+    let benign = || Ok(answer("benign", "Looks fine.", &["nothing"]));
+    assert_eq!(check_flagged(benign(), &request, true), Ok(Verdict::Unsure));
+    assert_eq!(
+        check_flagged(benign(), &request, false),
+        Ok(Verdict::Benign)
+    );
+    assert_eq!(
+        check_flagged(
+            Ok(answer("malicious", "Pipes a download.", &["not in it"])),
+            &request,
+            false
+        ),
+        Err(NoVerdict::Unquoted)
+    );
 }
 
 #[test]

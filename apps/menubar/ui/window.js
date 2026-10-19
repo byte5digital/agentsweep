@@ -11,6 +11,7 @@
 // table shown always, and the Threat Findings pane lists the Ambiguous Items
 // beneath the Findings (spec sections 4.3 and 8.2).
 
+import { renderBanner } from "./banner.js";
 import { isDeveloper, takePosture } from "./posture.js";
 import { lookAtAiCheck, renderAiCheck } from "./ai_check.js";
 
@@ -605,7 +606,10 @@ let scanAnswer = "";
 // The Overview pane (spec section 8.1). With Protection off it shows the
 // sentence alone and offers neither Scan action (spec section 6.2).
 function renderOverview(overview) {
-  $("overview-sentence").textContent = overview.sentence;
+  // A banner replaces the sentence (spec section 8.6).
+  renderBanner($("overview-banner"), overview.banner);
+  $("overview-sentence").hidden = overview.sentence === null;
+  $("overview-sentence").textContent = overview.sentence ?? "";
   $("overview-body").hidden = overview.off;
   $("overview-scan").hidden = !overview.actions;
   const agents = overview.agents.map((agent) => {

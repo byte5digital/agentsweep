@@ -11,13 +11,21 @@
     <main class="popover" data-orb="off">
       <section class="status">
         <span class="orb" aria-hidden="true"></span>
-        <div>
+        <div id="said">
           <p class="sentence" id="sentence">Protection is off.</p>
           <p class="detail" id="detail"></p>
         </div>
+        <!-- The integrity and Protection banners replace the sentence
+             (spec section 8.6). -->
+        <div class="banner" id="banner" hidden>
+          <p class="banner-title"></p>
+          <p class="banner-body"></p>
+          <p class="banner-developer" hidden></p>
+          <div class="banner-buttons"></div>
+          <p class="detail banner-line" hidden></p>
+        </div>
       </section>
       <p class="last-check" id="last-check" hidden></p>
-      <button type="button" id="login-items" class="primary" hidden>Open Login Items</button>
       <div id="asking">
         <button type="button" id="open-window">Open AgentSweep</button>
         <button type="button" id="scan-now">Scan now</button>

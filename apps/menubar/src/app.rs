@@ -10,6 +10,12 @@
 //! - `popover`: the popover's view as it stands, for a popover that just
 //!   loaded.
 //! - `open_login_items`: System Settings at Login Items.
+//! - `start_daemon`: **Start it** on "Not watching right now", which asks
+//!   launchd to start the registered daemon job ([`supervision::start_daemon`]).
+//! - `start_fresh_record`, `look_at_records`, `show_what_changed`,
+//!   `scan_again_trusting_nothing`: the integrity banners' buttons, each the
+//!   daemon's matching request; the window then opens on Activity at the
+//!   break point or at the restart record ([`crate::integrity`]).
 //! - `quit`: quits the app. Protection stays on: the daemon is a launch agent
 //!   of its own and does not go with the app.
 //! - `open_window`: opens the Findings window, which makes the app a regular
@@ -62,6 +68,8 @@
 //! - `agentsweep://folder`: the Folder Scan in hand: running, done or failed.
 //! - `agentsweep://pane`: the pane the Findings window turns to, by its id,
 //!   when a click on a notification brought the app to the front.
+//! - `agentsweep://activity-at`: the Event Log sequence the Activity pane
+//!   opens at after an integrity button, or null for the pane alone.
 //!
 //! Notifications (spec sections 6.7 and 8.7) are raised here through the
 //! notification plugin, on every launch and on every stream event that may
@@ -86,6 +94,7 @@ use agentsweep_ipc::protocol::{Message, StateEvent};
 
 use crate::ai_check;
 use crate::asking::{ActionRequest, Asking, refusal, scan_now_line};
+use crate::banner::Button;
 use crate::cli_link;
 use crate::developer::offers_reveal;
 use crate::findings::Follow;
@@ -93,6 +102,7 @@ use crate::folder;
 use crate::frame::Frame;
 use crate::glyph::{self, Mark};
 use crate::how_to::{self, SystemOpener};
+use crate::integrity;
 use crate::inventory::Inventory;
 use crate::link::{Link, Socket, Update};
 use crate::notifications::{Activation, Notice, Notifications, Notifier};
@@ -133,6 +143,9 @@ pub const FOLDER_EVENT: &str = "agentsweep://folder";
 
 /// The event that turns the Findings window to a pane.
 pub const PANE_EVENT: &str = "agentsweep://pane";
+
+/// The event that opens the Activity pane at one record.
+pub const ACTIVITY_AT_EVENT: &str = "agentsweep://activity-at";
 
 /// The notification plugin, which posts through the operating system.
 struct PluginNotifier(AppHandle);
@@ -221,20 +234,86 @@ struct Shell {
     handover: Mutex<Handover>,
 }
 
-/// The popover's view as it stands.
+/// The popover's view as it stands, in the window's Posture.
 #[tauri::command]
 fn popover(shell: tauri::State<'_, Shell>) -> Value {
+    let posture = shell
+        .frame
+        .lock()
+        .expect("the frame is not poisoned")
+        .posture();
     shell
         .view
         .lock()
         .expect("the view is not poisoned")
-        .to_value()
+        .to_value(posture)
+}
+
+/// Sends the popover's view as it stands, in the window's Posture.
+fn send_view(app: &AppHandle) {
+    let value = popover(app.state::<Shell>());
+    let _ = app.emit(VIEW_EVENT, value);
 }
 
 /// Opens System Settings at Login Items, where approval is given.
 #[tauri::command]
 fn open_login_items(shell: tauri::State<'_, Shell>) {
     shell.services.open_login_items();
+}
+
+/// **Start it**: asks launchd to start the registered daemon job. The link
+/// sees the daemon once it answers.
+#[tauri::command]
+async fn start_daemon(app: AppHandle) -> Result<String, String> {
+    let services = Arc::clone(&app.state::<Shell>().services);
+    tauri::async_runtime::spawn_blocking(move || supervision::start_daemon(&*services))
+        .await
+        .map_err(|error| format!("AgentSweep could not be started: {error}"))?
+        .map(|()| "Starting AgentSweep.".to_string())
+        .map_err(|why| format!("AgentSweep could not be started: {why}"))
+}
+
+/// One integrity button: its request, then the window on Activity at the
+/// record it concerns.
+async fn answer_records(app: AppHandle, button: Button) -> Result<String, String> {
+    let (health, activity) = {
+        let shell = app.state::<Shell>();
+        let frame = shell.frame.lock().expect("the frame is not poisoned");
+        (frame.health().clone(), frame.activity().clone())
+    };
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    let pressed = tauri::async_runtime::spawn_blocking(move || {
+        integrity::press(button, &health, &activity, &*asking)
+    })
+    .await
+    .map_err(|error| format!("AgentSweep could not be asked: {error}"))??;
+    show_window(&app);
+    let _ = app.emit(ACTIVITY_AT_EVENT, pressed.focus);
+    Ok(pressed.line)
+}
+
+/// "Start a fresh record".
+#[tauri::command]
+async fn start_fresh_record(app: AppHandle) -> Result<String, String> {
+    answer_records(app, Button::StartFreshRecord).await
+}
+
+/// "Look at the records".
+#[tauri::command]
+async fn look_at_records(app: AppHandle) -> Result<String, String> {
+    answer_records(app, Button::LookAtRecords).await
+}
+
+/// "Show what changed".
+#[tauri::command]
+async fn show_what_changed(app: AppHandle) -> Result<String, String> {
+    answer_records(app, Button::ShowWhatChanged).await
+}
+
+/// "Scan again, trusting nothing".
+#[tauri::command]
+async fn scan_again_trusting_nothing(app: AppHandle) -> Result<String, String> {
+    answer_records(app, Button::ScanAgainTrustingNothing).await
 }
 
 /// Quits the app and nothing else.
@@ -856,7 +935,8 @@ fn refresh(app: &AppHandle) {
     let _ = app.emit(FINDINGS_EVENT, value);
 }
 
-/// Sends the window's view as it stands.
+/// Sends the window's view as it stands, and the popover's with it, whose
+/// banner follows the window's Posture.
 fn render(app: &AppHandle) {
     let value = app
         .state::<Shell>()
@@ -865,6 +945,7 @@ fn render(app: &AppHandle) {
         .expect("the frame is not poisoned")
         .to_value();
     let _ = app.emit(FINDINGS_EVENT, value);
+    send_view(app);
 }
 
 /// The glyph for a view, as a template image.
@@ -902,7 +983,7 @@ fn take(app: &AppHandle, update: Update) {
             if let Some(tray) = app.tray_by_id(TRAY) {
                 let _ = tray.set_tooltip(Some(format!("AgentSweep: {}", view.sentence)));
             }
-            let _ = app.emit(VIEW_EVENT, view.to_value());
+            send_view(app);
         }
         Update::Event(event) => {
             // Health arrives only from a daemon that answers, which is when
@@ -1029,6 +1110,11 @@ pub fn run(start: Start) {
         .invoke_handler(tauri::generate_handler![
             popover,
             open_login_items,
+            start_daemon,
+            start_fresh_record,
+            look_at_records,
+            show_what_changed,
+            scan_again_trusting_nothing,
             quit,
             open_window,
             findings,

@@ -21,6 +21,10 @@
 //!   connection of their own, and their answers in the command line
 //!   interface's words.
 //! - [`popover`]: the view the popover renders.
+//! - [`banner`]: the integrity and Protection banners that replace the
+//!   status sentence, and their buttons.
+//! - [`integrity`]: what the integrity buttons ask the daemon and where the
+//!   Activity pane opens after them.
 //! - [`findings`]: the Findings window's list, kept from the status and the
 //!   subscribe stream, with the actions the daemon allows on each Finding.
 //! - [`actions`]: the buttons of spec section 8.5 on one Finding in a
@@ -63,6 +67,7 @@ pub mod activity;
 pub mod ai_check;
 pub mod app;
 pub mod asking;
+pub mod banner;
 pub mod cli_link;
 pub mod developer;
 pub mod findings;
@@ -70,6 +75,7 @@ pub mod folder;
 pub mod frame;
 pub mod glyph;
 pub mod how_to;
+pub mod integrity;
 pub mod inventory;
 pub mod launch_agent;
 pub mod link;

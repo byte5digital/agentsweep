@@ -570,3 +570,41 @@ dialog {
   padding: 6px 0;
   border-top: 1px solid var(--rule);
 }
+
+/* The integrity and Protection banners on the Overview (spec section 8.6). */
+.banner {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--threat) 14%, transparent);
+}
+
+.banner[data-tone="amber"] {
+  background: color-mix(in srgb, var(--exposure) 16%, transparent);
+}
+
+.banner p {
+  margin: 0;
+}
+
+.banner-title {
+  font-weight: 600;
+}
+
+.banner-body,
+.banner-developer,
+.banner-line {
+  margin-top: 4px !important;
+}
+
+.banner-developer {
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+}
+
+.banner-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}

@@ -36,9 +36,15 @@
         <main id="panes">
           <section class="pane" data-pane="overview" hidden>
             <h2 class="pane-title"></h2>
-            <!-- The integrity and Protection banners take this place
+            <!-- The integrity and Protection banners replace the sentence
                  (spec section 8.6). -->
-            <div id="overview-banner" hidden></div>
+            <div class="banner" id="overview-banner" hidden>
+              <p class="banner-title"></p>
+              <p class="banner-body"></p>
+              <p class="banner-developer" hidden></p>
+              <div class="banner-buttons"></div>
+              <p class="muted banner-line" hidden></p>
+            </div>
             <p class="sentence" id="overview-sentence"></p>
             <div id="overview-body">
               <ul class="agents" id="overview-agents"></ul>

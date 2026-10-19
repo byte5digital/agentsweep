@@ -116,6 +116,49 @@ button:hover {
   background: var(--rule);
 }
 
+/* The integrity and Protection banners (spec section 8.6). */
+.banner {
+  flex: 1;
+  margin: -4px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--off) 14%, transparent);
+}
+
+.banner[data-tone="amber"] {
+  background: color-mix(in srgb, var(--attention) 16%, transparent);
+}
+
+.banner p {
+  margin: 0;
+}
+
+.banner-title {
+  font-weight: 600;
+}
+
+.banner-body,
+.banner-developer {
+  margin-top: 4px !important;
+  font-size: 12px;
+}
+
+.banner-developer {
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.banner button {
+  margin-top: 8px;
+}
+
+.banner[data-tone="amber"] button.primary {
+  border-color: var(--attention);
+}
+
 /* The hidden attribute wins over every display rule above. */
 [hidden] {
   display: none !important;

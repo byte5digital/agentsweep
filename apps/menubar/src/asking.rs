@@ -17,12 +17,14 @@
 use std::io::ErrorKind;
 use std::sync::Mutex;
 
+use agentsweep_core::envelope::ChainId;
 use agentsweep_core::eventlog::Outcome;
 use agentsweep_core::item::ItemId;
 use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::quarantine::{Conflict, RestoreReport};
 use agentsweep_core::settings::JudgementEngine;
 use agentsweep_ipc::engine::{EngineChange, EngineState};
+use agentsweep_ipc::integrity::{ChainRecords, IntegrityAnswer};
 use agentsweep_ipc::notifications::Unnotified;
 use agentsweep_ipc::preview::RequestPreview;
 use agentsweep_ipc::protocol::{
@@ -234,6 +236,24 @@ impl Asking {
     /// one already under way.
     pub fn scan_now(&self) -> Result<bool, ClientError> {
         self.with(true, Client::scan_now)
+    }
+
+    /// One page of a chain's records from one sequence on ("Look at the
+    /// records", "Show what changed"). It only reads, so it may be asked
+    /// twice.
+    pub fn records(&self, chain: ChainId, from: u64) -> Result<ChainRecords, ClientError> {
+        self.with(true, |client| client.records(chain, from))
+    }
+
+    /// "Start a fresh record". It writes, so it is asked again only when it
+    /// provably never left.
+    pub fn acknowledge_key_missing(&self) -> Result<IntegrityAnswer, ClientError> {
+        self.with(false, Client::acknowledge_key_missing)
+    }
+
+    /// "Scan again, trusting nothing", asked like "Start a fresh record".
+    pub fn acknowledge_chain_broken(&self) -> Result<IntegrityAnswer, ClientError> {
+        self.with(false, Client::acknowledge_chain_broken)
     }
 
     /// Carries out one action and renders the answer for the window.

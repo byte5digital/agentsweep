@@ -11,10 +11,11 @@
 //! and offers nothing else (spec section 6.2): no Agent, no date and neither
 //! Scan action.
 //!
-//! The lines for projects that Need Permission and for the Gate, the AI check
-//! progress line and the integrity and Protection banners are other screens'
-//! (spec sections 8.1 and 8.6); the window leaves their places in the layout
-//! and this view carries nothing for them yet.
+//! The integrity and Protection banners replace the status sentence here as
+//! in the popover ([`crate::banner`]). The lines for projects that Need
+//! Permission and for the Gate and the AI check progress line are other
+//! screens' (spec sections 8.1 and 8.6); the window leaves their places in
+//! the layout and this view carries nothing for them yet.
 
 use agentsweep_core::health::Health;
 use agentsweep_core::overview::{AgentRecord, Overview};
@@ -23,6 +24,7 @@ use agentsweep_core::state::ScanSummary;
 use agentsweep_ipc::protocol::Status;
 use serde_json::{Value, json};
 
+use crate::banner::{self, Daemon, Shown};
 use crate::findings::{ScanLine, count, progress_line};
 
 /// One Agent as the Overview names it.
@@ -61,6 +63,8 @@ pub struct OverviewView {
     /// The last Scan on one line: trigger, Item count, duration, Finding
     /// counts, Bands, Rule Pack and engine. The Developer Posture only.
     pub summary: Option<String>,
+    /// The banner that replaces the sentence, when one stands.
+    pub banner: Option<Shown>,
 }
 
 impl OverviewView {
@@ -68,7 +72,8 @@ impl OverviewView {
     pub fn to_value(&self) -> Value {
         json!({
             "off": self.off,
-            "sentence": self.sentence,
+            "sentence": self.banner.is_none().then_some(self.sentence.as_str()),
+            "banner": self.banner.as_ref().map(Shown::to_value),
             "agents": self
                 .agents
                 .iter()
@@ -124,6 +129,7 @@ pub fn view(
             scanning: false,
             progress: String::new(),
             summary: None,
+            banner: banner::choose(health, &Daemon::Off).map(|banner| banner.shown(posture)),
         };
     }
     OverviewView {
@@ -150,6 +156,7 @@ pub fn view(
             Posture::Developer => last_scan.map(summary_line),
             Posture::Simple => None,
         },
+        banner: banner::choose(health, &Daemon::Answering).map(|banner| banner.shown(posture)),
     }
 }
 

@@ -29,6 +29,7 @@ use serde_json::{Value, json};
 use crate::actions::card_in;
 use crate::activity::Activity;
 use crate::ai_check;
+use crate::banner::Banner;
 use crate::developer::{ambiguous_card, offers_reveal};
 use crate::findings::{Findings, Follow};
 use crate::overview::{self, OverviewView};
@@ -155,6 +156,10 @@ pub struct Frame {
     presence: Option<EngineState>,
     /// The Activity lines of the last status, followed from the stream.
     activity: Activity,
+    /// The banner the link chose while no daemon answers: Protection off,
+    /// or "Not watching right now" for a registered daemon that is not
+    /// running. Absent while a daemon answers.
+    absent: Option<Banner>,
 }
 
 /// A follow-up that at least sends the view again.
@@ -285,9 +290,22 @@ impl Frame {
     /// the rest.
     pub fn view(&mut self, view: &View) -> Follow {
         match view.protection_off {
-            true => self.off(&view.detail),
+            true => {
+                let moved = self.absent != view.banner;
+                self.absent = view.banner.clone();
+                match (self.off(&view.detail), moved) {
+                    (follow, true) => at_least_render(follow),
+                    (follow, false) => follow,
+                }
+            }
             false => Follow::Nothing,
         }
+    }
+
+    /// The Health as the daemon last said it, or Protection off while none
+    /// answers.
+    pub fn health(&self) -> &Health {
+        &self.health
     }
 
     /// Applies one state event: a moved choice may change the Posture, a
@@ -301,6 +319,7 @@ impl Frame {
                 self.off(health.protection.reason())
             }
             StateEvent::HealthChanged { health } => {
+                self.absent = None;
                 let follow = self.findings.apply(event);
                 match self.health == **health {
                     true => follow,
@@ -328,13 +347,19 @@ impl Frame {
 
     /// The Overview pane as it stands.
     pub fn overview(&self) -> OverviewView {
-        overview::view(
+        let mut view = overview::view(
             &self.health,
             &self.overview,
             self.last_scan.as_ref(),
             self.findings.scan(),
             self.posture,
-        )
+        );
+        if self.health.protection.is_off()
+            && let Some(absent) = &self.absent
+        {
+            view.banner = Some(absent.shown(self.posture));
+        }
+        view
     }
 
     /// The Quarantine pane as it stands: every Item in quarantine and the
@@ -857,6 +882,54 @@ mod tests {
         };
         assert_eq!(frame.apply(&quiet), Follow::Render);
         assert_eq!(frame.overview().sentence, status().health.headline());
+    }
+
+    /// The Overview shows the banner the popover shows: "Not watching right
+    /// now" from the link while no daemon answers, with the LaunchAgent label
+    /// only in the Developer Posture, and the key missing banner from the
+    /// daemon's Health once one does; a quiet Health clears it.
+    #[test]
+    fn the_overview_shows_the_banner_in_place_of_the_sentence() {
+        let mut frame = Frame::new();
+        frame.load(&status());
+        assert_eq!(frame.overview().banner, None);
+
+        let silent = View::not_watching("the daemon stopped answering");
+        assert_eq!(frame.view(&silent), Follow::Render);
+        let shown = frame.overview();
+        let banner = shown.banner.clone().expect("a banner");
+        assert_eq!(banner.title, crate::banner::NOT_WATCHING);
+        assert_eq!(banner.developer, None);
+        assert!(shown.to_value()["sentence"].is_null());
+
+        frame.settings(&settings(Posture::Developer));
+        let line = frame.overview().banner.expect("a banner").developer;
+        assert!(
+            line.as_deref()
+                .is_some_and(|line| line.contains(agentsweep_core::DAEMON_LABEL)),
+            "{line:?}"
+        );
+
+        let reset = Health {
+            events: agentsweep_core::chain::ChainState::KeyMissing,
+            // An open Threat would outrank the reset.
+            open_threats: 0,
+            ..status().health
+        };
+        frame.apply(&StateEvent::HealthChanged {
+            health: Box::new(reset),
+        });
+        let banner = frame.overview().banner.expect("a banner");
+        assert_eq!(banner.title, crate::banner::KEY_MISSING);
+        assert_eq!(
+            banner.developer.as_deref(),
+            Some(crate::banner::RESET_CANNOT_RULE_OUT_TAMPERING)
+        );
+
+        frame.apply(&StateEvent::HealthChanged {
+            health: Box::new(status().health),
+        });
+        assert_eq!(frame.overview().banner, None);
     }
 
     /// A daemon that stops answering leaves the sentence alone in the

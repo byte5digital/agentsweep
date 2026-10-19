@@ -1,15 +1,19 @@
-//! What the popover shows: the status orb, one Health sentence by precedence,
-//! the last check time, and "Protection is off" with the Login Items button
-//! when that is where the user has to go.
+//! What the popover shows (spec section 8.1): the status orb, one Health
+//! sentence by precedence, the last check time, and for the integrity and
+//! Protection states the coloured banner that replaces the sentence
+//! ([`crate::banner`]). Nothing else: no Finding list, no Finding action and
+//! no progress count in either Posture; while a Scan runs the sentence is
+//! "Checking now." and nothing more.
 //!
 //! The sentence is [`Health::headline`], the one the command line interface
 //! prints, so the app and the terminal say the same thing about the same
-//! machine. Everything else in the wording here is placeholder and commits to
-//! nothing in spec section 8.
+//! machine.
 
 use agentsweep_core::health::{Health, Rung};
+use agentsweep_core::settings::Posture;
 use serde_json::{Value, json};
 
+use crate::banner::{self, Banner, Daemon};
 use crate::supervision::Stale;
 
 /// The state the orb and the menu bar glyph show.
@@ -73,12 +77,16 @@ pub struct View {
     pub sentence: String,
     /// When the last Full Scan finished, RFC 3339, absent before the first.
     pub last_check: Option<String>,
-    /// True when Protection is off, which the popover always shows.
+    /// True when no daemon is there to answer: Protection is off, or the
+    /// registered daemon is not running. The popover then offers nothing but
+    /// its banner and Quit (spec section 6.2).
     pub protection_off: bool,
     /// True when the popover offers the button that opens Login Items.
     pub login_items: bool,
-    /// A line under the sentence for whoever wants the reason. Placeholder.
+    /// A line under the sentence for whoever wants the reason.
     pub detail: String,
+    /// The banner that replaces the sentence, when one stands.
+    pub banner: Option<Banner>,
 }
 
 impl View {
@@ -95,6 +103,7 @@ impl View {
             || health.feed_unreachable.is_some()
             || health.open_findings() > 0;
         View {
+            banner: banner::choose(health, &Daemon::Answering),
             orb: match asks_something {
                 true => Orb::Attention,
                 false => Orb::Clear,
@@ -126,6 +135,25 @@ impl View {
             protection_off: true,
             login_items: true,
             detail: why.reason(),
+            banner: banner::choose(&health, &Daemon::Off),
+        }
+    }
+
+    /// The view when the daemon's registration is enabled and no daemon
+    /// answers: the amber "Not watching right now" with **Start it**, never
+    /// Login Items, since nothing waits for approval there (spec section
+    /// 8.6). The Health sentence is still Protection off, which the tooltip
+    /// and the command line interface say.
+    pub fn not_watching(reason: &str) -> View {
+        let health = Health::unreachable(reason);
+        View {
+            orb: Orb::Off,
+            sentence: health.headline(),
+            last_check: None,
+            protection_off: true,
+            login_items: false,
+            detail: reason.to_string(),
+            banner: banner::choose(&health, &Daemon::NotRunning),
         }
     }
 
@@ -139,6 +167,7 @@ impl View {
             protection_off: false,
             login_items: false,
             detail: String::new(),
+            banner: None,
         }
     }
 
@@ -160,6 +189,7 @@ impl View {
                     "launchd could not start the background item as registered.".to_string()
                 }
             },
+            banner: None,
         }
     }
 
@@ -169,15 +199,22 @@ impl View {
         View::off(&Off::Unreachable("no daemon answered yet".to_string()))
     }
 
-    /// The value the frontend receives.
-    pub fn to_value(&self) -> Value {
+    /// The value the frontend receives in a Posture. A banner replaces the
+    /// sentence and the line under it, so neither is sent beside one.
+    pub fn to_value(&self, posture: Posture) -> Value {
+        let banner = self.banner.as_ref().map(|banner| banner.shown(posture));
+        let replaced = banner.is_some();
         json!({
             "orb": self.orb.as_str(),
-            "sentence": self.sentence,
+            "sentence": (!replaced).then_some(self.sentence.as_str()),
             "lastCheck": self.last_check,
             "protectionOff": self.protection_off,
             "loginItems": self.login_items,
-            "detail": self.detail,
+            "detail": match replaced {
+                true => "",
+                false => self.detail.as_str(),
+            },
+            "banner": banner.map(|banner| banner.to_value()),
         })
     }
 }
@@ -308,12 +345,127 @@ mod tests {
 
     #[test]
     fn the_frontend_receives_every_field_by_name() {
-        let value = View::off(&Off::NeedsApproval).to_value();
+        let value = View::off(&Off::NeedsApproval).to_value(Posture::Simple);
         assert_eq!(value["orb"], "off");
-        assert_eq!(value["sentence"], "Protection is off.");
+        assert_eq!(value["banner"]["title"], "Protection is off");
         assert_eq!(value["lastCheck"], Value::Null);
         assert_eq!(value["protectionOff"], true);
         assert_eq!(value["loginItems"], true);
+    }
+
+    /// Each integrity and Protection state replaces the sentence and the
+    /// line under it with its banner; every other rung keeps the sentence.
+    #[test]
+    fn a_banner_replaces_the_sentence() {
+        let tampered = Health {
+            events: ChainState::Broken {
+                sequence: 3,
+                reason: BreakReason::MacFailed,
+            },
+            ..Health::running()
+        };
+        let reset = Health {
+            events: ChainState::KeyMissing,
+            ..Health::running()
+        };
+        let views = [
+            (View::off(&Off::NeedsApproval), "Protection is off"),
+            (
+                View::not_watching("no daemon answered"),
+                "Not watching right now",
+            ),
+            (
+                View::of(&tampered),
+                "AgentSweep's records were changed by something else.",
+            ),
+            (View::of(&reset), "AgentSweep cannot check its own records."),
+        ];
+        for (view, title) in views {
+            for posture in [Posture::Simple, Posture::Developer] {
+                let value = view.to_value(posture);
+                assert_eq!(value["banner"]["title"], title, "{value}");
+                assert!(value["sentence"].is_null(), "{value}");
+                assert_eq!(value["detail"], "", "{value}");
+            }
+        }
+        let value = View::of(&Health::running()).to_value(Posture::Simple);
+        assert!(value["banner"].is_null(), "{value}");
+        assert!(
+            value["sentence"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("All clear")),
+            "{value}"
+        );
+    }
+
+    /// A registered daemon that is not running is the amber banner with
+    /// Start it, a dash in the menu bar and no Login Items button.
+    #[test]
+    fn not_watching_offers_start_it_and_no_login_items() {
+        let view = View::not_watching("no daemon answered");
+        assert_eq!(view.orb, Orb::Off);
+        assert_eq!(Mark::of(view.orb), Mark::Dash);
+        assert!(view.protection_off);
+        assert!(!view.login_items);
+        let value = view.to_value(Posture::Simple);
+        assert_eq!(value["banner"]["tone"], "amber");
+        assert_eq!(value["banner"]["buttons"][0]["label"], "Start it");
+        assert_eq!(value["banner"]["buttons"][0]["command"], "start_daemon");
+        assert_eq!(value["loginItems"], false);
+    }
+
+    /// The popover carries no Finding list, no Finding action and no
+    /// progress count in either Posture: its value has these fields and no
+    /// others, and its page listens to nothing but its own view.
+    #[test]
+    fn the_popover_shows_no_finding_and_no_progress_in_either_posture() {
+        let health = Health {
+            open_threats: 2,
+            open_exposures: 1,
+            scanning: true,
+            ..Health::running()
+        };
+        for posture in [Posture::Simple, Posture::Developer] {
+            for view in [View::of(&health), View::not_watching("x")] {
+                let value = view.to_value(posture);
+                let mut keys: Vec<&str> = value
+                    .as_object()
+                    .expect("an object")
+                    .keys()
+                    .map(String::as_str)
+                    .collect();
+                keys.sort_unstable();
+                assert_eq!(
+                    keys,
+                    [
+                        "banner",
+                        "detail",
+                        "lastCheck",
+                        "loginItems",
+                        "orb",
+                        "protectionOff",
+                        "sentence"
+                    ]
+                );
+            }
+            assert_eq!(
+                View::of(&health).to_value(posture)["sentence"],
+                "Checking now."
+            );
+        }
+        let page = include_str!("../ui/index.html");
+        let script = include_str!("../ui/popover.js");
+        for word in ["finding", "progress", "quarantine", "restore", "trust"] {
+            assert!(!page.to_lowercase().contains(word), "the page names {word}");
+        }
+        assert!(!script.contains("agentsweep://findings"));
+        assert!(!script.to_lowercase().contains("progress"));
+        let listened: Vec<&str> = script
+            .lines()
+            .filter_map(|line| line.split("listen(\"").nth(1))
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+        assert_eq!(listened, ["agentsweep://view"]);
     }
 
     /// Placeholder wording still keeps the house style: no em-dashes.

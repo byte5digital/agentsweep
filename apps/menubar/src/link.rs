@@ -153,7 +153,7 @@ impl Link {
             Err(error) => {
                 let view = match self.repair_stale_job() {
                     Some(view) => view,
-                    None => self.off(Off::Unreachable(error.unreachable())),
+                    None => self.silent(error.unreachable()),
                 };
                 sink(Update::View(view));
                 return;
@@ -163,9 +163,7 @@ impl Link {
         let mut stream = match client.subscribe() {
             Ok(stream) => stream,
             Err(error) => {
-                sink(Update::View(
-                    self.off(Off::Unreachable(error.unreachable())),
-                ));
+                sink(Update::View(self.silent(error.unreachable())));
                 return;
             }
         };
@@ -187,9 +185,9 @@ impl Link {
                 // The daemon went away: a kill, a crash, or an exit for the
                 // new binary. Protection is off until it answers again.
                 Ok(None) | Err(_) => {
-                    sink(Update::View(self.off(Off::Unreachable(
-                        "the daemon stopped answering".to_string(),
-                    ))));
+                    sink(Update::View(
+                        self.silent("the daemon stopped answering".to_string()),
+                    ));
                     return;
                 }
             }
@@ -240,6 +238,16 @@ impl Link {
         }
     }
 
+    /// No daemon answers: "Not watching right now" when the daemon's
+    /// registration is enabled, so launchd has a job to start (spec section
+    /// 8.6); Protection off otherwise, a developer run among them.
+    fn silent(&self, reason: String) -> View {
+        match self.services.supervises() && self.services.agent() == ServiceState::Enabled {
+            true => View::not_watching(&reason),
+            false => self.off(Off::Unreachable(reason)),
+        }
+    }
+
     /// Protection off, for the reason the registration gives when it gives
     /// one, and for `otherwise` when it does not.
     fn off(&self, otherwise: Off) -> View {
@@ -259,7 +267,7 @@ mod tests {
 
     use crate::popover::Orb;
     use crate::supervision::tests::Recorded;
-    use crate::supervision::{BUNDLE_VERSION, EX_CONFIG, Job};
+    use crate::supervision::{BUNDLE_VERSION, EX_CONFIG, Job, Unsupervised};
 
     fn socket_in(directory: &tempfile::TempDir) -> PathBuf {
         directory.path().join("agentsweep.sock")
@@ -310,10 +318,53 @@ mod tests {
         })
     }
 
+    /// "Not watching right now" appears only when the registration is
+    /// enabled and no daemon answers; it offers Start it, not Login Items.
+    #[test]
+    fn an_enabled_registration_with_no_daemon_is_not_watching_right_now() {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let services = Arc::new(Recorded::with(ServiceState::Enabled, ServiceState::Enabled));
+        let mut link = Link::new(Socket::At(socket_in(&directory)), services);
+        let updates = Mutex::new(Vec::new());
+        link.once(&|update| updates.lock().expect("the updates").push(update));
+        let seen = views(&updates);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].banner, Some(crate::banner::Banner::NotWatching));
+        assert!(!seen[0].login_items);
+
+        for state in [
+            ServiceState::RequiresApproval,
+            ServiceState::NotRegistered,
+            ServiceState::NotFound,
+        ] {
+            let services = Arc::new(Recorded::with(state, ServiceState::Enabled));
+            let mut link = Link::new(Socket::At(socket_in(&directory)), services);
+            let updates = Mutex::new(Vec::new());
+            link.once(&|update| updates.lock().expect("the updates").push(update));
+            let seen = views(&updates);
+            assert!(
+                matches!(
+                    seen[0].banner,
+                    Some(crate::banner::Banner::ProtectionOff { .. })
+                ),
+                "{state}: {:?}",
+                seen[0].banner
+            );
+            assert!(seen[0].login_items, "{state}");
+        }
+        let mut link = Link::new(Socket::At(socket_in(&directory)), Arc::new(Unsupervised));
+        let updates = Mutex::new(Vec::new());
+        link.once(&|update| updates.lock().expect("the updates").push(update));
+        assert!(views(&updates)[0].login_items, "a developer run");
+    }
+
     #[test]
     fn a_daemon_that_does_not_answer_is_protection_off_with_login_items() {
         let directory = tempfile::tempdir().expect("a temporary directory");
-        let services = Arc::new(Recorded::with(ServiceState::Enabled, ServiceState::Enabled));
+        let services = Arc::new(Recorded::with(
+            ServiceState::NotFound,
+            ServiceState::Enabled,
+        ));
         let mut link = Link::new(Socket::At(socket_in(&directory)), services);
         let updates = Mutex::new(Vec::new());
         link.once(&|update| updates.lock().expect("the updates").push(update));

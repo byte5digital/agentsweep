@@ -33,9 +33,11 @@ use agentsweep_ipc::peer::SameUser;
 use agentsweep_ipc::protocol::{Role, SettingsChange, StateEvent, Status};
 use agentsweep_menubar::actions::{after_quarantine, offered};
 use agentsweep_menubar::asking::{ActionRequest, Asking};
+use agentsweep_menubar::banner::{Banner, Button};
 use agentsweep_menubar::findings::{Findings, Follow};
 use agentsweep_menubar::folder::result_view;
 use agentsweep_menubar::frame::{Frame, Pane};
+use agentsweep_menubar::integrity;
 use agentsweep_menubar::link::{Link, Socket, Update};
 use agentsweep_menubar::notifications::{
     Activation, NEEDS_YOU_BODY, Notice, Notifications, Notifier,
@@ -1239,4 +1241,74 @@ fn the_app_raises_each_change_once_on_launch_and_from_the_stream() {
         Some(Pane::Threats)
     );
     assert_eq!(notifications.activated(Activation::Reopen), None);
+}
+
+/// A daemon that opens its records with a key that is not the one they were
+/// written with is the key missing state: the popover shows its banner in
+/// place of the sentence, "Look at the records" reads the Event Log from the
+/// restart record, and "Start a fresh record" answers it and opens Activity
+/// at that record, after which the banner is gone.
+#[test]
+fn the_key_missing_banner_answers_through_the_daemon_and_opens_activity_at_the_restart() {
+    let sandbox = Sandbox::new("key-missing");
+    {
+        let _first = sandbox.start();
+        let asking = sandbox.asking();
+        let status = asking.status().expect("a status");
+        // An open Threat would outrank the reset, so the skill is stopped.
+        if let Some(skill) = status
+            .open()
+            .find(|finding| finding.item_id.as_str().ends_with("skills/setup"))
+        {
+            let done = asking.act(&ActionRequest::Quarantine(skill.id.to_string()));
+            assert_eq!(done["done"], true, "{done}");
+        }
+    }
+    // Every start holds a fresh key in memory, as a Mac whose Keychain lost
+    // the item would.
+    let _second = sandbox.start();
+    let asking = sandbox.asking();
+    let status = asking.status().expect("a status");
+    assert!(
+        status.health.state_was_reset(),
+        "{:?}",
+        status.health.rung()
+    );
+    assert_eq!(
+        View::of(&status.health).banner,
+        Some(Banner::KeyMissing),
+        "{:?}",
+        status.health.rung()
+    );
+    let popover = View::of(&status.health).to_value(Posture::Simple);
+    assert!(popover["sentence"].is_null(), "{popover}");
+    assert_eq!(
+        popover["banner"]["buttons"][0]["label"],
+        "Start a fresh record"
+    );
+
+    let mut frame = Frame::new();
+    frame.load(&status);
+    let restart = integrity::restart_record(frame.activity()).expect("the restart record");
+
+    let looked = integrity::press(
+        Button::LookAtRecords,
+        frame.health(),
+        frame.activity(),
+        &asking,
+    )
+    .expect("the records");
+    assert_eq!(looked.focus, Some(restart));
+
+    let fresh = integrity::press(
+        Button::StartFreshRecord,
+        frame.health(),
+        frame.activity(),
+        &asking,
+    )
+    .expect("a fresh record");
+    assert_eq!(fresh.focus, Some(restart));
+    let health = asking.status().expect("a status").health;
+    assert!(!health.state_was_reset(), "{:?}", health.rung());
+    assert_eq!(View::of(&health).banner, None);
 }

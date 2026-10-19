@@ -31,6 +31,11 @@
 //!   met something else at the original place, the two conflict choices. A
 //!   Quarantine of a never-auto kind is the switch that neutralises its line
 //!   in place, and its Restore switches the line back on.
+//! - `false_alarm_report`, `open_false_alarm_report`: **Report false
+//!   positive** and the one-time card after a Restore or a Trust: the
+//!   prepared GitHub issue for the dialog, then its new-issue page in the
+//!   user's browser; the app sends nothing (spec section 8.8,
+//!   [`crate::false_alarm`]).
 //! - `copy_for_admin`: puts the message about a Managed Finding for whoever
 //!   administers the Mac on the clipboard (spec section 8.4).
 //! - `open_the_file`: **Open the file** in an Exposure's how-to, which asks
@@ -113,6 +118,7 @@ use crate::asking::{ActionRequest, Asking, refusal, scan_now_line};
 use crate::banner::Button;
 use crate::cli_link;
 use crate::developer::offers_reveal;
+use crate::false_alarm::{self, Reports, SystemBrowser};
 use crate::findings::Follow;
 use crate::folder;
 use crate::frame::Frame;
@@ -389,13 +395,62 @@ async fn blocking<T: Send + 'static>(
     }
 }
 
-/// Carries out one action request and answers with its view.
+/// Carries out one action request and answers with its view, with the
+/// one-time false-alarm card after a Restore or a Trust. The report is
+/// prepared before the action, while the Finding is still listed as it was.
 async fn act(app: AppHandle, request: Option<ActionRequest>) -> Result<Value, String> {
     let request = request.ok_or_else(|| "That is not an action AgentSweep knows.".to_string())?;
+    let report = match request {
+        ActionRequest::Restore(..) | ActionRequest::Trust(..) => {
+            prepare_report(&app, request.target())
+        }
+        _ => None,
+    };
     let asking = Arc::clone(&app.state::<Shell>().asking);
-    tauri::async_runtime::spawn_blocking(move || asking.act(&request))
+    let asked = request.clone();
+    let answer = tauri::async_runtime::spawn_blocking(move || asking.act(&asked))
         .await
-        .map_err(|error| format!("AgentSweep could not be asked: {error}"))
+        .map_err(|error| format!("AgentSweep could not be asked: {error}"))?;
+    Ok(false_alarm::after_action(&request, answer, report.as_ref()))
+}
+
+/// The false-alarm report on a listed Finding, kept for the dialog's button.
+fn prepare_report(app: &AppHandle, target: &str) -> Option<false_alarm::Report> {
+    let report = {
+        let shell = app.state::<Shell>();
+        let frame = shell.frame.lock().expect("the frame is not poisoned");
+        let finding = frame.findings().get(target)?;
+        let context = false_alarm::Context {
+            rule_pack: frame.health().rule_pack,
+            app: app.package_info().version.to_string(),
+            macos: false_alarm::this_macos(),
+        };
+        false_alarm::report(finding, &context)?
+    };
+    Some(app.state::<Reports>().keep(target, report))
+}
+
+/// **Report false positive** in a Finding's detail header: the prepared
+/// issue, exactly as its address will carry it.
+#[tauri::command]
+fn false_alarm_report(app: AppHandle, target: String) -> Result<Value, String> {
+    prepare_report(&app, &target)
+        .map(|report| report.to_value())
+        .ok_or_else(|| "This Finding names nothing that could be reported.".to_string())
+}
+
+/// The dialog's **Open on GitHub**: the issue the app prepared for the
+/// Finding opens in the user's browser. The window names only the Finding,
+/// never an address, and the app makes no request.
+#[tauri::command]
+async fn open_false_alarm_report(app: AppHandle, target: String) -> Result<String, String> {
+    let report = app
+        .state::<Reports>()
+        .get(&target)
+        .ok_or_else(|| "There is no prepared report for this Finding any more.".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || false_alarm::open_report(&report, &SystemBrowser))
+        .await
+        .map_err(|error| format!("The browser could not be opened: {error}"))?
 }
 
 /// A manual Quarantine, or switching a never-auto kind's line off.
@@ -1415,6 +1470,7 @@ pub fn run(start: Start) {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(shell)
+        .manage(Reports::default())
         .invoke_handler(tauri::generate_handler![
             popover,
             open_login_items,
@@ -1436,6 +1492,8 @@ pub fn run(start: Start) {
             purge,
             untrust,
             copy_for_admin,
+            false_alarm_report,
+            open_false_alarm_report,
             open_the_file,
             change_settings,
             switch_gate,

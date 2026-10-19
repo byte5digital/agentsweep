@@ -564,6 +564,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_card_offers_the_report_button_where_there_is_something_to_report() {
+        for (source, offered) in [
+            ("rule 0007", true),
+            ("score 5", true),
+            ("drift", false),
+            ("problem unreadable", false),
+            ("keeps coming back", false),
+        ] {
+            let finding = recorded(
+                SKILL,
+                Kind::Skill,
+                source,
+                Category::Threat,
+                FindingState::Open,
+            );
+            assert_eq!(
+                crate::findings::card(&finding)["report"],
+                offered,
+                "{source}"
+            );
+        }
+    }
+
     /// A Browser that records what it was asked to open and opens nothing.
     #[derive(Default)]
     struct FakeBrowser {
@@ -670,5 +694,55 @@ mod tests {
         reports.keep("f-1", report.clone());
         assert_eq!(reports.get("f-1"), Some(report));
         assert_eq!(reports.get("f-2"), None);
+    }
+
+    /// The app's own files, read as the bundle carries them.
+    fn app_file(name: &str) -> String {
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name))
+            .expect("an app file")
+    }
+
+    /// The page may only listen to the app's events: no HTTP, opener or
+    /// shell permission in any capability, no plugin that could make a
+    /// request, and a content policy that lets the page reach nothing but
+    /// the app itself. The report leaves through the user's browser only.
+    #[test]
+    fn the_page_has_no_permission_to_make_a_request() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        for entry in std::fs::read_dir(directory).expect("the capabilities") {
+            let path = entry.expect("an entry").path();
+            let capability: Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("a capability"))
+                    .expect("JSON");
+            let permissions: Vec<&str> = capability["permissions"]
+                .as_array()
+                .expect("permissions")
+                .iter()
+                .map(|permission| permission.as_str().expect("a plain permission"))
+                .collect();
+            assert_eq!(
+                permissions,
+                ["core:event:allow-listen", "core:event:allow-unlisten"],
+                "{}",
+                path.display()
+            );
+        }
+        let manifest = app_file("Cargo.toml");
+        for plugin in [
+            "tauri-plugin-http",
+            "tauri-plugin-opener",
+            "tauri-plugin-shell",
+        ] {
+            assert!(!manifest.contains(plugin), "{plugin}");
+        }
+        let config: Value = serde_json::from_str(&app_file("tauri.conf.json")).expect("JSON");
+        let policy = config["app"]["security"]["csp"].as_str().expect("a policy");
+        let connect = policy
+            .split(';')
+            .map(str::trim)
+            .find_map(|part| part.strip_prefix("connect-src "))
+            .expect("connect-src");
+        assert_eq!(connect, "ipc: http://ipc.localhost");
+        assert!(!policy.contains("github"), "{policy}");
     }
 }

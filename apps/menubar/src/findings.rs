@@ -315,6 +315,7 @@ pub fn card(finding: &RecordedFinding) -> Value {
         crate::wording::lines_value(&crate::wording::developer_lines(finding));
     // Reveal in Finder depends on the Posture, which the frame knows.
     value["reveal"] = Value::from(false);
+    value["report"] = Value::from(crate::false_alarm::reportable(finding));
     value
 }
 

@@ -72,6 +72,8 @@
 //!   when a click on a notification brought the app to the front.
 //! - `agentsweep://activity-at`: the Event Log sequence the Activity pane
 //!   opens at after an integrity button, or null for the pane alone.
+//! - `agentsweep://onboarding`: the onboarding wizard's view, when the engine
+//!   look arrived or screen 6's first check finished.
 //!
 //! Notifications (spec sections 6.7 and 8.7) are raised here through the
 //! notification plugin, on every launch and on every stream event that may

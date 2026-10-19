@@ -460,7 +460,8 @@ impl Daemon {
             | Request::PreviewRequest { .. }
             | Request::Unnotified
             | Request::Notified { .. }
-            | Request::Judge(_) => Err(RequestError::unknown(request.as_str())),
+            | Request::Judge(_)
+            | Request::Uninstall { .. } => Err(RequestError::unknown(request.as_str())),
         }
     }
 
@@ -561,7 +562,7 @@ impl Daemon {
     }
 
     /// What the store holds, as the Event Log says.
-    fn manifest(&self) -> Result<QuarantineManifest, RequestError> {
+    pub(crate) fn manifest(&self) -> Result<QuarantineManifest, RequestError> {
         EventLog::in_data_directory(&self.directory)
             .read(&*self.keys)
             .map(|view| view.quarantine_manifest())
@@ -762,8 +763,19 @@ impl Daemon {
     ) -> Result<Value, RequestError> {
         let _writing = self.writing.lock().expect("the write lock is not poisoned");
         let entry = self.receipt_for(target)?;
+        self.restore_entry(&entry, conflict)
+            .map(|report| report.to_value())
+    }
+
+    /// One Receipt replayed in reverse, for a caller that holds the write
+    /// lock: a single Restore, and each Receipt of Uninstall's Restore all.
+    pub(crate) fn restore_entry(
+        self: &Arc<Daemon>,
+        entry: &QuarantineEntry,
+        conflict: Conflict,
+    ) -> Result<ActionReport, RequestError> {
         let agent = entry.item_id.as_str().split('/').next().unwrap_or_default();
-        let adapter = adapter_for(agent).ok_or_else(|| unknown(target))?;
+        let adapter = adapter_for(agent).ok_or_else(|| unknown(&entry.receipt_id))?;
         let roots = self.roots_for(&entry.item_id);
         let acting = Acting {
             machine: &self.machine_in_force(),
@@ -777,13 +789,9 @@ impl Daemon {
         let (mut enforcement, _) =
             Enforcement::open(&self.directory, &*self.keys).map_err(failed)?;
         let report = enforcement
-            .restore_with(
-                &*adapter,
-                &acting.host(),
-                &entry,
-                conflict,
-                &mut |receipt| acting.collateral(&before, receipt),
-            )
+            .restore_with(&*adapter, &acting.host(), entry, conflict, &mut |receipt| {
+                acting.collateral(&before, receipt)
+            })
             .map_err(failed)?;
         drop(enforcement);
 
@@ -830,7 +838,7 @@ impl Daemon {
             entry.item_id,
             entry.receipt_id
         );
-        let finding = self.recorded_for_receipt(&entry);
+        let finding = self.recorded_for_receipt(entry);
         Ok(ActionReport {
             action: "restore".to_string(),
             finding_id: entry.finding_id.clone(),
@@ -851,8 +859,7 @@ impl Daemon {
             trusted,
             sessions,
             message,
-        }
-        .to_value())
+        })
     }
 
     /// Re-enable: the plugin switched back on for the newer version this

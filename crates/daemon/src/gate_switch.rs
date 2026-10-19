@@ -115,7 +115,7 @@ impl Daemon {
     }
 
     /// The removal itself, for a caller that already holds the write lock.
-    fn take_the_gate_away(&self) -> Removal {
+    pub(crate) fn take_the_gate_away(&self) -> Removal {
         let Some(command) = self.tuning.gate.as_ref() else {
             say!("the Gate has no command line interface path, so there is nothing to remove");
             return Removal::default();

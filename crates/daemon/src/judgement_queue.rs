@@ -956,6 +956,11 @@ impl Daemon {
                 Some(verdict) => {
                     if matches!(verdict, Verdict::Malicious { .. }) {
                         let _writing = self.writing.lock().expect("the write lock is not poisoned");
+                        // Uninstall may have deleted the stores meanwhile, and nothing
+                        // is written after it.
+                        if self.is_uninstalled() {
+                            return;
+                        }
                         self.open_judgement_finding(
                             &awaiting,
                             &judge.engine,
@@ -986,6 +991,11 @@ impl Daemon {
     fn land(self: &Arc<Daemon>, answer: Answer) {
         if answer.metered {
             let _writing = self.writing.lock().expect("the write lock is not poisoned");
+            // Uninstall may have deleted the stores meanwhile, and nothing
+            // is written after it.
+            if self.is_uninstalled() {
+                return;
+            }
             self.settle_a_cloud_request(&answer.model, answer.usage);
         }
         let item = answer.ask.awaiting.item.id.clone();
@@ -997,6 +1007,11 @@ impl Daemon {
             }
         };
         let _writing = self.writing.lock().expect("the write lock is not poisoned");
+        // Uninstall may have deleted the stores meanwhile, and nothing
+        // is written after it.
+        if self.is_uninstalled() {
+            return;
+        }
         let hash = answer.ask.request.hash();
         let record = CachedVerdict::of(
             hash,

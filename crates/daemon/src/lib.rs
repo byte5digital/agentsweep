@@ -78,6 +78,7 @@ pub mod service;
 pub mod sessions;
 pub mod settings;
 pub mod stores;
+pub mod uninstall;
 pub mod watcher;
 
 pub use options::{Invocation, Options, OptionsError, USAGE};

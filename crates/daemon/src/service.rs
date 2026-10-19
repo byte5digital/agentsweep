@@ -343,6 +343,10 @@ pub struct Daemon {
     /// hand has finished, so `KeepAlive` starts the new binary (spec section
     /// 9.5).
     leaving: AtomicBool,
+    /// Set by Uninstall: the daemon answers nothing but `status` and
+    /// `uninstall` from then on, until it is unregistered or its bundle is
+    /// gone (spec section 9.6).
+    uninstalled: AtomicBool,
     /// True while a "Check now" makes its reads into the protected location
     /// classes, so two clicks never make them twice at once.
     pub(crate) checking: AtomicBool,
@@ -560,6 +564,7 @@ impl Daemon {
             launched: Mutex::new(BTreeSet::new()),
             told: Mutex::new(None),
             leaving: AtomicBool::new(false),
+            uninstalled: AtomicBool::new(false),
             checking: AtomicBool::new(false),
         });
         // The Activity starts as the Event Log stands, every line marked as
@@ -1302,6 +1307,27 @@ impl Daemon {
         let _writing = self.writing.lock().expect("the write lock is not poisoned");
     }
 
+    /// Stops taking work for good, as Uninstall does before it touches
+    /// anything: no further Scan, Rule Feed fetch or landing Verdict, and no
+    /// request but `status` and `uninstall` (spec section 9.6).
+    pub(crate) fn stop_for_uninstall(&self) {
+        self.uninstalled.store(true, Ordering::SeqCst);
+        self.leaving.store(true, Ordering::SeqCst);
+    }
+
+    /// True once Uninstall has run.
+    pub fn is_uninstalled(&self) -> bool {
+        self.uninstalled.load(Ordering::SeqCst)
+    }
+
+    /// Holds the fetch lock, so no Rule Feed fetch writes while the caller
+    /// does.
+    pub(crate) fn hold_the_fetch(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.fetching
+            .lock()
+            .expect("the fetch lock is not poisoned")
+    }
+
     /// Adds one listener and answers with the end it reads from.
     fn subscribe(&self, role: Role, liveness: Option<Liveness>) -> Receiver<StateEvent> {
         let (sender, receiver) = channel();
@@ -1423,7 +1449,8 @@ impl Daemon {
             | Request::Sessions
             | Request::Folder { .. }
             | Request::Records { .. }
-            | Request::Gate(_) => {}
+            | Request::Gate(_)
+            | Request::Uninstall { .. } => {}
             _ => self.follow_the_event_log(),
         }
         answer
@@ -1434,8 +1461,16 @@ impl Daemon {
         self: &Arc<Daemon>,
         request: &Request,
     ) -> Result<serde_json::Value, RequestError> {
+        if self.is_uninstalled() && !matches!(request, Request::Status | Request::Uninstall { .. })
+        {
+            return Err(RequestError::new(
+                "uninstalled",
+                "AgentSweep is being uninstalled, so nothing else is done",
+            ));
+        }
         match request {
             Request::Status => Ok(self.status().to_value()),
+            Request::Uninstall { choice } => Ok(self.uninstall(*choice).to_value()),
             Request::ScanNow => {
                 let started = self.scan(Trigger::ScanNow);
                 Ok(serde_json::json!({ "started": started }))
@@ -1749,7 +1784,7 @@ impl Daemon {
     /// Nothing happens when there is no feed, when the toggle is off, or when
     /// a fetch is already waiting or running.
     pub fn fetch_later(self: &Arc<Daemon>) {
-        if self.feed.is_none() || !self.rule_feed_enabled() {
+        if self.feed.is_none() || !self.rule_feed_enabled() || self.is_leaving() {
             return;
         }
         if self.fetch_pending.swap(true, Ordering::SeqCst) {
@@ -1797,7 +1832,7 @@ impl Daemon {
             .fetching
             .lock()
             .expect("the fetch lock is not poisoned");
-        if !self.rule_feed_enabled() {
+        if !self.rule_feed_enabled() || self.is_uninstalled() {
             return FeedOutcome::Off;
         }
         let validators = {

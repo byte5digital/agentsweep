@@ -30,3 +30,13 @@ agentsweep-ipc = { version = "0.1.0", path = "crates/ipc" }
 agentsweep-adapter-claude-code = { version = "0.1.0", path = "crates/adapters/claude-code" }
 agentsweep-adapter-codex = { version = "0.1.0", path = "crates/adapters/codex" }
 agentsweep-adapter-workspace = { version = "0.1.0", path = "crates/adapters/workspace" }
+
+# Debug and test builds keep line tables for the workspace's own crates, so a
+# backtrace names file and line, and no debug info for dependencies: nobody
+# steps through YARA-X, wasmtime or Tauri in a debugger, and full debug info
+# made every build directory tens of gigabytes. Release builds are unchanged.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

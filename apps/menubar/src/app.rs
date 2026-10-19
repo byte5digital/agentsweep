@@ -18,8 +18,8 @@
 //!   sidebar with its counts, the Overview, the two Finding panes and the
 //!   Posture.
 //! - `folder`: the last Folder Scan's view, for a window that just loaded.
-//! - `quarantine`, `restore`, `trust`, `acknowledge`, `fix`, `re_enable`: the
-//!   action requests, each answered with the daemon's sentence, the lines
+//! - `quarantine`, `restore`, `trust`, `acknowledge`, `fix`, `re_enable`,
+//!   `purge`, `untrust`: the action requests, each answered with the daemon's sentence, the lines
 //!   under it (after a Quarantine, its confirmation) and, for a Restore that
 //!   met something else at the original place, the two conflict choices. A
 //!   Quarantine of a never-auto kind is the switch that neutralises its line
@@ -230,6 +230,18 @@ async fn fix(app: AppHandle, target: String) -> Result<Value, String> {
 #[tauri::command]
 async fn re_enable(app: AppHandle, target: String) -> Result<Value, String> {
     act(app, ActionRequest::of("re_enable", &target, None)).await
+}
+
+/// Delete permanently, asked only after the window's confirmation.
+#[tauri::command]
+async fn purge(app: AppHandle, target: String) -> Result<Value, String> {
+    act(app, ActionRequest::of("purge", &target, None)).await
+}
+
+/// Stop trusting this, from the Trusted section of the Quarantine pane.
+#[tauri::command]
+async fn untrust(app: AppHandle, target: String) -> Result<Value, String> {
+    act(app, ActionRequest::of("untrust", &target, None)).await
 }
 
 /// **Copy a message for your admin** on a Managed Finding: the message names
@@ -710,6 +722,8 @@ pub fn run() {
             acknowledge,
             fix,
             re_enable,
+            purge,
+            untrust,
             copy_for_admin,
             change_settings,
             install_cli,

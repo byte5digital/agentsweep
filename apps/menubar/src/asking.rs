@@ -45,6 +45,11 @@ pub enum ActionRequest {
     Fix(String),
     /// A stopped plugin back on for its newer, clean version.
     ReEnable(String),
+    /// Delete permanently: what the store keeps of a quarantined Item is
+    /// deleted for good.
+    Purge(String),
+    /// Stop trusting this: the Trust on one Finding's content is withdrawn.
+    Untrust(String),
 }
 
 impl ActionRequest {
@@ -67,6 +72,8 @@ impl ActionRequest {
             "acknowledge" => ActionRequest::Acknowledge(target),
             "fix" => ActionRequest::Fix(target),
             "re_enable" => ActionRequest::ReEnable(target),
+            "purge" => ActionRequest::Purge(target),
+            "untrust" => ActionRequest::Untrust(target),
             _ => return None,
         })
     }
@@ -79,6 +86,8 @@ impl ActionRequest {
             ActionRequest::Acknowledge(target) => client.acknowledge(target),
             ActionRequest::Fix(target) => client.fix(target),
             ActionRequest::ReEnable(target) => client.re_enable(target),
+            ActionRequest::Purge(target) => client.purge(target),
+            ActionRequest::Untrust(target) => client.untrust(target, None),
         }
     }
 
@@ -89,7 +98,9 @@ impl ActionRequest {
             | ActionRequest::Trust(target)
             | ActionRequest::Acknowledge(target)
             | ActionRequest::Fix(target)
-            | ActionRequest::ReEnable(target) => target,
+            | ActionRequest::ReEnable(target)
+            | ActionRequest::Purge(target)
+            | ActionRequest::Untrust(target) => target,
         }
     }
 }
@@ -357,7 +368,22 @@ mod tests {
             Some(ActionRequest::Restore("f".to_string(), Conflict::Refuse))
         );
         assert_eq!(ActionRequest::of("restore", "f", Some("sideways")), None);
-        for command in ["trust", "acknowledge", "fix", "re_enable"] {
+        assert_eq!(
+            ActionRequest::of("purge", "f", None),
+            Some(ActionRequest::Purge("f".to_string()))
+        );
+        assert_eq!(
+            ActionRequest::of("untrust", "f", None),
+            Some(ActionRequest::Untrust("f".to_string()))
+        );
+        for command in [
+            "trust",
+            "acknowledge",
+            "fix",
+            "re_enable",
+            "purge",
+            "untrust",
+        ] {
             let request = ActionRequest::of(command, "f", None).expect("an action");
             assert_eq!(request.target(), "f");
         }

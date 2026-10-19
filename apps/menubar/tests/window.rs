@@ -1023,3 +1023,93 @@ fn the_activity_pane_follows_an_action_from_the_stream_newest_first() {
     );
     assert!(!kept.receipt_id.is_empty(), "{kept:?}");
 }
+
+/// The Quarantine pane lists a skill the user quarantined, with who stopped
+/// it and when, Restore and Delete permanently; Delete permanently is the
+/// purge request, after which the payload is gone from the store and the
+/// entry leaves the pane from the stream alone.
+#[test]
+fn the_quarantine_pane_purges_a_quarantined_skill() {
+    let sandbox = Sandbox::new("purge");
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let following = Following::start(&sandbox);
+
+    let mut frame = Frame::new();
+    frame.load(&asking.status().expect("a status"));
+    assert_eq!(frame.quarantine()["entries"], serde_json::json!([]));
+    let skill = frame
+        .findings()
+        .open()
+        .find(|finding| finding.item_id.as_str().ends_with("skills/setup"))
+        .expect("the planted skill's Finding")
+        .clone();
+
+    let quarantined = asking.act(&ActionRequest::Quarantine(skill.id.to_string()));
+    assert_eq!(quarantined["done"], true, "{quarantined}");
+    following.until_frame(&mut frame, &asking, "the skill in quarantine", |frame| {
+        let pane = frame.quarantine();
+        pane["entries"].as_array().is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry["id"] == skill.id.as_str() && entry["stopped"]["at"].is_string())
+        })
+    });
+    let pane = frame.quarantine();
+    let entry = pane["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["id"] == skill.id.as_str())
+        .expect("the skill's entry")
+        .clone();
+    assert_eq!(entry["stopped"]["by"], "user", "{entry}");
+    let commands: Vec<&str> = entry["actions"]
+        .as_array()
+        .expect("actions")
+        .iter()
+        .map(|action| action["command"].as_str().expect("a command"))
+        .collect();
+    assert_eq!(commands, vec!["restore", "purge"], "{entry}");
+    assert_eq!(entry["actions"][1]["confirm"], "purge");
+    assert_eq!(
+        entry["receiptId"], "",
+        "the Simple Posture shows no Receipt id"
+    );
+    let receipt = frame
+        .findings()
+        .get(skill.id.as_str())
+        .expect("listed")
+        .receipt_id
+        .clone();
+    let stored = sandbox.root.join("data/quarantine").join(&receipt);
+    assert!(
+        stored.exists(),
+        "the payload is in the store: {}",
+        stored.display()
+    );
+
+    let purged = asking.act(&ActionRequest::Purge(
+        entry["actions"][1]["target"]
+            .as_str()
+            .expect("a target")
+            .to_string(),
+    ));
+    assert_eq!(purged["done"], true, "{purged}");
+    following.until_frame(&mut frame, &asking, "the entry gone", |frame| {
+        frame.quarantine()["entries"] == serde_json::json!([])
+    });
+    assert!(
+        !stored.exists(),
+        "the payload is gone: {}",
+        stored.display()
+    );
+    assert!(
+        !sandbox.home.join(".claude/skills/setup").exists(),
+        "nothing was put back"
+    );
+    assert_eq!(
+        frame.to_value()["panes"]["quarantine"],
+        serde_json::json!([])
+    );
+}

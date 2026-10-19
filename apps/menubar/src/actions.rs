@@ -37,6 +37,9 @@ pub enum Confirm {
     /// The Restore of what AgentSweep took out by itself, which trusts this
     /// exact version ([`restore_confirmation`]).
     RestoreAndTrust,
+    /// Delete permanently, which cannot be undone
+    /// ([`crate::quarantine::purge_confirmation`]).
+    Purge,
 }
 
 impl Confirm {
@@ -45,6 +48,7 @@ impl Confirm {
         match self {
             Confirm::Trust => "trust",
             Confirm::RestoreAndTrust => "restore-trust",
+            Confirm::Purge => "purge",
         }
     }
 }

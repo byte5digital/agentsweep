@@ -31,6 +31,7 @@ use crate::developer::{ambiguous_card, offers_reveal};
 use crate::findings::{Findings, Follow};
 use crate::overview::{self, OverviewView};
 use crate::popover::View;
+use crate::quarantine;
 use crate::settings_pane;
 
 /// One entry of the sidebar, in the order spec section 8.1 lists them.
@@ -293,6 +294,12 @@ impl Frame {
         )
     }
 
+    /// The Quarantine pane as it stands: every Item in quarantine and the
+    /// Trusted section at its foot ([`crate::quarantine`]).
+    pub fn quarantine(&self) -> Value {
+        quarantine::view(&self.findings, &self.activity, self.posture)
+    }
+
     /// The sidebar as it stands.
     pub fn sidebar(&self) -> Vec<Entry> {
         sidebar(&self.findings, self.posture)
@@ -347,10 +354,13 @@ impl Frame {
                 })
                 .collect(),
         );
+        let quarantine = self.quarantine();
         value["panes"] = json!({
             "threats": pane(Category::Threat),
             "exposures": pane(Category::Exposure),
+            "quarantine": quarantine["entries"],
         });
+        value["trusted"] = quarantine["trusted"].clone();
         value
     }
 }
@@ -654,6 +664,41 @@ mod tests {
         assert_eq!(view["posture"], "developer");
         assert_eq!(view["panes"]["threats"], json!([]));
         assert_eq!(view["sidebar"][1]["count"], 0);
+    }
+
+    /// The Quarantine pane lists the one Item in quarantine the sidebar
+    /// counts, and an entry leaves it when the stream says its Findings
+    /// are gone, as a purge does.
+    #[test]
+    fn the_quarantine_pane_lists_the_counted_item_and_follows_a_purge() {
+        let status = status();
+        let mut frame = Frame::new();
+        frame.load(&status);
+        let view = frame.to_value();
+        let entries = view["panes"]["quarantine"].as_array().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(view["sidebar"][3]["count"], 1);
+        assert_eq!(entries[0]["actions"][0]["command"], "restore");
+        // The trusted MCP server sits in the Trusted section at the foot.
+        let trusted = view["trusted"].as_array().expect("trusted");
+        assert_eq!(trusted.len(), 1);
+        assert_eq!(trusted[0]["action"]["label"], "Stop trusting this");
+        assert_eq!(trusted[0]["action"]["command"], "untrust");
+        for finding in status
+            .findings
+            .iter()
+            .filter(|f| f.state == FindingState::Stopped)
+        {
+            let gone = StateEvent::FindingChanged {
+                id: finding.id.clone(),
+                state: "gone".to_string(),
+                finding: None,
+            };
+            assert_eq!(frame.apply(&gone), Follow::Render);
+        }
+        let view = frame.to_value();
+        assert_eq!(view["panes"]["quarantine"], json!([]));
+        assert_eq!(view["sidebar"][3]["count"], 0);
     }
 
     fn claude_code() -> Overview {

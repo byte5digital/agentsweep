@@ -22,6 +22,8 @@
 //!   Posture, and the confirmations before and after them.
 //! - [`frame`]: the window's sidebar, its counts, the two Finding panes and
 //!   the Posture the window is shown in.
+//! - [`quarantine`]: the Quarantine pane: every Item in quarantine with its
+//!   actions, and the Trusted section at its foot.
 //! - [`activity`]: the Activity pane: the Event Log's lines, newest first,
 //!   followed from the stream.
 //! - [`overview`]: the Overview pane: the status sentence, the Agents, the
@@ -59,6 +61,7 @@ pub mod link;
 pub mod overview;
 pub mod placement;
 pub mod popover;
+pub mod quarantine;
 pub mod reveal;
 pub mod settings_pane;
 pub mod supervision;

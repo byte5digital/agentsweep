@@ -495,7 +495,7 @@ fn drift_line(drift: &str) -> Option<String> {
 }
 
 /// The text with its first letter in upper case.
-fn capitalised(text: &str) -> String {
+pub(crate) fn capitalised(text: &str) -> String {
     let mut chars = text.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),

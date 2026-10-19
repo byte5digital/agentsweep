@@ -223,6 +223,37 @@ impl Following {
         }
     }
 
+    /// Follows the stream, applying it to the list, until a Full Scan with
+    /// one of `triggers` reports its end, then until nothing runs any more.
+    /// The list keeps only the last Scan's line, and the watcher may queue a
+    /// Change Scan right behind the Full Scan, so the end is read from the
+    /// stream itself rather than from that line.
+    fn until_a_full_scan_finished(
+        &self,
+        list: &mut Findings,
+        asking: &Asking,
+        triggers: &[agentsweep_core::state::Trigger],
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(180);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "no Full Scan finished: {list:?}");
+            let Ok(event) = self.events.recv_timeout(left) else {
+                continue;
+            };
+            if list.apply(&event) == Follow::Refresh {
+                list.load(&asking.status().expect("a status"));
+            }
+            if let StateEvent::ScanFinished { summary } = &event
+                && summary.kind == agentsweep_core::scan_pass::ScanKind::Full
+                && triggers.contains(&summary.trigger)
+            {
+                break;
+            }
+        }
+        self.until(list, asking, "nothing running", |list| !list.scan().running);
+    }
+
     /// Waits until the list holds exactly the Findings the status holds,
     /// with the same ids and states, following the stream meanwhile: a Scan
     /// the watcher started after an action may still be settling.
@@ -454,13 +485,11 @@ fn the_window_lists_the_status_and_follows_every_action_from_the_stream() {
     // way, and Scan now rightly joins it (spec section 6.4); then its own
     // trigger names the finished Scan.
     let started = asking.scan_now().expect("a Full Scan");
-    let finished = match started {
-        true => "Last full Scan (scan-now)",
-        false => "Last full Scan (",
+    let triggers: &[agentsweep_core::state::Trigger] = match started {
+        true => &[agentsweep_core::state::Trigger::ScanNow],
+        false => &agentsweep_core::state::Trigger::ALL,
     };
-    following.until(&mut list, &asking, "a finished Scan", |list| {
-        !list.scan().running && list.scan().line.starts_with(finished)
-    });
+    following.until_a_full_scan_finished(&mut list, &asking, triggers);
     // Once Health no longer says "checking now", the actions can be pressed
     // again, and the stream alone said so.
     following.until(&mut list, &asking, "the actions enabled again", |list| {

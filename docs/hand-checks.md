@@ -450,6 +450,19 @@ Afterwards delete the planted Item and revoke the key in the Anthropic console i
 
 Seams in the suite: `ai_check::tests` in the app (the four cards per Posture, an engine outside the eval bar or not measured disabled in Simple and warned in Developer, the Ollama confirmation naming the model the daemon reports, a non-loopback address refused before it is sent, the consent table and the three caps, the key line, the cap-reached and unpriced lines, the recorded line), and the app's `ai_check` integration tests against a daemon on a temporary home (the key handed over once and found in no app state, view or file afterwards, removing it turning the card to off, every engine change recorded, and the preview showing the daemon's redacted request verbatim).
 
+## 19. Not watching right now, and Start it
+
+This needs the hand install of section 1, since only a registered daemon can be not running while registered; a developer run supervises nothing and shows "Protection is off" instead. It takes the daemon's job out of launchd by hand, which SMAppService does not notice: the registration stays enabled.
+
+With the app running and the popover showing its usual sentence, take the job out of launchd: `launchctl bootout gui/$(id -u)/de.byte5.agentsweep.daemon`. Check that `pgrep -x agentsweepd` prints nothing.
+
+- [ ] Within a few seconds the popover shows the amber banner "Not watching right now" in place of the sentence, with one button, **Start it**, and no **Open Login Items**. The menu bar glyph is the dash. Open, Scan now and Scan a folder are not offered.
+- [ ] In the Developer Posture (Settings, Detail) the banner adds a line naming the LaunchAgent `de.byte5.agentsweep.daemon`; in the Simple Posture it does not.
+- [ ] Press **Start it**. Within a few seconds `pgrep -x agentsweepd` prints one process, the banner gives way to the usual sentence, and the glyph is the tick or the exclamation mark again. `launchctl print gui/$(id -u)/de.byte5.agentsweep.daemon` shows the job loaded again.
+- [ ] While the daemon runs, `kill` it (not `kill -9`) and press **Start it** while the banner shows, before `KeepAlive` brings it back on its own: the daemon starts at once.
+
+Seams in the suite: `banner::tests` in the app (the four banners, their buttons, the Health precedence, the Developer additions only in the Developer Posture), `popover::tests` (the banner replaces the sentence, Not watching offers Start it and no Login Items, no Finding, Finding action or progress count in either Posture), `link::tests` (Not watching only for an enabled registration with no daemon answering), `supervision::tests` (Start it asks launchd through the fake service layer, registers again a job launchd no longer holds, starts only an enabled registration), `integrity::tests` (each integrity button sends its request and opens Activity at the break point or the restart record) and `the_key_missing_banner_answers_through_the_daemon_and_opens_activity_at_the_restart` in the app's `window` integration tests.
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.

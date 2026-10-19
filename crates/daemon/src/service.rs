@@ -124,6 +124,10 @@ pub struct Tuning {
     /// installed daemon and nothing for a developer run, so a test or a hand
     /// run never launches anything unless it hands in a fake.
     pub launch: Option<Launch>,
+    /// How long a Folder Scan waits for the Verdicts of the active Judgement
+    /// Engine before it answers. Absent means the engine's own timeout for
+    /// one request; a test names a short one.
+    pub folder_wait: Option<std::time::Duration>,
 }
 
 impl Default for Tuning {
@@ -142,6 +146,7 @@ impl Default for Tuning {
             engines: None,
             calendar: Arc::new(SystemCalendar),
             launch: None,
+            folder_wait: None,
         }
     }
 }
@@ -159,6 +164,7 @@ impl std::fmt::Debug for Tuning {
             .field("gate", &self.gate)
             .field("engines", &self.engines.is_some())
             .field("launch", &self.launch)
+            .field("folder_wait", &self.folder_wait)
             .finish_non_exhaustive()
     }
 }
@@ -1458,11 +1464,8 @@ impl Daemon {
             }
             Request::Sessions => Ok(crate::sessions::detect(self.machine.home()).to_value()),
             // Runs here, on this connection's thread, beside any other Scan,
-            // and records nothing.
-            Request::Folder { path } => {
-                let pack = self.pack_in_force();
-                crate::folder_scan::folder_scan(&pack, path).map(|result| result.to_value())
-            }
+            // asks the active Judgement Engine and records nothing.
+            Request::Folder { path } => self.scan_a_folder(path).map(|result| result.to_value()),
             Request::Engine { change } => self.change_engine(change).map(|state| state.to_value()),
             Request::Settings { change } => {
                 self.change_settings(change).map(|state| state.to_value())

@@ -1613,6 +1613,10 @@ pub struct FolderScanResult {
     pub items: usize,
     /// How many of them fell in the Ambiguous Band: named, nothing to do.
     pub ambiguous: usize,
+    /// How many of those the active Judgement Engine was to be asked about
+    /// and had not answered when the Folder Scan answered: the engine's
+    /// timeout ran out first, or a cap held them back. They stay Ambiguous.
+    pub unfinished: usize,
     /// Every Finding, a Problem included, in the order the Items were found.
     pub findings: Vec<FolderFinding>,
     /// The version of the Rule Pack in force that judged the folder. The
@@ -1633,6 +1637,21 @@ impl FolderScanResult {
         match self.is_safe() {
             true => SAFE_TO_OPEN,
             false => DO_NOT_OPEN_YET,
+        }
+    }
+
+    /// The line that the AI check did not finish, when it left Items without
+    /// an answer.
+    pub fn unfinished_line(&self) -> Option<String> {
+        match self.unfinished {
+            0 => None,
+            1 => Some(
+                "The AI check did not finish for 1 Item; it stays in the Ambiguous Band."
+                    .to_string(),
+            ),
+            n => Some(format!(
+                "The AI check did not finish for {n} Items; they stay in the Ambiguous Band."
+            )),
         }
     }
 
@@ -1665,6 +1684,10 @@ impl FolderScanResult {
         map.insert("items".to_string(), Value::from(self.items as u64));
         map.insert("root".to_string(), Value::from(self.root.as_str()));
         map.insert("rule_pack".to_string(), Value::from(self.rule_pack));
+        map.insert(
+            "unfinished".to_string(),
+            Value::from(self.unfinished as u64),
+        );
         Value::Object(map)
     }
 
@@ -1690,6 +1713,10 @@ impl FolderScanResult {
             root: value.get("root")?.as_str()?.to_string(),
             items: value.get("items")?.as_u64()? as usize,
             ambiguous: value.get("ambiguous")?.as_u64()? as usize,
+            unfinished: value
+                .get("unfinished")
+                .and_then(Value::as_u64)
+                .unwrap_or_default() as usize,
             findings,
             rule_pack: value.get("rule_pack")?.as_u64()?,
         })
@@ -2641,17 +2668,23 @@ mod tests {
             root: "/src/demo".to_string(),
             items: 3,
             ambiguous: 1,
+            unfinished: 1,
             findings: Vec::new(),
             rule_pack: 4,
         };
         assert!(clear.is_safe());
         assert_eq!(clear.verdict(), SAFE_TO_OPEN);
+        assert_eq!(
+            clear.unfinished_line().as_deref(),
+            Some("The AI check did not finish for 1 Item; it stays in the Ambiguous Band.")
+        );
         assert_eq!(FolderScanResult::from_value(&clear.to_value()), Some(clear));
 
         let found = FolderScanResult {
             root: "/src/demo".to_string(),
             items: 3,
             ambiguous: 0,
+            unfinished: 0,
             findings: vec![FolderFinding {
                 finding: recorded(FindingState::Open, Category::Threat, "rule 0001", 1),
                 heuristics: vec!["0501  weight 2  It downloads something.".to_string()],
@@ -2660,6 +2693,7 @@ mod tests {
         };
         assert!(!found.is_safe());
         assert_eq!(found.verdict(), DO_NOT_OPEN_YET);
+        assert_eq!(found.unfinished_line(), None);
         assert_eq!(FolderScanResult::from_value(&found.to_value()), Some(found));
     }
 

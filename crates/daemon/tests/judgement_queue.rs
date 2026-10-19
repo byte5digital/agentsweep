@@ -13,7 +13,7 @@
 //! touches the real home, the real data directory, the documented socket or
 //! the login Keychain.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, channel};
@@ -36,7 +36,7 @@ use agentsweep_daemon::watcher::{Batch, Decision, Timings};
 use agentsweep_ipc::Client;
 use agentsweep_ipc::engine::EngineChange;
 use agentsweep_ipc::peer::SameUser;
-use agentsweep_ipc::protocol::{Role, StateEvent, Status};
+use agentsweep_ipc::protocol::{FolderScanResult, Role, StateEvent, Status};
 
 #[path = "../../core/tests/fixture_ollama/mod.rs"]
 mod fixture_ollama;
@@ -282,6 +282,16 @@ impl Sandbox {
     }
 
     fn start_with(&self, engines: Arc<dyn Engines>) -> Background {
+        self.start_waiting(engines, None)
+    }
+
+    /// A daemon whose Folder Scan waits `folder_wait` for its Verdicts, or
+    /// the engine's own timeout.
+    fn start_waiting(
+        &self,
+        engines: Arc<dyn Engines>,
+        folder_wait: Option<Duration>,
+    ) -> Background {
         let daemon = Daemon::open_tuned(
             &self.options(),
             Arc::new(SameUser),
@@ -291,6 +301,7 @@ impl Sandbox {
                 power: self.power.clone(),
                 engines: Some(engines),
                 gate: None,
+                folder_wait,
                 ..Tuning::default()
             },
         )
@@ -358,6 +369,48 @@ impl Sandbox {
                 )
             })
             .collect()
+    }
+
+    /// A folder no Agent has opened, outside the home, with one skill in the
+    /// Ambiguous Band per name, told apart by its marker line. A `benign-*`
+    /// one is not directed at a reviewer, so a benign answer stands.
+    fn folder(&self, purpose: &str, names: &[&str]) -> PathBuf {
+        let folder = self.root.join(format!("folders/{purpose}"));
+        for name in names {
+            let skill = folder.join(format!(".claude/skills/{name}/SKILL.md"));
+            let content = match name.starts_with("benign") {
+                true => PLAIN_AMBIGUOUS_SKILL,
+                false => AMBIGUOUS_SKILL,
+            };
+            std::fs::create_dir_all(skill.parent().expect("a parent")).expect("a directory");
+            std::fs::write(skill, format!("{content}\nMarker: {name}.\n")).expect("a skill");
+        }
+        folder
+    }
+
+    /// The daemon's Folder Scan of `folder`, as the app asks for it.
+    fn folder_scan(&self, folder: &std::path::Path) -> FolderScanResult {
+        Client::connect_at(&self.socket, Role::App)
+            .expect("a client")
+            .folder_scan(folder.to_str().expect("a path"))
+            .expect("a Folder Scan")
+    }
+
+    /// Every file of the data directory and its bytes.
+    fn stores(&self) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn walk(at: &std::path::Path, into: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            for entry in std::fs::read_dir(at).expect("a directory").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, into);
+                } else if let Ok(bytes) = std::fs::read(&path) {
+                    into.insert(path, bytes);
+                }
+            }
+        }
+        let mut stores = BTreeMap::new();
+        walk(&self.root.join("data"), &mut stores);
+        stores
     }
 }
 
@@ -895,4 +948,164 @@ fn ollama_verdicts_are_cached_and_kept_under_the_tag_and_digest() {
         "the cached Verdict stands while Ollama is gone"
     );
     assert_eq!(ollama.received("/api/chat").len(), 1);
+}
+
+/// The T3 Findings of a Folder Scan: the ones a malicious Verdict opened.
+fn judged_in(result: &FolderScanResult) -> Vec<&agentsweep_core::state::RecordedFinding> {
+    result
+        .findings
+        .iter()
+        .map(|one| &one.finding)
+        .filter(|finding| finding.tier == Tier::AiJudgement)
+        .collect()
+}
+
+/// A Folder Scan asks the active engine about what it left Ambiguous: a
+/// malicious Verdict turns the answer to "do not open yet" with the T3
+/// Finding beneath, naming the engine, and a benign one leaves it "safe to
+/// open". Either way it records nothing: every store in the data directory,
+/// the Verdict cache included, is byte-identical afterwards.
+#[test]
+fn a_folder_scan_asks_the_engine_and_records_nothing() {
+    let sandbox = Sandbox::new(
+        "folder-verdicts",
+        settings::JudgementEngine::Ollama,
+        FakeEngine::new(Duration::ZERO, false),
+    );
+    let daemon = sandbox.start();
+    wait_for_the_queue(&daemon);
+    let before = sandbox.stores();
+    let status_before = sandbox.status();
+
+    let malicious = sandbox.folder("malicious", &["malicious-planted"]);
+    let result = sandbox.folder_scan(&malicious);
+    assert!(!result.is_safe(), "{result:?}");
+    assert_eq!(result.verdict(), "Do not open yet.");
+    let judged = judged_in(&result);
+    assert_eq!(judged.len(), 1, "{result:?}");
+    assert_eq!(judged[0].facts.judgement_engine, "ollama");
+    assert_eq!(judged[0].facts.judgement_model, "ollama-fake@sha256:0");
+    assert_eq!(
+        judged[0].facts.judgement_reason,
+        "It tells the agent its rules no longer apply."
+    );
+    assert_eq!(result.ambiguous, 0);
+    assert_eq!(result.unfinished, 0);
+
+    let benign = sandbox.folder("benign", &["benign-helper"]);
+    let result = sandbox.folder_scan(&benign);
+    assert!(result.is_safe(), "{result:?}");
+    assert_eq!(
+        result.ambiguous, 0,
+        "a benign Verdict moves it out of the Band"
+    );
+    assert_eq!(
+        sandbox.engine.asked(),
+        vec!["malicious-planted".to_string(), "benign-helper".to_string()]
+    );
+
+    assert!(
+        sandbox.stores() == before,
+        "the Baseline, the Event Log, the state file, the quarantine store and the \
+         Verdict cache are untouched"
+    );
+    assert!(sandbox.cached().is_empty());
+    let status_after = sandbox.status();
+    assert_eq!(status_after.findings, status_before.findings);
+}
+
+/// With no engine active the Folder Scan answers as it did before: the Item
+/// stays Ambiguous, nothing is asked and nothing is unfinished.
+#[test]
+fn with_no_engine_active_a_folder_scan_asks_nothing() {
+    let sandbox = Sandbox::new(
+        "folder-off",
+        settings::JudgementEngine::Off,
+        FakeEngine::new(Duration::ZERO, false),
+    );
+    let _daemon = sandbox.start();
+    let folder = sandbox.folder("off", &["malicious-planted"]);
+    let result = sandbox.folder_scan(&folder);
+    assert!(result.is_safe(), "{result:?}");
+    assert_eq!(result.ambiguous, 1);
+    assert_eq!(result.unfinished, 0);
+    assert_eq!(result.unfinished_line(), None);
+    assert!(sandbox.engine.asked().is_empty());
+}
+
+/// The Folder Scan waits for its Verdicts up to the engine's timeout and then
+/// answers: what the engine has not answered stays Ambiguous with the line
+/// that the AI check did not finish, and the late answer is never cached.
+#[test]
+fn a_folder_scan_answers_when_the_wait_runs_out() {
+    let sandbox = Sandbox::new(
+        "folder-wait",
+        settings::JudgementEngine::Ollama,
+        FakeEngine::new(Duration::ZERO, true),
+    );
+    let daemon = sandbox.start_waiting(
+        Arc::new(FakeEngines(Arc::clone(&sandbox.engine))),
+        Some(Duration::from_millis(400)),
+    );
+    let folder = sandbox.folder("wait", &["malicious-slow"]);
+    let result = sandbox.folder_scan(&folder);
+    assert!(result.is_safe(), "{result:?}");
+    assert_eq!(result.ambiguous, 1);
+    assert_eq!(result.unfinished, 1);
+    assert_eq!(
+        result.unfinished_line().as_deref(),
+        Some("The AI check did not finish for 1 Item; it stays in the Ambiguous Band.")
+    );
+    assert_eq!(sandbox.engine.asked(), vec!["malicious-slow".to_string()]);
+
+    sandbox.engine.open();
+    wait_until("the late answer", || {
+        sandbox.engine.now.load(Ordering::SeqCst) == 0
+    });
+    wait_for_the_queue(&daemon);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(sandbox.cached().is_empty(), "a late answer is never cached");
+    assert!(sandbox.status().findings.is_empty());
+}
+
+/// A Folder Scan running beside the queue a Full Scan fed never pushes a
+/// local engine past one request at a time: its requests wait their turn.
+#[test]
+fn a_folder_scan_beside_a_full_scan_keeps_a_local_engine_to_one_request() {
+    let sandbox = Sandbox::new(
+        "folder-beside",
+        settings::JudgementEngine::Ollama,
+        FakeEngine::new(Duration::from_millis(50), true),
+    );
+    for at in 0..3 {
+        sandbox.ambiguous_skill(&format!("helper-{at}"));
+    }
+    let daemon = sandbox.start();
+    wait_until("the queue asks", || !sandbox.engine.asked().is_empty());
+
+    let folder = sandbox.folder("beside", &["benign-one", "malicious-two"]);
+    let scanning = {
+        let socket = sandbox.socket.clone();
+        let folder = folder.clone();
+        std::thread::spawn(move || {
+            Client::connect_at(&socket, Role::App)
+                .expect("a client")
+                .folder_scan(folder.to_str().expect("a path"))
+                .expect("a Folder Scan")
+        })
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        sandbox.engine.asked().len(),
+        1,
+        "the Folder Scan waits while the queue's request is asked"
+    );
+    sandbox.engine.open();
+    let result = scanning.join().expect("the Folder Scan answers");
+    wait_for_the_queue(&daemon);
+
+    assert_eq!(judged_in(&result).len(), 1, "{result:?}");
+    assert_eq!(result.unfinished, 0);
+    assert_eq!(sandbox.engine.asked().len(), 5);
+    assert_eq!(sandbox.engine.most_at_once(), 1);
 }

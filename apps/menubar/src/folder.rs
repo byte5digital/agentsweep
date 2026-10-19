@@ -16,7 +16,8 @@ use crate::findings::{count, plain_card};
 
 /// The value the window receives for a finished Folder Scan, in the Posture
 /// the window is shown in. The Ambiguous count line exists in the Developer
-/// Posture only (spec section 8.4).
+/// Posture only (spec section 8.4), with the line that the AI check did not
+/// finish when it left some of them without an answer.
 pub fn result_view(result: &FolderScanResult, posture: Posture) -> Value {
     json!({
         "state": "done",
@@ -30,10 +31,16 @@ pub fn result_view(result: &FolderScanResult, posture: Posture) -> Value {
         ),
         "ambiguous": match (result.ambiguous, posture) {
             (0, _) | (_, Posture::Simple) => String::new(),
-            (n, Posture::Developer) => format!(
-                "{} in the Ambiguous Band, nothing to do.",
-                count(n, "Item", "Items")
-            ),
+            (n, Posture::Developer) => {
+                let band = format!(
+                    "{} in the Ambiguous Band, nothing to do.",
+                    count(n, "Item", "Items")
+                );
+                match result.unfinished_line() {
+                    None => band,
+                    Some(line) => format!("{band} {line}"),
+                }
+            }
         },
         "recorded": NOTHING_RECORDED,
         "rulePack": format!("Checked with Rule Pack {}, the one in force.", result.rule_pack),
@@ -82,6 +89,7 @@ mod tests {
             root: "/src/demo".to_string(),
             items: 2,
             ambiguous: 1,
+            unfinished: 0,
             findings: vec![FolderFinding {
                 finding: finding.clone(),
                 heuristics: vec!["0501  weight 2  It downloads something.".to_string()],
@@ -124,6 +132,7 @@ mod tests {
             root: "/src/demo".to_string(),
             items: 1,
             ambiguous: 0,
+            unfinished: 0,
             findings: Vec::new(),
             rule_pack: 3,
         };
@@ -133,6 +142,24 @@ mod tests {
         assert_eq!(view["summary"], "1 Item, no Findings.");
         assert_eq!(view["ambiguous"], "");
         assert_eq!(view["findings"], json!([]));
+    }
+
+    #[test]
+    fn items_the_ai_check_did_not_finish_are_named_in_the_developer_posture() {
+        let result = FolderScanResult {
+            root: "/src/demo".to_string(),
+            items: 2,
+            ambiguous: 2,
+            unfinished: 1,
+            findings: Vec::new(),
+            rule_pack: 3,
+        };
+        assert_eq!(
+            result_view(&result, Posture::Developer)["ambiguous"],
+            "2 Items in the Ambiguous Band, nothing to do. \
+             The AI check did not finish for 1 Item; it stays in the Ambiguous Band."
+        );
+        assert_eq!(result_view(&result, Posture::Simple)["ambiguous"], "");
     }
 
     #[test]

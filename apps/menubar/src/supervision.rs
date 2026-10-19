@@ -258,10 +258,10 @@ fn registered(state: ServiceState) -> bool {
 /// Unregisters the daemon and the login item, whichever is registered, and
 /// answers with what could not be done.
 ///
-/// Nothing in the app calls this yet: Uninstall arrives with its own
-/// milestone. It is what the developer flag `--developer-unregister` runs, so
-/// a hand check can take a test install off the machine completely
-/// (`docs/hand-checks.md`).
+/// Uninstall in Settings calls it once the daemon has applied the user's
+/// choice ([`crate::uninstall`]). It is also what the developer flag
+/// `--developer-unregister` runs, so a hand check can take a test install off
+/// the machine completely (`docs/hand-checks.md`).
 pub fn unregister_everything(services: &dyn Services) -> Vec<String> {
     let mut failures = Vec::new();
     if registered(services.agent())

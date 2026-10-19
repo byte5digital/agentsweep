@@ -29,7 +29,7 @@ use agentsweep_ipc::notifications::Unnotified;
 use agentsweep_ipc::preview::RequestPreview;
 use agentsweep_ipc::protocol::{
     ActionReport, FolderScanResult, RevealedReceipt, Sessions, SettingsChange, SettingsState,
-    Status,
+    Status, UninstallChoice, UninstallReport,
 };
 use agentsweep_ipc::{Client, ClientError};
 use serde_json::{Value, json};
@@ -230,6 +230,13 @@ impl Asking {
     /// payload, through the reveal-receipt request. It only reads.
     pub fn receipts(&self) -> Result<Vec<RevealedReceipt>, ClientError> {
         self.with(true, |client| client.reveal_receipts(None))
+    }
+
+    /// Uninstall with the user's choice: the request `agentsweep uninstall`
+    /// sends (spec section 9.6). Asked again only when it provably never
+    /// reached the daemon.
+    pub fn uninstall(&self, choice: UninstallChoice) -> Result<UninstallReport, ClientError> {
+        self.with(false, |client| client.uninstall(choice))
     }
 
     /// Asks for a Full Scan; true when this started one, false when it joined

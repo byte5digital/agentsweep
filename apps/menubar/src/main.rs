@@ -6,8 +6,8 @@
 //! `--developer-status` prints where the daemon's and the login item's
 //! registrations stand, and `--developer-unregister` unregisters both for the
 //! bundle it is run from. Each exits without opening anything. It is how
-//! a hand check takes a test install off the machine (`docs/hand-checks.md`);
-//! Uninstall proper arrives with its own milestone.
+//! a hand check takes a test install off the machine (`docs/hand-checks.md`)
+//! without the choice about Quarantine that Uninstall in Settings asks for.
 
 use std::process::ExitCode;
 

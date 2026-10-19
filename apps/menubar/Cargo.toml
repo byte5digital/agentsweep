@@ -44,9 +44,10 @@ tauri-plugin-notification = "=2.4.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # SMAppService: the daemon as a launch agent from the plist inside the bundle,
-# and the app as a login item (spec section 9.5).
+# and the app as a login item (spec section 9.5). The file manager moves the
+# app to the Trash on Uninstall (spec section 9.6).
 objc2 = "0.6.4"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError", "NSNotification", "NSOperation", "block2"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError", "NSNotification", "NSOperation", "block2", "NSFileManager", "NSURL"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 # The native folder picker behind "Scan a folder" (AppKit's NSOpenPanel). MIT.
 # Called from Rust, so the webview gets no dialog or file system permission.

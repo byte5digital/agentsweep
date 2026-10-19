@@ -51,6 +51,7 @@
 //! - [`ai_check`]: the AI check in the Settings pane: the four engine
 //!   cards, the Ollama confirmation, the Claude consent screen and the key
 //!   handed to the daemon once.
+//! - [`uninstall`]: **Uninstall AgentSweep…**, behind a Trash seam.
 //! - [`cli_link`]: **Install command line tool**, the link in
 //!   `~/.local/bin`.
 //! - [`notifications`]: what each un-notified change says when the app
@@ -88,5 +89,6 @@ pub mod quarantine;
 pub mod reveal;
 pub mod settings_pane;
 pub mod supervision;
+pub mod uninstall;
 pub mod window;
 pub mod wording;

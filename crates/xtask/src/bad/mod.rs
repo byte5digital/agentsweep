@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use agentsweep_core::finding::{Source, Tier};
-use agentsweep_core::heuristics::Band;
+use agentsweep_core::heuristics::{Assessment, Band};
 use agentsweep_core::item::{BaselineState, Item};
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::Scanners;
@@ -471,6 +471,75 @@ fn scan_sample(
     sample: &Sample,
     scanners: &mut Scanners<'_>,
 ) -> Result<(Vec<ItemLine>, Vec<String>), String> {
+    let laid = sample_items(sample, scanners)?;
+    let mut lines: Vec<ItemLine> = laid
+        .items
+        .iter()
+        .map(|found| {
+            let assessment = &found.assessment;
+            let mut rules = BTreeSet::new();
+            let mut heuristics: BTreeSet<i64> =
+                assessment.fired.iter().map(|fired| fired.id).collect();
+            for finding in &assessment.findings {
+                let Source::Rule(id) = finding.source else {
+                    continue;
+                };
+                match finding.tier {
+                    Tier::Rules => {
+                        rules.insert(id);
+                    }
+                    Tier::Heuristics => {
+                        heuristics.insert(id);
+                    }
+                    _ => {}
+                }
+                heuristics.extend(finding.heuristics.iter().map(|fired| fired.id));
+            }
+            ItemLine {
+                item: found.name.clone(),
+                rules: rules.into_iter().collect(),
+                heuristics: heuristics.into_iter().collect(),
+                score: assessment.score,
+                band: assessment.band,
+                reaches_t3: assessment.awaits_judgement(),
+            }
+        })
+        .collect();
+    lines.sort_by(|a, b| a.item.cmp(&b.item));
+    Ok((lines, laid.problems))
+}
+
+/// One Item of one sample, as the adapters found it, with what the Tiers
+/// made of it.
+#[derive(Clone, Debug)]
+pub struct SampleItem {
+    /// The ItemId, with the temporary directory the sample was laid out in
+    /// taken out so the name reads the same on every run.
+    pub name: String,
+    /// The Item, its content held in memory.
+    pub item: Item,
+    /// Its Assessment.
+    pub assessment: Assessment,
+}
+
+/// Every Item of one sample, after the temporary directory it was laid out
+/// in is gone again.
+#[derive(Clone, Debug)]
+pub struct LaidSample {
+    /// The home directory the sample was laid out under, which a Judgement
+    /// Request normalises to `~`. It no longer exists.
+    pub home: PathBuf,
+    /// Every Item the adapters found, in enumeration order.
+    pub items: Vec<SampleItem>,
+    /// What an adapter could not read.
+    pub problems: Vec<String>,
+}
+
+/// Lays one sample out in a fresh temporary directory, enumerates and
+/// assesses every Item the adapters find there and removes the directory
+/// again. The Items keep their content in memory, so the AI Judgement eval
+/// can build a Judgement Request from each.
+pub fn sample_items(sample: &Sample, scanners: &mut Scanners<'_>) -> Result<LaidSample, String> {
     let work = std::env::temp_dir().join(format!(
         "agentsweep-bad-corpus-{}-{}",
         std::process::id(),
@@ -485,7 +554,7 @@ fn scan_in(
     sample: &Sample,
     scanners: &mut Scanners<'_>,
     work: &Path,
-) -> Result<(Vec<ItemLine>, Vec<String>), String> {
+) -> Result<LaidSample, String> {
     let fail = |error: io::Error| format!("{} could not be laid out: {error}\n", sample.name);
     let project = sample.name.replace('/', "-");
 
@@ -521,44 +590,27 @@ fn scan_in(
         text
     };
 
-    let mut lines = Vec::new();
-    for item in &enumeration.items {
+    let mut items = Vec::new();
+    for item in enumeration.items {
         let assessment = scanners
-            .assess(item)
+            .assess(&item)
             .map_err(|error| format!("{}: the scan failed: {error}\n", sample.name))?;
-        let mut rules = BTreeSet::new();
-        let mut heuristics: BTreeSet<i64> = assessment.fired.iter().map(|fired| fired.id).collect();
-        for finding in &assessment.findings {
-            let Source::Rule(id) = finding.source else {
-                continue;
-            };
-            match finding.tier {
-                Tier::Rules => {
-                    rules.insert(id);
-                }
-                Tier::Heuristics => {
-                    heuristics.insert(id);
-                }
-                _ => {}
-            }
-            heuristics.extend(finding.heuristics.iter().map(|fired| fired.id));
-        }
-        lines.push(ItemLine {
-            item: strip(&item.id.to_string()),
-            rules: rules.into_iter().collect(),
-            heuristics: heuristics.into_iter().collect(),
-            score: assessment.score,
-            band: assessment.band,
-            reaches_t3: assessment.awaits_judgement(),
+        items.push(SampleItem {
+            name: strip(&item.id.to_string()),
+            item,
+            assessment,
         });
     }
-    lines.sort_by(|a, b| a.item.cmp(&b.item));
     let problems = enumeration
         .problems
         .iter()
         .map(|problem| strip(&format!("{} {}", problem.reason.as_str(), problem.surface)))
         .collect();
-    Ok((lines, problems))
+    Ok(LaidSample {
+        home: machine.home,
+        items,
+        problems,
+    })
 }
 
 /// The Baseline state of an Item against what the `before/` layout held.

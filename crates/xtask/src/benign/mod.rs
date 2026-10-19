@@ -31,7 +31,7 @@ use agentsweep_core::host::Host;
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::Scanners;
 
-use crate::benign::fetch::{Cache, Problem};
+use crate::benign::fetch::{Cache, Fetch, Problem};
 use crate::benign::manifest::{Manifest, Shape, Source};
 use crate::benign::plant::{Content, Ground, Machine};
 
@@ -107,15 +107,69 @@ pub fn run(root: &Path, record: bool) -> Result<Run, String> {
     let manifest = Manifest::of(root).map_err(|error| error.to_string())?;
     let work = root.join(WORK);
     let cache = Cache::at(work.join("cache"));
-    let mut ground = Ground::fresh(&work.join("machine"))
+    let laid = match lay_out(&manifest, &cache, &work.join("machine"), record)? {
+        Laid::Offline(what) => return Ok(Run::Offline(what)),
+        Laid::Machine(laid) => laid,
+    };
+
+    let enumeration = enumerate(&laid.machine);
+    let pack = RulePack::bundled().map_err(|error| format!("{error}\n"))?;
+    let mut scanners = Scanners::new(&pack);
+    let report = HitReport::of(&mut scanners, &enumeration.items)
+        .map_err(|error| format!("the corpus could not be scanned: {error}\n"))?;
+
+    Ok(Run::Scanned(Box::new(Scanned {
+        sources: manifest.sources.len(),
+        files: laid.files,
+        report,
+        problems: enumeration
+            .problems
+            .iter()
+            .map(|problem| format!("{} {}", problem.reason.as_str(), problem.surface))
+            .collect(),
+        digests: laid.digests,
+    })))
+}
+
+/// What laying the corpus out came to.
+#[derive(Debug)]
+pub enum Laid {
+    /// The network did not answer, so nothing was laid out.
+    Offline(String),
+    /// Every source was fetched, held to its pin and laid out.
+    Machine(LaidMachine),
+}
+
+/// The machine the corpus was laid out on, and what went into it.
+#[derive(Debug)]
+pub struct LaidMachine {
+    /// The machine the adapters read.
+    pub machine: Machine,
+    /// How many files were laid out across all sources.
+    pub files: usize,
+    /// The digest of each source, in manifest order.
+    pub digests: Vec<(String, String)>,
+}
+
+/// Fetches every source of the manifest through `fetch`, holds it to the
+/// digest the manifest pins (unless `record`), and lays it out as a machine
+/// under `directory`, replacing whatever was there. Nothing is written
+/// outside `directory` and whatever `fetch` caches.
+pub fn lay_out(
+    manifest: &Manifest,
+    fetch: &dyn Fetch,
+    directory: &Path,
+    record: bool,
+) -> Result<Laid, String> {
+    let mut ground = Ground::fresh(directory)
         .map_err(|error| format!("the corpus machine could not be laid out: {error}"))?;
 
     let mut digests = Vec::new();
     let mut files = 0;
     for source in &manifest.sources {
-        let content = match content_of(&cache, source) {
+        let content = match content_of(fetch, source) {
             Ok(content) => content,
-            Err(Problem::Offline(what)) => return Ok(Run::Offline(what)),
+            Err(Problem::Offline(what)) => return Ok(Laid::Offline(what)),
             Err(Problem::Refused(what)) => return Err(what),
         };
         let digest = plant::digest(&content);
@@ -143,23 +197,11 @@ pub fn run(root: &Path, record: bool) -> Result<Run, String> {
     let machine = ground
         .finish()
         .map_err(|error| format!("the corpus machine could not be finished: {error}"))?;
-    let enumeration = enumerate(&machine);
-    let pack = RulePack::bundled().map_err(|error| format!("{error}\n"))?;
-    let mut scanners = Scanners::new(&pack);
-    let report = HitReport::of(&mut scanners, &enumeration.items)
-        .map_err(|error| format!("the corpus could not be scanned: {error}\n"))?;
-
-    Ok(Run::Scanned(Box::new(Scanned {
-        sources: manifest.sources.len(),
+    Ok(Laid::Machine(LaidMachine {
+        machine,
         files,
-        report,
-        problems: enumeration
-            .problems
-            .iter()
-            .map(|problem| format!("{} {}", problem.reason.as_str(), problem.surface))
-            .collect(),
         digests,
-    })))
+    }))
 }
 
 /// Writes the digests of what was fetched back into the committed manifest.
@@ -174,8 +216,8 @@ pub fn record(root: &Path, digests: &[(String, String)]) -> Result<PathBuf, Stri
 
 /// The content of one source: the paths taken from its archive, or its one
 /// file under its own name.
-fn content_of(cache: &Cache, source: &Source) -> Result<Content, Problem> {
-    let bytes = cache.bytes(&source.url(), &source.cache_name())?;
+fn content_of(fetch: &dyn Fetch, source: &Source) -> Result<Content, Problem> {
+    let bytes = fetch.bytes(&source.url(), &source.cache_name())?;
     match &source.shape {
         Shape::Archive { take } => {
             let paths: Vec<String> = take.iter().map(|take| take.path.clone()).collect();
@@ -214,7 +256,7 @@ fn plant_source(ground: &mut Ground, source: &Source, content: &Content) -> Resu
 ///
 /// No system root is given, so no Managed Surface of the machine this runs on
 /// is ever read, and no search path, so no binary of it is ever looked for.
-pub(crate) fn enumerate(machine: &Machine) -> Enumeration {
+pub fn enumerate(machine: &Machine) -> Enumeration {
     let host = Host::new(machine.home.clone(), machine.project_roots.clone());
     let roots = host.project_roots();
     let workspace = Workspace::new();

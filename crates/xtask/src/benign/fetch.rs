@@ -39,6 +39,20 @@ impl fmt::Display for Problem {
 
 impl Error for Problem {}
 
+/// Where the bytes of the corpus come from. The download cache is the one
+/// the corpus runs use; a test hands over one that answers without a
+/// network.
+pub trait Fetch {
+    /// The bytes behind one URL, `name` being what a cache keeps them under.
+    fn bytes(&self, url: &str, name: &str) -> Result<Vec<u8>, Problem>;
+}
+
+impl Fetch for Cache {
+    fn bytes(&self, url: &str, name: &str) -> Result<Vec<u8>, Problem> {
+        Cache::bytes(self, url, name)
+    }
+}
+
 /// The download cache.
 #[derive(Clone, Debug)]
 pub struct Cache {

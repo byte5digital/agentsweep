@@ -7,7 +7,10 @@
 //!
 //! The queue runs on threads of its own, and only while it holds work:
 //! strictly one request at a time for a local engine (Apple on-device,
-//! Ollama), at most two at once for the Claude engine. At most a fixed number
+//! Ollama), at most two at once for the Claude engine. A Folder Scan asks the
+//! same engine beside the queue, and every request, the queue's and the
+//! Folder Scan's alike, takes one of the engine's slots first, so together
+//! they stay within that concurrency. At most a fixed number
 //! of Items per Scan are asked, the most recently changed first; the rest get
 //! no Verdict and are fed again by the next Scan.
 //!
@@ -31,7 +34,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::time::Instant;
 
 use agentsweep_core::apple_engine::{AppleEngine, AppleHelper};
 use agentsweep_core::claude_engine::ClaudeEngine;
@@ -396,10 +400,38 @@ impl Inner {
     }
 }
 
+/// The requests being asked of the active engine right now, by anyone: the
+/// queue's workers and a Folder Scan alike. Each request takes a slot before
+/// it is asked and gives it back when its answer is in, so the engine is
+/// never asked more at once than its kind allows, however many ask.
+#[derive(Default)]
+struct Slots {
+    taken: Mutex<usize>,
+    freed: Condvar,
+}
+
+/// One request's place among the engine's requests: given back when it is
+/// dropped.
+pub struct Slot<'a>(&'a Slots);
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        let mut taken = self
+            .0
+            .taken
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *taken = taken.saturating_sub(1);
+        drop(taken);
+        self.0.freed.notify_all();
+    }
+}
+
 /// The AI Judgement queue.
 #[derive(Default)]
 pub struct JudgementQueue {
     inner: Mutex<Inner>,
+    slots: Slots,
 }
 
 impl fmt::Debug for JudgementQueue {
@@ -424,6 +456,40 @@ impl JudgementQueue {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Takes one of the engine's slots for a request that may run beside at
+    /// most `concurrency - 1` others, waiting while they are all taken; or,
+    /// with a `deadline`, None once it passes first.
+    pub fn take_a_slot(&self, concurrency: usize, deadline: Option<Instant>) -> Option<Slot<'_>> {
+        let limit = concurrency.max(1);
+        let mut taken = self
+            .slots
+            .taken
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while *taken >= limit {
+            taken = match deadline {
+                None => self
+                    .slots
+                    .freed
+                    .wait(taken)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                Some(deadline) => {
+                    let left = deadline.checked_duration_since(Instant::now())?;
+                    if left.is_zero() {
+                        return None;
+                    }
+                    self.slots
+                        .freed
+                        .wait_timeout(taken, left)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .0
+                }
+            };
+        }
+        *taken += 1;
+        Some(Slot(&self.slots))
     }
 
     /// Hands the queue the requests one Scan chose, under the engine that Scan
@@ -634,8 +700,12 @@ impl JudgementQueue {
             let Some((ask, asking, generation)) = taken else {
                 return;
             };
-            let (outcome, usage) =
-                judgement::judge_metered(&*asking.asker, &ask.request, &ask.awaiting.fired);
+            // A Folder Scan asks the same engine beside the queue; the slot
+            // keeps the two together within the engine's concurrency.
+            let (outcome, usage) = {
+                let _slot = self.take_a_slot(asking.concurrency, None);
+                judgement::judge_metered(&*asking.asker, &ask.request, &ask.awaiting.fired)
+            };
             let (item, hash) = ask.key();
             landing.landed(Answer {
                 generation,

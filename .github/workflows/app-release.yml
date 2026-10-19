@@ -1,0 +1,267 @@
+name: App release
+
+# Pushing a protected `v<semver>` tag builds, signs and notarizes AgentSweep
+# into a draft GitHub release (spec sections 9.1 and 9.2). A human runs the
+# release checklist on the draft and publishes it; nothing here publishes.
+# Every check runs before the draft exists, so a draft is only ever made from
+# a bundle the release bundle checker accepted. A tag with a prerelease suffix
+# (v0.2.0-rc.1) makes a GitHub prerelease, which the updater never sees: it
+# reads `releases/latest/download/latest.json`, and a prerelease is never the
+# latest release. `.github/scripts/release-dry-run.sh` drives the same scripts
+# on a developer's machine with an ad hoc identity.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 3
+
+jobs:
+  release:
+    name: Build, sign, notarize and draft the app release
+    runs-on: macos-latest
+    environment:
+      name: release
+    permissions:
+      # The draft release and its assets.
+      contents: write
+      # GitHub artifact attestations for the DMG and the updater archive.
+      id-token: write
+      attestations: write
+    env:
+      BUNDLE_DIR: target/universal-apple-darwin/release/bundle
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The runner context is not available to a job's env, so the paths under
+      # the runner's temporary directory are named here for every later step.
+      # None of them is secret; the keychain and the API key file are deleted
+      # in the last step whatever the outcome.
+      - name: Name the working paths
+        run: |
+          echo "RELEASE_DIR=${RUNNER_TEMP}/app-release" >> "${GITHUB_ENV}"
+          echo "KEYCHAIN=${RUNNER_TEMP}/agentsweep-release.keychain-db" >> "${GITHUB_ENV}"
+          echo "APPLE_API_KEY_PATH=${RUNNER_TEMP}/app-store-connect-api-key.p8" >> "${GITHUB_ENV}"
+
+      # The app, the daemon and the CLI share one version: the tag must name
+      # exactly the workspace version, and a prerelease suffix makes a
+      # prerelease.
+      - name: Hold the tag to the version gate
+        id: gate
+        run: .github/scripts/release-version-gate.sh "${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install the pinned toolchain with both Apple targets
+        run: .github/scripts/install-toolchain.sh aarch64-apple-darwin x86_64-apple-darwin
+
+      # Built from crates.io with the pinned toolchain, as in CI.
+      - name: Install cargo-auditable
+        run: cargo install --locked cargo-auditable
+
+      # Each sidecar built for both Apple triples through cargo auditable and
+      # joined with lipo, before any secret is in the environment, so no build
+      # script ever runs beside a secret.
+      - name: Build the universal sidecars
+        env:
+          TARGET: universal-apple-darwin
+        run: apps/menubar/build-sidecars.sh release
+
+      # The Developer ID certificate goes into a keychain of this job's own,
+      # unlocked for this run alone, and Tauri signs from it by the identity's
+      # name. The keychain's password is random and never leaves this step.
+      - name: Import the certificate into a temporary keychain
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain_password="$(openssl rand -base64 32)"
+          echo "::add-mask::${keychain_password}"
+          certificate="${RUNNER_TEMP}/developer-id.p12"
+          umask 077
+          printf '%s' "${APPLE_CERTIFICATE}" | base64 --decode > "${certificate}"
+          security create-keychain -p "${keychain_password}" "${KEYCHAIN}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN}"
+          security unlock-keychain -p "${keychain_password}" "${KEYCHAIN}"
+          security import "${certificate}" -k "${KEYCHAIN}" -f pkcs12 -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          rm -f "${certificate}"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${KEYCHAIN}" > /dev/null
+          security list-keychains -d user -s "${KEYCHAIN}" login.keychain-db
+
+      # The App Store Connect API key flavour of the APPLE_* variables: Tauri
+      # and notarytool read the key from this file.
+      - name: Write the App Store Connect API key to a file
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          umask 077
+          printf '%s\n' "${APPLE_API_KEY_P8}" > "${APPLE_API_KEY_PATH}"
+
+      # The app and the DMG, universal, signed with the hardened runtime and no
+      # entitlements; Tauri notarizes and staples the app, and signs the
+      # updater archive with the updater key. The daemon carries its frozen
+      # identifier from the Info.plist it embeds, so Tauri's own signing yields
+      # it and nothing re-signs afterwards. The action only builds here: the
+      # draft is made below, once every check has passed. The Tauri command
+      # line interface is the npm one pinned to the version of the tauri crate
+      # the workspace locks; what follows `--` goes to cargo.
+      - name: Build, sign and notarize the app
+        uses: tauri-apps/tauri-action@0000000000000000000000000000000000000000 # v1.0.0, placeholder SHA to be replaced with the commit of that tag
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/menubar
+          tauriScript: npx --yes @tauri-apps/cli@2.11.5
+          args: --target universal-apple-darwin --bundles app,dmg --config tauri.bundle.conf.json -- --locked
+
+      - name: Stage the release assets
+        id: stage
+        env:
+          VERSION: ${{ steps.gate.outputs.version }}
+        run: .github/scripts/stage-release-assets.sh "${BUNDLE_DIR}" "${VERSION}" universal "${RELEASE_DIR}" >> "${GITHUB_OUTPUT}"
+
+      # Only the disk image's own signature, and only when Tauri made none:
+      # nothing inside the DMG is re-signed.
+      - name: Sign the DMG if Tauri left it unsigned
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          DMG: ${{ steps.stage.outputs.dmg }}
+        run: .github/scripts/sign-unsigned-dmg.sh "${APPLE_SIGNING_IDENTITY}" "${RELEASE_DIR}/${DMG}"
+
+      # Tauri notarizes the app but not the DMG around it; stapling the DMG
+      # lets Gatekeeper accept it offline (release checklist item 2).
+      - name: Notarize and staple the DMG
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          DMG: ${{ steps.stage.outputs.dmg }}
+        run: |
+          result="$(xcrun notarytool submit "${RELEASE_DIR}/${DMG}" \
+            --key "${APPLE_API_KEY_PATH}" --key-id "${APPLE_API_KEY}" --issuer "${APPLE_API_ISSUER}" \
+            --wait --output-format json)"
+          status="$(printf '%s' "${result}" | plutil -extract status raw -o - -)"
+          echo "Notarization of ${DMG}: ${status}"
+          if [ "${status}" != "Accepted" ]; then
+            echo "Apple did not accept ${DMG}; xcrun notarytool log names why." >&2
+            exit 1
+          fi
+          xcrun stapler staple "${RELEASE_DIR}/${DMG}"
+          xcrun stapler validate "${RELEASE_DIR}/${DMG}"
+
+      # The release bundle checker in release mode (release checklist items 2,
+      # 3, 14, 15 and 16): on every Mach-O in every architecture `Timestamp=`,
+      # the identity as first authority, one Team ID, the hardened runtime and
+      # no entitlements, the daemon's frozen identifier, both architectures;
+      # on the DMG its signature, its staple and Gatekeeper. Every miss of all
+      # three subjects is reported before the step fails.
+      - name: Check the app, the DMG and the updater archive with the release bundle checker
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          DMG: ${{ steps.stage.outputs.dmg }}
+          ARCHIVE: ${{ steps.stage.outputs.archive }}
+        run: |
+          status=0
+          for subject in "${BUNDLE_DIR}/macos/AgentSweep.app" "${RELEASE_DIR}/${DMG}" "${RELEASE_DIR}/${ARCHIVE}"; do
+            .github/scripts/check-bundle-signature.sh "${APPLE_SIGNING_IDENTITY}" "${subject}" || status=1
+          done
+          exit "${status}"
+
+      # One universal archive, so both darwin keys name it with its signature.
+      - name: Write and check latest.json
+        env:
+          VERSION: ${{ steps.gate.outputs.version }}
+          ARCHIVE: ${{ steps.stage.outputs.archive }}
+          SIGNATURE: ${{ steps.stage.outputs.signature }}
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${ARCHIVE}"
+          .github/scripts/updater-manifest.sh write "${VERSION}" "${url}" "${RELEASE_DIR}/${SIGNATURE}" "${RELEASE_DIR}/latest.json"
+          .github/scripts/updater-manifest.sh check "${RELEASE_DIR}/latest.json" "${VERSION}" "${url}" "${RELEASE_DIR}/${SIGNATURE}"
+
+      - name: Attest the DMG and the updater archive
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ env.RELEASE_DIR }}/${{ steps.stage.outputs.dmg }}
+            ${{ env.RELEASE_DIR }}/${{ steps.stage.outputs.archive }}
+
+      # Always a draft; a prerelease when the tag has a prerelease suffix.
+      - name: Create the draft release
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.gate.outputs.version }}
+          PRERELEASE: ${{ steps.gate.outputs.prerelease }}
+          DMG: ${{ steps.stage.outputs.dmg }}
+          ARCHIVE: ${{ steps.stage.outputs.archive }}
+          SIGNATURE: ${{ steps.stage.outputs.signature }}
+        run: |
+          id="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+            -f tag_name="${GITHUB_REF_NAME}" \
+            -f name="AgentSweep ${VERSION}" \
+            -f body="AgentSweep ${VERSION}, signed and notarized. Run the release checklist before publishing." \
+            -F draft=true \
+            -F prerelease="${PRERELEASE}" \
+            --jq .id)"
+          echo "id=${id}" >> "${GITHUB_OUTPUT}"
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${RELEASE_DIR}/${DMG}" \
+            "${RELEASE_DIR}/${ARCHIVE}" \
+            "${RELEASE_DIR}/${SIGNATURE}" \
+            "${RELEASE_DIR}/latest.json"
+
+      # What the draft holds, read back from GitHub: the four assets, a draft,
+      # and the prerelease flag the tag asked for.
+      - name: Check the assets of the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
+          PRERELEASE: ${{ steps.gate.outputs.prerelease }}
+          DMG: ${{ steps.stage.outputs.dmg }}
+          ARCHIVE: ${{ steps.stage.outputs.archive }}
+          SIGNATURE: ${{ steps.stage.outputs.signature }}
+        run: |
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          names="$(printf '%s' "${release}" | jq -r '.assets[].name')"
+          echo "Assets of the draft:"
+          echo "${names}"
+          status=0
+          for name in "${DMG}" "${ARCHIVE}" "${SIGNATURE}" latest.json; do
+            if ! printf '%s\n' "${names}" | grep -qxF "${name}"; then
+              echo "The draft lacks ${name}." >&2
+              status=1
+            fi
+          done
+          if [ "$(printf '%s' "${release}" | jq -r .draft)" != "true" ]; then
+            echo "The release is not a draft." >&2
+            status=1
+          fi
+          if [ "$(printf '%s' "${release}" | jq -r .prerelease)" != "${PRERELEASE}" ]; then
+            echo "The release's prerelease flag is not ${PRERELEASE}." >&2
+            status=1
+          fi
+          exit "${status}"
+
+      - name: Delete the temporary keychain, the API key file and the release workspace
+        if: always()
+        run: |
+          if [ -n "${KEYCHAIN:-}" ]; then
+            security delete-keychain "${KEYCHAIN}" 2> /dev/null || true
+          fi
+          if [ -n "${APPLE_API_KEY_PATH:-}" ]; then
+            rm -f "${APPLE_API_KEY_PATH}"
+          fi
+          if [ -n "${RELEASE_DIR:-}" ]; then
+            rm -rf "${RELEASE_DIR}"
+          fi

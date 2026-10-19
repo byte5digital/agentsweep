@@ -465,4 +465,87 @@ pub(crate) mod tests {
         assert_eq!(pane["notProtected"]["link"]["url"], NOT_PROTECTED_LINK);
         assert_eq!(pane["notProtected"]["paragraph"], paragraph);
     }
+
+    /// The README the paragraph links to, as the repository carries it.
+    const README: &str = include_str!("../../../README.md");
+
+    /// GitHub's anchor for a Markdown heading: lower case, spaces become
+    /// hyphens, every other character that is not a letter, a digit, a hyphen
+    /// or an underscore is dropped.
+    fn github_anchor(heading: &str) -> String {
+        heading
+            .to_lowercase()
+            .chars()
+            .filter_map(|c| match c {
+                ' ' => Some('-'),
+                c if c.is_alphanumeric() || c == '-' || c == '_' => Some(c),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The README carries the heading the Settings link points at, its anchor
+    /// is the link's, and every line of spec section 2.4 stands under it,
+    /// each marked as possibly supported in a future version.
+    #[test]
+    fn the_readme_carries_the_list_the_link_points_at() {
+        let heading = format!("## {NOT_PROTECTED_TITLE}");
+        assert!(
+            README.lines().any(|line| line == heading),
+            "the README has no heading {heading}"
+        );
+        let anchor = github_anchor(NOT_PROTECTED_TITLE);
+        assert_eq!(
+            NOT_PROTECTED_LINK,
+            format!("https://github.com/byte5digital/agentsweep#{anchor}")
+        );
+        let section = README
+            .split_once(&heading)
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n## ").next())
+            .expect("the section has a body");
+        for line in NOT_PROTECTED {
+            let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+            let item = format!("- {line} Possibly supported in a future version.");
+            assert!(
+                section.lines().any(|l| l == item),
+                "the README lacks the line {item}"
+            );
+        }
+    }
+
+    /// The README of 0.1.0: no planning status, no em-dash, the three
+    /// requests of spec section 1.1 and nothing that points off GitHub.
+    #[test]
+    fn the_readme_says_what_0_1_0_is() {
+        assert!(!README.contains('\u{2014}'), "the README has an em-dash");
+        assert!(!README.to_lowercase().contains("planning"));
+        for needle in [
+            "brew install byte5digital/tap/agentsweep",
+            "DMG",
+            "macOS 14",
+            "cargo install agentsweep",
+            "agentsweep scan <dir>",
+            "cannot show status",
+            "arrives with 0.1.0",
+            "Exactly three requests",
+            "The Rule Feed fetch",
+            "The app update check",
+            "The opt-in Claude API call",
+            "no telemetry, no crash reporting",
+            "SECURITY.md",
+        ] {
+            assert!(README.contains(needle), "the README lacks {needle}");
+        }
+        for scheme in ["http://", "https://"] {
+            for (at, _) in README.match_indices(scheme) {
+                let rest = &README[at + scheme.len()..];
+                assert!(
+                    rest.starts_with("github.com/"),
+                    "the README links off GitHub: {}",
+                    &README[at..(at + 60).min(README.len())]
+                );
+            }
+        }
+    }
 }

@@ -1,0 +1,114 @@
+name: Cask bump
+
+# Publishing a release bumps the Homebrew cask in `byte5digital/homebrew-tap`
+# (spec section 9.2), so `brew install byte5digital/tap/agentsweep` installs
+# the notarized DMG the release carries. Only a plain `v<semver>` release
+# bumps it: a prerelease is installed by hand, and a `rules-v<N>` release,
+# which is published directly, is no app release at all. The filter runs in a
+# job of its own outside the `release` environment, so a Rule Pack release or
+# a prerelease never waits for a reviewer or reaches the tap token. The cask
+# is the template reviewed in this repository at the release's tag, rendered
+# with the version and the sha256 of the DMG once its attestation verifies.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cask-bump
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Decide whether the release bumps the cask
+    runs-on: ubuntu-latest
+    outputs:
+      bump: ${{ steps.gate.outputs.bump }}
+      version: ${{ steps.gate.outputs.version }}
+      tag: ${{ steps.gate.outputs.tag }}
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Hold the release to the tag filter
+        id: gate
+        run: .github/scripts/cask-bump-gate.sh "${GITHUB_EVENT_PATH}" >> "${GITHUB_OUTPUT}"
+
+  bump:
+    name: Render the cask and commit it to the tap
+    needs: gate
+    if: needs.gate.outputs.bump == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      # The release's DMG and its attestation are only read.
+      contents: read
+      attestations: read
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+      TAG: ${{ needs.gate.outputs.tag }}
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner context is not available to a job's env, so the working
+      # directory and the DMG's name are named here for every later step.
+      - name: Name the working paths
+        run: |
+          echo "CASK_DIR=${RUNNER_TEMP}/cask-bump" >> "${GITHUB_ENV}"
+          echo "DMG=AgentSweep_${VERSION}_universal.dmg" >> "${GITHUB_ENV}"
+
+      - name: Download the DMG from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "${CASK_DIR}"
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "${DMG}" --dir "${CASK_DIR}"
+
+      # The DMG must carry the build provenance the app release workflow
+      # attested for this tag; if it does not verify, the job stops here and
+      # no digest is ever taken of it.
+      - name: Verify the attestation of the DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify "${CASK_DIR}/${DMG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/app-release.yml" \
+            --source-ref "refs/tags/${TAG}"
+
+      - name: Render the cask
+        run: .github/scripts/render-cask.sh "${VERSION}" "${CASK_DIR}/${DMG}" > "${CASK_DIR}/agentsweep.rb"
+
+      # The tap token is a fine-grained token scoped to the tap alone, with
+      # contents read and write.
+      - name: Check out the tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: byte5digital/homebrew-tap
+          ref: main
+          path: homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      # One commit on the tap's main branch, or none when the cask is already
+      # this one.
+      - name: Commit the cask to the tap
+        run: |
+          mkdir -p homebrew-tap/Casks
+          cp "${CASK_DIR}/agentsweep.rb" homebrew-tap/Casks/agentsweep.rb
+          git -C homebrew-tap config user.name "github-actions[bot]"
+          git -C homebrew-tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C homebrew-tap add Casks/agentsweep.rb
+          if git -C homebrew-tap diff --cached --quiet; then
+            echo "The tap already carries the cask for ${VERSION}."
+            exit 0
+          fi
+          git -C homebrew-tap commit -m "Update agentsweep to ${VERSION}"
+          git -C homebrew-tap push origin HEAD:main

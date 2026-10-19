@@ -11,8 +11,11 @@ From the repository root, with the Command Line Tools (version 26 or later: the 
 ```sh
 apps/menubar/build-sidecars.sh debug
 cd apps/menubar
+export TAURI_SIGNING_PRIVATE_KEY="$(cat development-keys/updater-development.secret)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 APPLE_SIGNING_IDENTITY="-" npx --yes @tauri-apps/cli@2.11.5 build --debug --config tauri.bundle.conf.json
 ```
+
+The two signing variables are for the updater archive, which every bundle build now makes beside the app: they sign it with the development updater key, whose public half the app pins until the release prerequisites produce the real one. Its secret half is committed for tests and test bundles alone and protects nothing real.
 
 The bundle lands in `target/debug/bundle/macos/AgentSweep.app`. Debug sidecars are used on purpose: a debug daemon admits any peer of the same user, and a release daemon admits byte5's Team ID only, which is empty until the release milestone fills it in, so a release daemon answers nobody.
 
@@ -28,6 +31,7 @@ A release-like bundle, the one CI builds, is universal (arm64 plus x86_64) and h
 ```sh
 TARGET=universal-apple-darwin apps/menubar/build-sidecars.sh release
 cd apps/menubar
+export TAURI_SIGNING_PRIVATE_KEY="$(cat development-keys/updater-development.secret)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 APPLE_SIGNING_IDENTITY="-" npx --yes @tauri-apps/cli@2.11.5 build --target universal-apple-darwin --config tauri.bundle.conf.json -- --locked
 ```
 
@@ -504,6 +508,24 @@ Afterwards delete the test user or the virtual machine.
 
 Seams in the suite: `onboarding::tests` in the app (screen 4's preselection from the engine answer for each combination of Apple and Ollama, never Claude, the Developer Posture's other engines, Ollama's confirmation and the Claude key handed over once before the engine; screen 5's protected-location line only with a project in a protected class and its check-now sent once; leaving screen 5 registering the daemon and the login item once through the stand-in service layer and every answer reaching the settings and engine requests once a daemon answers; screen 6 waiting for the first Full Scan after the registration and reporting the Item count and the stopped Items, or that nothing was stopped), `inventory::tests` (the protected classes of the registered projects), `notifications::tests` (the permission asked once on screen 5), and `the_first_fetch_waits_for_the_settings_hand_over_and_none_when_it_says_off` in the daemon's Rule Feed tests (a temporary home and a local fixture feed that counts requests).
 
+## 22. An update through the updater, and once over a cask install
+
+This is item 6 of the release checklist, spec section 9.3, and needs two published releases: the previous one installed, and the draft about to be published, whose `latest.json` the updater will read once it is the latest release. Both must be signed with the same updater key, so the first run of this check is the second release after the real key was pinned (spec section 9.8). Use a macOS user that has run the previous release for a while: the daemon registered, a Keychain key written, and at least one project in Documents granted, so the TCC grant can be seen to stay.
+
+Before: note the version `agentsweep --version` prints, the daemon's pid (`pgrep -x agentsweepd`), the last line of `agentsweep status`, and in System Settings, Privacy & Security, Files and Folders, the AgentSweep entry with Documents on.
+
+- [ ] Settings shows the app update toggle on. Publish the draft, then quit and open the previous AgentSweep so it checks at launch. A network monitor (for example `nettop -m tcp -p "$(pgrep -x agentsweep-menubar)"`) shows the app connecting to GitHub only, for `releases/latest/download/latest.json` and the archive it names. Within a minute or two the popover shows "Update ready, restart AgentSweep"; the app does not restart, and nothing changes in `/Applications` while it runs.
+- [ ] Quit AgentSweep from the popover. The bundle in `/Applications` now carries the new version (`plutil -extract CFBundleShortVersionString raw /Applications/AgentSweep.app/Contents/Info.plist`). Within about ten seconds the old daemon pid is gone and a new one runs, without any action: the daemon log says the bundle was replaced and it exited with status 75, and `agentsweep --version` and the new daemon's first log line show the new version.
+- [ ] Open AgentSweep: no onboarding, no "AgentSweep is updating." beyond a moment, and Health is the same sentence as before. No "Protection state reset" line shows, so the daemon still reads its Keychain key: a notarized release keeps its designated requirement across versions, and macOS asks nothing about the Keychain.
+- [ ] The Documents project is still checked (no "projects not checked" line) and the Files and Folders entry is unchanged.
+- [ ] With the update toggle off in Settings, quit and open the app: the network monitor shows no connection of the app at all, at launch and after waiting a few minutes.
+
+Once more with a cask-installed app (stack research, unverified item 11): install the previous release with `brew install byte5digital/tap/agentsweep`, go through the wizard, and repeat the first three boxes.
+
+- [ ] The updater replaces the cask's bundle in place without an administrator prompt, the daemon comes back on the new version as above, and `brew list --cask --versions agentsweep` still names the old version (expected until the cask's `auto_updates true`, which belongs to the release milestone, tells Homebrew not to manage the version). Write under Record of runs whether `brew upgrade` afterwards tries to install the same version again.
+
+Seams in the suite: `updater::tests` in the app (the toggle from the wizard's held choice, the daemon's answer, the app's copy and the default, a user's off never overridden; a check at launch and once a day, none with the toggle off; the line in the popover while an update is ready; the install called once at quit when an update is ready and never otherwise, and never after Uninstall), and the app's `updater` tests, which run the real updater plugin on Tauri's mock runtime against a loopback fixture server that counts requests: a newer version under the development key is downloaded and verified, a bad signature and an older or equal version are refused, no request with the toggle off, one GET per check, and no identifier in the request.
+
 ## Dogfooding: one day with the app
 
 The minimal app's layout and words are placeholders so that the Posture and wording decisions of spec section 8 stay open. The author runs it for a day on their own machine, as an installed bundle, and files one note per question below with what they saw. None of these is decided by the minimal app.
@@ -555,6 +577,7 @@ Every release draft runs the release checklist, section 9.3 of the specification
 
 - Checklist items 2, 3 and 16 start with the release bundle checker, `.github/scripts/check-bundle-signature.sh`, run in release mode on the downloaded draft DMG: give it the identity the release signed with (`Developer ID Application: <name> (<Team ID>)`) and the DMG, with the Mac offline so Gatekeeper's answer comes from the stapled ticket. It reports every miss at once, each with the file it concerns, and exits non-zero on any. On the DMG it asserts the DMG's own signature, its staple (`xcrun stapler validate`) and that `spctl -a -vv` accepts it by its primary signature. On every Mach-O inside the app (the app executable, the daemon, the CLI, the Apple judgement helper and anything else Tauri placed), in every architecture, it asserts that `codesign --verify --strict` accepts it, that `lipo -archs` shows arm64 and x86_64, that it has the hardened runtime, `Timestamp=` and no entitlements (`codesign -d --entitlements -`), that its first authority is the identity given, and that every binary carries the same Team ID. On the daemon it asserts the identifier `de.byte5.agentsweep.daemon` in `codesign -dvv` and in `codesign -d -r-`. Then `codesign --verify --deep --strict` must accept the app and `spctl -a -vv` must accept it as an executable. Run it the same way on the app and on the updater archive (`AgentSweep.app.tar.gz`); for those two the DMG lines do not apply. Until ticket 98 is built, it reports two checks as not yet checkable and fails on them: that the daemon was built with byte5's Team ID in its peer check, and that neither the daemon nor the CLI pins a development Rule Pack public key; check those two by reading the release commit until then. The checker never executes a binary of the bundle. CI runs the same script in ad hoc mode (`-` as the identity) on its universal ad hoc bundle, which skips the timestamp, the authority, the Team ID, the designated requirement, the staple and Gatekeeper and prints that list. Tauri signs sidecars without naming an identifier, so codesign takes the daemon's from the Info.plist the daemon binary embeds; nothing re-signs after Tauri, which would leave the notarization, the DMG and the updater archive stale.
 - Dock and Cmd-Tab appear only while the window is open (Tauri issue 15005).
+- Checklist item 6 is section 22 above. The updater public key in `tauri.conf.json` is the real one, not the development key, and the release's `latest.json` points both `darwin-aarch64` and `darwin-x86_64` at the same universal archive with the signature the release made.
 - `TEAM_ID` in the daemon's peer check holds byte5's Team ID. While it is empty a release daemon admits nobody, which is why the checks above use debug sidecars.
 - Every exception in `deny.toml` was read again if Tauri or yara-x moved since the last release, and each one's reason still holds.
 - For the first tagged release, `agentsweep-core` and the three adapter crates are publishable and are published to crates.io before the `agentsweep` CLI.

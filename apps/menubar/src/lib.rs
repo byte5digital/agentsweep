@@ -46,7 +46,9 @@
 //!   toggles, Advanced and what AgentSweep does not protect against.
 //! - [`cli_link`]: **Install command line tool**, the link in
 //!   `~/.local/bin`.
-//! - [`window`]: when the app shows in the Dock.
+//! - [`notifications`]: what each un-notified change says when the app
+//!   raises it, behind a Notifier seam, and the window it opens after.
+//! - [`window`]: when the app shows in the Dock and how it starts.
 //! - [`placement`]: where the popover and the Findings window open.
 //! - [`glyph`]: the menu bar icon in its three states.
 //! - [`app`]: the Tauri shell around them, which the suite never starts.
@@ -67,6 +69,7 @@ pub mod how_to;
 pub mod inventory;
 pub mod launch_agent;
 pub mod link;
+pub mod notifications;
 pub mod onboarding;
 pub mod overview;
 pub mod placement;

@@ -332,7 +332,7 @@ impl Named {
 
 /// What a kind is called in a sentence. An instruction file of a project is
 /// "the project file", as spec section 8.4 calls it.
-fn noun(kind: Kind, project: bool) -> &'static str {
+pub(crate) fn noun(kind: Kind, project: bool) -> &'static str {
     match kind {
         Kind::InstructionFile if project => "project file",
         Kind::InstructionFile => "instruction file",

@@ -20,6 +20,7 @@ use std::sync::Mutex;
 use agentsweep_core::eventlog::Outcome;
 use agentsweep_core::item::ItemId;
 use agentsweep_core::quarantine::{Conflict, RestoreReport};
+use agentsweep_ipc::notifications::Unnotified;
 use agentsweep_ipc::protocol::{
     ActionReport, FolderScanResult, RevealedReceipt, Sessions, SettingsChange, SettingsState,
     Status,
@@ -159,6 +160,18 @@ impl Asking {
     /// Where every choice the user made stands, the Posture among them.
     pub fn settings(&self) -> Result<SettingsState, ClientError> {
         self.with(true, Client::settings)
+    }
+
+    /// Every change the user has not been told about yet (spec section
+    /// 6.7). Nothing is written, so it may be asked twice.
+    pub fn unnotified(&self) -> Result<Vec<Unnotified>, ClientError> {
+        self.with(true, Client::unnotified)
+    }
+
+    /// Confirms what the app raised, so the daemon writes `notified_at`.
+    /// Confirming twice writes the same, so it may be asked twice.
+    pub fn notified(&self, ids: &[String]) -> Result<usize, ClientError> {
+        self.with(true, |client| client.notified(ids))
     }
 
     /// Moves the choices the Settings pane asks for and answers where every

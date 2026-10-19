@@ -55,7 +55,7 @@ open ~/agentsweep-hand-check/AgentSweep.app
 launchctl print gui/$(id -u)/de.byte5.agentsweep.daemon | grep -E 'state|pid|program'
 ```
 
-The first launch opens the onboarding wizard and registers nothing yet: run `--developer-status` once before going on and it prints `not registered` or `not found` for both. Go through the wizard and click **Turn on protection** on its last screen. `--developer-status` then prints where both registrations stand: `enabled` for the daemon and the login item. SMAppService answers `not found` for a service that was never registered, which is why the wizard shows on that answer too.
+The first launch opens the onboarding wizard and registers nothing yet: run `--developer-status` once before going on and it prints `not registered` or `not found` for both. Go through the wizard and click **Turn on protection** on its fifth screen, Keep watching in the background. `--developer-status` then prints where both registrations stand: `enabled` for the daemon and the login item. SMAppService answers `not found` for a service that was never registered, which is why the wizard shows on that answer too.
 
 - [X] macOS shows a "Background Items Added" notice naming AgentSweep.
 - [X] The service is `running` with a pid, and its program is `.../AgentSweep.app/Contents/MacOS/agentsweepd`.
@@ -482,6 +482,24 @@ The plain drag to Trash, with nothing chosen (stack research, unverified item 8)
 Clean up with the section below after the last round; after Delete everything there is nothing left but the bundle in the Trash.
 
 Seams in the suite: the daemon's `uninstall` tests (two quarantined Items on a temporary home: Keep leaves the store and the quarantine records as they were and adds only `gate-removed` events, Restore all restores both and records each, its conflict rule leaves a changed place alone, Delete everything removes what AgentSweep made and nothing beside it, and the daemon takes no further work), the app's `uninstall` tests (the Settings flow with stand-in registrations and Trash: the Gate entries are gone when the daemon is unregistered, on every choice, Keep is the default, and without a daemon nothing is unregistered or trashed), and the CLI's `uninstall_without_a_flag_keeps_and_takes_the_gate_away` in its `variants` tests.
+
+## 21. Onboarding from the DMG on a clean macOS user
+
+This is item 4 of the release checklist, spec section 9.3, and needs the release draft's DMG and a macOS user that has never run AgentSweep: a fresh user account, or a virtual machine. On that user, install Claude Code or Codex and open one project of it that sits in Documents, so the protected-location line shows. Nothing of the developer's own machine is involved.
+
+Mount the DMG, drag AgentSweep to Applications and open it.
+
+- [ ] The wizard opens on Welcome and goes through six steps. Screen 2 lists the installed Agents with their project counts. Screen 3 asks how much detail.
+- [ ] Screen 4, the AI check, has Apple on-device selected when Apple Intelligence is on, with "Double-check unclear items with your Mac's built-in AI. Nothing leaves your Mac.", and Off beside it. With Apple Intelligence off, Off is selected and the Apple choice says why it cannot be chosen. With Ollama running and a model of 4B or more pulled, Ollama is selected instead and Continue asks once, naming the model. In the Developer Posture, Ollama and Claude are offered under "Or choose another engine:"; choosing Claude opens the consent screen of section 18.
+- [ ] Screen 5 says that macOS will announce a background item and ask about notifications, that protection continues after quitting, and that a check is added to Claude Code and Codex; it shows the background disclosure with the two toggles on. It shows "Some of your projects are in Documents. macOS will ask once whether AgentSweep may look there." with **Let macOS ask now**.
+- [ ] Press **Let macOS ask now**: the daemon is registered, macOS shows its "Background Items Added" notice, and once the first check has found the project, macOS asks whether AgentSweep may access the Documents folder. The button greys out with the line that AgentSweep looks there as soon as it runs.
+- [ ] Switch the rule toggle off and press **Turn on protection**: macOS asks whether AgentSweep may send notifications. Screen 6 says it is checking for the first time, then "First check finished" with the Item count, the Baseline sentence, "Nothing was stopped." (or the Items stopped) and the result. **Done** closes the wizard.
+- [ ] Settings shows the Posture, the engine and the two toggles chosen in the wizard, and `log show --predicate 'process == "agentsweepd"' --last 10m` shows no Rule Feed request at all, since the feed was switched off before the settings were handed over.
+- [ ] On macOS 26, quit AgentSweep from the popover: macOS asks whether AgentSweep may keep running in the background after quitting (research note on first-run permissions, section 9). Allow it, and `agentsweep status` still prints a Health sentence.
+
+Afterwards delete the test user or the virtual machine.
+
+Seams in the suite: `onboarding::tests` in the app (screen 4's preselection from the engine answer for each combination of Apple and Ollama, never Claude, the Developer Posture's other engines, Ollama's confirmation and the Claude key handed over once before the engine; screen 5's protected-location line only with a project in a protected class and its check-now sent once; leaving screen 5 registering the daemon and the login item once through the stand-in service layer and every answer reaching the settings and engine requests once a daemon answers; screen 6 waiting for the first Full Scan after the registration and reporting the Item count and the stopped Items, or that nothing was stopped), `inventory::tests` (the protected classes of the registered projects), `notifications::tests` (the permission asked once on screen 5), and `the_first_fetch_waits_for_the_settings_hand_over_and_none_when_it_says_off` in the daemon's Rule Feed tests (a temporary home and a local fixture feed that counts requests).
 
 ## Dogfooding: one day with the app
 

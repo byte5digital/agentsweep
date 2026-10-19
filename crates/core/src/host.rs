@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// The directories a command is never installed into by anything legitimate.
 /// A path under one of them is what `mcp.command_in_temp` reports.
@@ -30,6 +31,74 @@ const INTERPRETERS: [&str; 12] = [
     "bash", "sh", "zsh", "dash", "ksh", "node", "bun", "deno", "python", "python3", "ruby", "perl",
 ];
 
+/// Where a confined Host may reach: the entries directly in some directories,
+/// and everything below others.
+///
+/// The onboarding Inventory runs on one (spec section 6.8): it reads the
+/// registries in the home and the Agents' config directories, and a project
+/// folder, which may sit in a location macOS protects, is never reached.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Confinement {
+    files_in: Vec<PathBuf>,
+    trees: Vec<PathBuf>,
+}
+
+impl Confinement {
+    /// Also the entries directly in `directory`, and nothing below them.
+    pub fn files_in(mut self, directory: &Path) -> Confinement {
+        self.files_in.push(normalise(directory));
+        self
+    }
+
+    /// Also `directory` and everything below it.
+    pub fn tree(mut self, directory: &Path) -> Confinement {
+        self.trees.push(normalise(directory));
+        self
+    }
+
+    /// True when `path` lies inside what this confinement allows. `.` and
+    /// `..` are folded out first, so a path cannot climb out of a tree.
+    pub fn allows(&self, path: &Path) -> bool {
+        let path = normalise(path);
+        self.trees.iter().any(|tree| path.starts_with(tree))
+            || path
+                .parent()
+                .is_some_and(|parent| self.files_in.iter().any(|directory| parent == directory))
+    }
+
+    /// True when the directory at `path` may be listed, which reaches every
+    /// entry in it: only inside a tree. A directory directly in a
+    /// `files_in` directory may be looked at, never into.
+    pub fn allows_listing(&self, path: &Path) -> bool {
+        let path = normalise(path);
+        self.trees.iter().any(|tree| path.starts_with(tree))
+    }
+}
+
+/// Every path a Host reached on the file system, in the order it reached
+/// them. A test hands one to a Host to prove what a pass touched.
+#[derive(Debug, Default)]
+pub struct Touched {
+    paths: Mutex<Vec<PathBuf>>,
+}
+
+impl Touched {
+    /// The paths reached so far.
+    pub fn paths(&self) -> Vec<PathBuf> {
+        self.paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn record(&self, path: &Path) {
+        self.paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.to_path_buf());
+    }
+}
+
 /// The machine a Scan runs against, read-only.
 #[derive(Clone, Debug, Default)]
 pub struct Host {
@@ -38,6 +107,8 @@ pub struct Host {
     project_roots: Vec<PathBuf>,
     search_path: Vec<PathBuf>,
     system_root: Option<PathBuf>,
+    confinement: Option<Confinement>,
+    touched: Option<Arc<Touched>>,
 }
 
 impl Host {
@@ -90,6 +161,46 @@ impl Host {
         self
     }
 
+    /// Confines the Host: every path outside `confinement` is refused as
+    /// permission denied, without the file system being asked.
+    pub fn confined(mut self, confinement: Confinement) -> Host {
+        self.confinement = Some(confinement);
+        self
+    }
+
+    /// Records every path the Host reaches on the file system in `touched`.
+    pub fn recording(mut self, touched: Arc<Touched>) -> Host {
+        self.touched = Some(touched);
+        self
+    }
+
+    /// Lets the file system be asked about `path`, or refuses it when the
+    /// Host is confined elsewhere. Every file-system call of the Host goes
+    /// through here first.
+    fn reach(&self, path: &Path) -> io::Result<()> {
+        self.reach_as(path, Confinement::allows)
+    }
+
+    /// The same for listing a directory, which reaches into it.
+    fn reach_into(&self, path: &Path) -> io::Result<()> {
+        self.reach_as(path, Confinement::allows_listing)
+    }
+
+    fn reach_as(&self, path: &Path, allows: fn(&Confinement, &Path) -> bool) -> io::Result<()> {
+        if let Some(confinement) = &self.confinement
+            && !allows(confinement, path)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "outside what this pass may read",
+            ));
+        }
+        if let Some(touched) = &self.touched {
+            touched.record(path);
+        }
+        Ok(())
+    }
+
     /// The home directory, absent for a Folder Scan.
     pub fn home(&self) -> Option<&Path> {
         self.home.as_deref()
@@ -126,16 +237,19 @@ impl Host {
 
     /// Reads a file. The only way an adapter gets at content.
     pub fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.reach(path)?;
         fs::read(path)
     }
 
     /// The metadata of a path without following a symbolic link.
     pub fn symlink_metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+        self.reach(path)?;
         fs::symlink_metadata(path)
     }
 
     /// The target of a symbolic link.
     pub fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
+        self.reach(path)?;
         fs::read_link(path)
     }
 
@@ -167,6 +281,7 @@ impl Host {
         use std::fmt::Write as _;
         use std::io::Read as _;
 
+        self.reach(path)?;
         let mut file = fs::File::open(path)?;
         let mut digest = Sha256::new();
         let mut buffer = vec![0u8; 64 * 1024];
@@ -188,6 +303,7 @@ impl Host {
     /// kind of file it is.
     pub fn read_prefix(&self, path: &Path, limit: usize) -> io::Result<Vec<u8>> {
         use std::io::Read as _;
+        self.reach(path)?;
         let mut file = fs::File::open(path)?;
         let mut buffer = Vec::new();
         file.by_ref().take(limit as u64).read_to_end(&mut buffer)?;
@@ -220,7 +336,7 @@ impl Host {
         self.search_path
             .iter()
             .map(|directory| directory.join(word))
-            .find(|candidate| candidate.is_file())
+            .find(|candidate| self.reach(candidate).is_ok() && candidate.is_file())
             .map(|found| normalise(&found))
     }
 
@@ -295,6 +411,7 @@ impl Host {
     /// The entries of a directory, in a stable order so that two enumerations
     /// of the same tree yield their Items in the same order.
     pub fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        self.reach_into(path)?;
         let mut entries: Vec<PathBuf> = fs::read_dir(path)?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
@@ -454,5 +571,77 @@ mod tests {
         let host = Host::new(PathBuf::from("/home/u"), Vec::new());
         assert!(host.in_downloads(Path::new("/home/u/Downloads/server")));
         assert!(!host.in_downloads(Path::new("/home/u/Documents/server")));
+    }
+
+    /// A confined Host reaches nothing outside what it was confined to: the
+    /// entries directly in one directory, and everything below another. What
+    /// it reached is recorded, and what it was refused is not, because the
+    /// file system was never asked.
+    #[test]
+    fn a_confined_host_reaches_only_what_it_was_confined_to_and_records_it() {
+        let temporary = tempfile::TempDir::new().expect("a temporary directory");
+        let home = temporary.path().join("home");
+        fs::create_dir_all(home.join(".tool/sessions")).expect("a config directory");
+        fs::create_dir_all(home.join("projects/demo")).expect("a project folder");
+        fs::write(home.join(".registry.json"), "{}").expect("a registry");
+        fs::write(home.join(".tool/sessions/one.log"), "log").expect("a log");
+        fs::write(home.join("projects/demo/AGENTS.md"), "notes").expect("a project file");
+
+        let touched = Arc::new(Touched::default());
+        let host = Host::new(home.clone(), Vec::new())
+            .confined(
+                Confinement::default()
+                    .files_in(&home)
+                    .tree(&home.join(".tool")),
+            )
+            .recording(Arc::clone(&touched));
+
+        assert!(host.read(&home.join(".registry.json")).is_ok());
+        assert!(host.read_dir(&home.join(".tool/sessions")).is_ok());
+        assert!(
+            host.read_prefix(&home.join(".tool/sessions/one.log"), 2)
+                .is_ok()
+        );
+
+        let refused = host
+            .read(&home.join("projects/demo/AGENTS.md"))
+            .expect_err("a project file is outside");
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            host.symlink_metadata(&home.join("projects/demo/.git"))
+                .is_err()
+        );
+        assert!(host.read_dir(&home.join("projects")).is_err());
+        assert!(
+            host.sha256_of(&home.join("projects/demo/AGENTS.md"))
+                .is_err()
+        );
+        assert!(
+            host.read(&home.join(".tool/../projects/demo/AGENTS.md"))
+                .is_err()
+        );
+
+        assert_eq!(
+            touched.paths(),
+            vec![
+                home.join(".registry.json"),
+                home.join(".tool/sessions"),
+                home.join(".tool/sessions/one.log"),
+            ]
+        );
+    }
+
+    /// An unconfined Host reaches what it is asked, as every Scan's does, and
+    /// records it when asked to.
+    #[test]
+    fn an_unconfined_host_reaches_everything_and_records_when_asked() {
+        let temporary = tempfile::TempDir::new().expect("a temporary directory");
+        let file = temporary.path().join("anything");
+        fs::write(&file, "x").expect("a file");
+        let touched = Arc::new(Touched::default());
+        let host =
+            Host::new(temporary.path().to_path_buf(), Vec::new()).recording(Arc::clone(&touched));
+        assert!(host.read(&file).is_ok());
+        assert_eq!(touched.paths(), vec![file]);
     }
 }

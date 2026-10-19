@@ -439,8 +439,10 @@ impl Health {
 
     /// Every sentence of the Gate rung in a Posture, in the order of spec
     /// section 6.6: the projects that switched the check off first, then the
-    /// Gate lines of the registration check.
-    fn gate_sentences(&self, posture: Posture) -> Vec<String> {
+    /// Gate lines of the registration check. Empty when the Gate stands
+    /// everywhere. The app shows them on the Overview, where every one of
+    /// them is said and not only the headline.
+    pub fn gate_sentences(&self, posture: Posture) -> Vec<String> {
         let projects = match (self.projects_gate_off, posture) {
             (0, _) => None,
             (1, Posture::Simple) => Some("1 project switched off the check.".to_string()),

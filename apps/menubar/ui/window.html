@@ -20,17 +20,6 @@
           <p class="wait" id="actions-wait" hidden></p>
         </header>
 
-        <section class="folder" id="folder" hidden>
-          <h2>Scan a folder</h2>
-          <p class="verdict" id="folder-verdict"></p>
-          <p class="muted" id="folder-root"></p>
-          <p id="folder-summary"></p>
-          <p class="muted" id="folder-ambiguous"></p>
-          <p class="muted" id="folder-recorded"></p>
-          <p class="muted" id="folder-pack"></p>
-          <div id="folder-cards"></div>
-        </section>
-
         <!-- One pane per sidebar entry. Overview and the two Finding panes
              have content; each later screen fills its own. -->
         <main id="panes">
@@ -195,6 +184,32 @@
         </main>
       </div>
     </div>
+
+    <!-- Scan a folder (spec section 8.9), the one dialog the popover and
+         the Overview open: a folder picker, a drop zone for one folder, the
+         equivalent command line in the Developer Posture, and the one-off
+         answer of the Folder Scan with the Findings beneath. -->
+    <dialog id="folder-dialog" class="folder-dialog">
+      <h2>Scan a folder</h2>
+      <div class="drop" id="folder-drop">
+        <p>Drop one folder here to check it before you open it.</p>
+        <button type="button" id="folder-choose">Choose a folder&hellip;</button>
+      </div>
+      <p class="muted" id="folder-root"></p>
+      <p class="id" id="folder-command" hidden></p>
+      <section class="folder" id="folder" hidden>
+        <p class="verdict" id="folder-verdict"></p>
+        <p id="folder-summary"></p>
+        <p class="muted" id="folder-ambiguous"></p>
+        <div id="folder-cards"></div>
+        <p class="muted" id="folder-recorded"></p>
+        <p class="muted" id="folder-pack"></p>
+      </section>
+      <p class="muted" id="folder-line"></p>
+      <div class="actions">
+        <button type="button" id="folder-close">Close</button>
+      </div>
+    </dialog>
 
     <dialog id="confirm">
       <form method="dialog">

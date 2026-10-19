@@ -1,18 +1,17 @@
 // The Findings window. It renders the frame the app hands over (the sidebar
 // with its counts, one pane per entry, the Overview, the open Findings in the
-// two Finding panes as a list beside the selected Finding) and the Folder
-// Scan, and
-// invokes the app's commands; every decision about what is listed, counted
-// and offered was made by the daemon and the app. Which pane and which
-// Finding are selected is the window's own. Everything is written with
-// textContent, never as markup. In the Simple Posture a Finding reads as the
+// two Finding panes as a list beside the selected Finding) and the Scan a
+// folder dialog, and invokes the app's commands; every decision about what
+// is listed, counted and offered was made by the daemon and the app. Which
+// pane and which Finding are selected is the window's own. Everything is
+// written with textContent, never as markup. In the Simple Posture a Finding reads as the
 // app worded it (spec section 8.4); in the Developer Posture it reads as
 // `<Kind> · <name>` with its chips, the same body lines and the technical
 // table shown always, and the Threat Findings pane lists the Ambiguous Items
 // beneath the Findings (spec sections 4.3 and 8.2).
 
 import { renderBanner } from "./banner.js";
-import { isDeveloper, takePosture } from "./posture.js";
+import { isDeveloper, onPostureChange, takePosture } from "./posture.js";
 import { lookAtAiCheck, renderAiCheck } from "./ai_check.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -151,42 +150,35 @@ async function run(action, card) {
   }
 }
 
-// A Folder Scan's Finding: it recorded nothing, so it has no actions and no
-// technical table of its own.
-function renderPlainCard(card) {
+// A Folder Scan's Finding in the Posture's wording: the Simple verdict title
+// with its Severity word and the technical details one click away, or the
+// Developer heading with its chips and the technical table shown always. It
+// recorded nothing, so it offers no action.
+function renderFolderCard(card) {
   const node = el("article", "card");
   node.dataset.category = card.category;
-  node.append(el("p", "title", `${card.kind} · ${card.name}`));
+  if (isDeveloper()) {
+    node.append(el("p", "title", card.developer.title));
+    const chips = el("div", "chips");
+    for (const chip of card.developer.chips) {
+      const span = el("span", "chip", chip.text);
+      span.dataset.fact = chip.fact;
+      chips.append(span);
+    }
+    node.append(chips);
+    renderLines(node, card.simple.lines);
+    node.append(renderTechnical(card));
+    return node;
+  }
+  node.append(el("p", "title", card.simple.title));
   const chips = el("div", "chips");
-  for (const chip of [card.severity, card.tier, card.category, card.probation, card.source, card.state]) {
-    if (chip) {
-      chips.append(el("span", "chip", chip));
-    }
-  }
+  chips.append(el("span", `chip ${card.simple.chip}`, card.simple.severity));
   node.append(chips);
-  if (card.plain) {
-    node.append(el("p", "", card.plain));
-  }
-  if (card.heuristics && card.heuristics.length > 0) {
-    const list = el("ul", "muted");
-    for (const line of card.heuristics) {
-      list.append(el("li", "", line));
-    }
-    node.append(list);
-  }
-  if (card.drift) {
-    node.append(el("p", "muted", card.drift));
-  }
-  if (card.note) {
-    node.append(el("p", "muted", card.note));
-  }
-  node.append(el("p", "id", card.itemId));
-  node.append(el("p", "id", `id ${card.id}`));
-  if (card.receiptId) {
-    node.append(el("p", "id", `receipt ${card.receiptId}`));
-  }
-  if (card.actions.length > 0) {
-    node.append(renderActions(card, card.actions));
+  renderLines(node, card.simple.lines);
+  const key = `folder ${card.id}`;
+  node.append(renderToggle(key, () => renderFolder(folderView)));
+  if (detailsOpen.has(key)) {
+    node.append(renderTechnical(card));
   }
   return node;
 }
@@ -390,7 +382,7 @@ function addHowTo(card, node, actions) {
 }
 
 // The Show technical details toggle of one Finding or Ambiguous Item.
-function renderToggle(id) {
+function renderToggle(id, again = () => render(view)) {
   const open = detailsOpen.has(id);
   const toggle = el("button", "link", open ? "Hide technical details" : "Show technical details");
   toggle.type = "button";
@@ -401,7 +393,7 @@ function renderToggle(id) {
     } else {
       detailsOpen.add(id);
     }
-    render(view);
+    again();
   });
   return toggle;
 }
@@ -966,30 +958,102 @@ function render(list) {
   disableActions();
 }
 
-function renderFolder(view) {
-  const section = $("folder");
-  if (!view) {
-    section.hidden = true;
+// The Scan a folder dialog as the app sent it last, or null while it is
+// closed.
+let folderView = null;
+
+// The dialog: open whenever the app sends a view, closed on null. While a
+// Folder Scan runs another cannot be started from it. It never waits on the
+// "checking now" rung: a Folder Scan may run beside another Scan.
+function renderFolder(folder) {
+  folderView = folder;
+  const dialog = $("folder-dialog");
+  if (!folder) {
+    if (dialog.open) {
+      dialog.close();
+    }
     return;
   }
-  section.hidden = false;
-  section.dataset.safe = view.state === "done" ? String(view.safe) : "";
-  $("folder-root").textContent = view.root;
-  if (view.state !== "done") {
-    $("folder-verdict").textContent = view.line;
-    for (const id of ["folder-summary", "folder-ambiguous", "folder-recorded", "folder-pack"]) {
-      $(id).textContent = "";
-    }
+  if (!dialog.open) {
+    dialog.showModal();
+  }
+  $("folder-choose").disabled = folder.state === "running";
+  $("folder-root").textContent = folder.root ?? "";
+  const command = isDeveloper() ? (folder.command ?? null) : null;
+  $("folder-command").hidden = command === null;
+  $("folder-command").textContent = command ?? "";
+  const done = folder.state === "done";
+  const section = $("folder");
+  section.hidden = !done;
+  section.dataset.safe = done ? String(folder.safe) : "";
+  $("folder-line").textContent = done ? "" : (folder.line ?? "");
+  if (!done) {
     $("folder-cards").replaceChildren();
     return;
   }
-  $("folder-verdict").textContent = view.verdict;
-  $("folder-summary").textContent = view.summary;
-  $("folder-ambiguous").textContent = view.ambiguous;
-  $("folder-recorded").textContent = view.recorded;
-  $("folder-pack").textContent = view.rulePack;
+  $("folder-verdict").textContent = folder.verdict;
+  $("folder-summary").textContent = folder.summary;
+  $("folder-ambiguous").textContent = folder.ambiguous;
   $("folder-ambiguous").hidden = !isDeveloper();
-  $("folder-cards").replaceChildren(...view.findings.map(renderPlainCard));
+  $("folder-recorded").textContent = folder.recorded;
+  $("folder-pack").textContent = folder.rulePack;
+  $("folder-cards").replaceChildren(...folder.findings.map(renderFolderCard));
+}
+
+onPostureChange(() => {
+  if (folderView) {
+    renderFolder(folderView);
+  }
+});
+
+$("folder-choose").addEventListener("click", () =>
+  invoke("choose_folder").catch((why) => {
+    $("folder-line").textContent = String(why);
+  }),
+);
+$("folder-close").addEventListener("click", () => $("folder-dialog").close());
+// Closed by its button or by Escape: the app forgets it, so a window that
+// loads later opens without it.
+$("folder-dialog").addEventListener("close", () => {
+  folderView = null;
+  $("folder-drop").dataset.over = "false";
+  invoke("close_folder").catch(() => {});
+});
+
+// True when a drag's position, in physical pixels of this webview, lies on
+// the open dialog. A drop anywhere else is not a request.
+function onFolderDialog(position) {
+  const dialog = $("folder-dialog");
+  if (!dialog.open || !position) {
+    return false;
+  }
+  const scale = window.devicePixelRatio || 1;
+  const x = position.x / scale;
+  const y = position.y / scale;
+  const box = dialog.getBoundingClientRect();
+  return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+}
+
+// The drop zone: what the webview reports of a drag from Finder. The paths go
+// to the app, which resolves them to one folder or refuses them; the page
+// never decides what a path is.
+const webview = window.__TAURI__.webview?.getCurrentWebview?.();
+if (webview) {
+  await webview.onDragDropEvent((event) => {
+    const { type, position, paths } = event.payload;
+    const zone = $("folder-drop");
+    if (type === "enter" || type === "over") {
+      zone.dataset.over = String(onFolderDialog(position));
+      return;
+    }
+    zone.dataset.over = "false";
+    if (type !== "drop" || !onFolderDialog(position) || folderView?.state === "running") {
+      return;
+    }
+    invoke("scan_dropped", { paths: paths ?? [] }).catch((why) => {
+      $("folder-line").textContent = String(why);
+    });
+  });
 }
 
 // The same request the popover's Scan now sends; the progress and the last

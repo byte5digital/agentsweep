@@ -23,7 +23,8 @@
 //! - `findings`: the Findings window's view as it stands: the list, the
 //!   sidebar with its counts, the Overview, the two Finding panes and the
 //!   Posture.
-//! - `folder`: the last Folder Scan's view, for a window that just loaded.
+//! - `folder`: the Scan a folder dialog's view, for a window that just
+//!   loaded.
 //! - `quarantine`, `restore`, `trust`, `acknowledge`, `fix`, `re_enable`,
 //!   `purge`, `untrust`: the action requests, each answered with the daemon's sentence, the lines
 //!   under it (after a Quarantine, its confirmation) and, for a Restore that
@@ -56,8 +57,12 @@
 //!   answer names (spec sections 5.1 and 8.5).
 //! - `scan_now`: asks the daemon for a Full Scan; the progress arrives on the
 //!   stream.
-//! - `scan_folder`: the native folder picker, then a Folder Scan by the
-//!   daemon, whose answer arrives on `agentsweep://folder`.
+//! - `scan_folder`: **Scan a folder** from the popover or the Overview, which
+//!   opens the one Scan a folder dialog on the Findings window
+//!   ([`crate::folder`]).
+//! - `choose_folder`, `scan_dropped`: the dialog's folder picker and its drop
+//!   zone, each a Folder Scan by the daemon whose answer arrives on
+//!   `agentsweep://folder`; `close_folder`: the dialog was closed.
 //! - `onboarding`, `onboarding_back`, `onboarding_choose`, `onboarding_next`,
 //!   `onboarding_engine`, `onboarding_claude`, `onboarding_toggle`,
 //!   `onboarding_look_there`: the onboarding wizard's view and its moves
@@ -70,7 +75,9 @@
 //!   stream, as the wire carries it.
 //! - `agentsweep://findings`: the Findings window's view, whenever the list,
 //!   a count, the Overview or the Posture changes.
-//! - `agentsweep://folder`: the Folder Scan in hand: running, done or failed.
+//! - `agentsweep://folder`: the Scan a folder dialog: open with no folder
+//!   chosen, a drop refused, or the Folder Scan running, done or failed; null
+//!   when it is closed.
 //! - `agentsweep://pane`: the pane the Findings window turns to, by its id,
 //!   when a click on a notification brought the app to the front.
 //! - `agentsweep://activity-at`: the Event Log sequence the Activity pane
@@ -1068,36 +1075,75 @@ async fn scan_now(app: AppHandle) -> Result<String, String> {
         .map(|started| scan_now_line(started).to_string())
 }
 
-/// The folder picker, then a Folder Scan by the daemon. The window opens
-/// first, so the picker and the answer have somewhere to be.
+/// **Scan a folder**, from the popover and from the Overview alike: shows
+/// the Findings window with the Scan a folder dialog open on it. A Folder
+/// Scan already running stays in sight.
 #[tauri::command]
-async fn scan_folder(app: AppHandle) -> Result<Value, String> {
+fn scan_folder(app: AppHandle) {
     show_window(&app);
-    let Some(picked) = pick_folder(&app).await? else {
-        return Ok(Value::Null);
-    };
-    let root = picked.display().to_string();
-    tell_folder(&app, folder::running_view(&root));
+    let current = app
+        .state::<Shell>()
+        .folder
+        .lock()
+        .expect("the folder view")
+        .clone();
+    if current["state"] == "running" {
+        tell_folder(&app, current);
+    } else {
+        tell_folder(&app, folder::choosing_view());
+    }
+}
 
+/// The dialog's **Choose a folder** button: the native folder picker, then a
+/// Folder Scan by the daemon, whose answer arrives on `agentsweep://folder`.
+#[tauri::command]
+async fn choose_folder(app: AppHandle) -> Result<(), String> {
+    let Some(picked) = pick_folder(&app).await? else {
+        return Ok(());
+    };
+    run_folder_scan(&app, picked.display().to_string()).await;
+    Ok(())
+}
+
+/// One drop onto the dialog: the paths it carried, resolved by the app to one
+/// absolute folder path before the Folder Scan request is sent (ADR 0008),
+/// or refused without asking the daemon.
+#[tauri::command]
+async fn scan_dropped(app: AppHandle, paths: Vec<String>) {
+    match folder::resolve_drop(&paths) {
+        Ok(root) => run_folder_scan(&app, root).await,
+        Err(refused) => tell_folder(&app, folder::refused_view(&refused)),
+    }
+}
+
+/// The dialog was closed: a window that loads later opens without it.
+#[tauri::command]
+fn close_folder(app: AppHandle) {
+    *app.state::<Shell>().folder.lock().expect("the folder view") = Value::Null;
+}
+
+/// A Folder Scan of one absolute folder path by the daemon, on a connection
+/// of its own, its progress and its answer sent to the dialog.
+async fn run_folder_scan(app: &AppHandle, root: String) {
+    let posture = app
+        .state::<Shell>()
+        .frame
+        .lock()
+        .expect("the frame is not poisoned")
+        .posture();
+    tell_folder(app, folder::running_view(&root, posture));
     let asking = Arc::clone(&app.state::<Shell>().asking);
     let path = root.clone();
-    let view = match blocking(move || asking.folder_scan(&path)).await {
-        Ok(result) => {
-            let posture = app
-                .state::<Shell>()
-                .frame
-                .lock()
-                .expect("the frame is not poisoned")
-                .posture();
-            folder::result_view(&result, posture)
-        }
-        Err(why) => folder::failed_view(
-            &root,
-            &why.replace("Nothing was done", "Nothing was checked"),
-        ),
-    };
-    tell_folder(&app, view.clone());
-    Ok(view)
+    let view = tauri::async_runtime::spawn_blocking(move || folder::scan(&asking, &path, posture))
+        .await
+        .unwrap_or_else(|error| {
+            folder::failed_view(
+                &root,
+                &format!("AgentSweep could not be asked: {error}"),
+                posture,
+            )
+        });
+    tell_folder(app, view);
 }
 
 /// The native folder picker, answering with the folder or nothing when the
@@ -1405,6 +1451,9 @@ pub fn run(start: Start) {
             reveal_in_finder,
             scan_now,
             scan_folder,
+            choose_folder,
+            scan_dropped,
+            close_folder,
             onboarding,
             onboarding_back,
             onboarding_choose,

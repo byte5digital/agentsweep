@@ -102,10 +102,6 @@ header {
   border-bottom: 1px solid var(--rule);
 }
 
-.content > .folder {
-  margin: 12px 20px 0;
-}
-
 main {
   display: flex;
   flex: 1 1 auto;
@@ -362,6 +358,34 @@ dialog {
   border-radius: 10px;
   background: var(--surface);
   color: var(--text);
+}
+
+/* Scan a folder: wider than a confirmation, the Findings scroll inside. */
+.folder-dialog {
+  width: min(620px, 90vw);
+  max-width: 620px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.folder-dialog h2 {
+  margin: 0 0 10px;
+}
+
+.drop {
+  padding: 18px 12px;
+  border: 2px dashed var(--rule);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.drop[data-over="true"] {
+  border-color: var(--clear);
+  background: var(--card);
+}
+
+.drop p {
+  margin: 0 0 8px;
 }
 
 /* The Overview pane: the status sentence, the Agents, the last check, the

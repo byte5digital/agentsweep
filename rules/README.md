@@ -57,6 +57,7 @@ Every rule's `meta:` block carries all of these; the corpus lint rejects a rule 
 | `status` | `"probation"`, `"stable"` or `"retired"` (see below) |
 | `plain` | one sentence for the Simple posture, no jargon |
 | `phrase` | a short verdict phrase the Simple posture builds a Finding's title from, together with the Item's kind and name: "contains hidden instructions" reads as "The project file 'CLAUDE.md' contains hidden instructions". Plain, short and factual, no full stop. Where the kind and name belong inside the phrase rather than in front of it, `{item}` marks the place, once: "A password is written out in {item}". Required on every Rule and Heuristic, user rules included. |
+| `fix` | exposure rules only: the how-to the app shows behind **Show me how to fix this**, in the Simple posture's plain words: what to find in the file the Finding concerns and what to change there, a few sentences. The app shows it beside the file's name and **Open the file**, so it never quotes a value from the file. Required on every exposure Rule and Heuristic, user rules included, so a Rule Pack from the Rule Feed brings the how-to of a new exposure with it. A threat rule needs none. |
 | `description` | what fires, what deliberately does not, and why |
 | `references` | space-separated primary sources |
 | `sensitive` | `true` when matches can land on sensitive fields; the Finding then shows only a redacted form |

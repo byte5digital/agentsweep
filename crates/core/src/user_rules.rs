@@ -132,7 +132,7 @@ mod tests {
             "rule as_{id:04}_mine {{\n  meta:\n    id = {id}\n    title = \"Mine\"\n\
              \x20   tier = {tier}\n    category = \"{category}\"\n    severity = \"{severity}\"\n\
 {extra}\x20   class = 1\n    kinds = \"InstructionFile\"\n    status = \"stable\"\n\
-             \x20   plain = \"Mine.\"\n    phrase = \"is mine\"\n    description = \"Mine.\"\n    references = \"none\"\n\
+             \x20   plain = \"Mine.\"\n    phrase = \"is mine\"\n    fix = \"Mine.\"\n    description = \"Mine.\"\n    references = \"none\"\n\
              \x20   sensitive = false\n  strings:\n    $m = \"MINE-{id}\"\n  condition:\n    $m\n}}\n"
         )
     }

@@ -10,6 +10,7 @@ rule as_0010_secret_in_mcp_config {
     status      = "probation"
     plain       = "An MCP server entry contains a real password, token or key written out in full."
     phrase      = "A password is written out in {item}"
+    fix         = "Open the file and find this MCP server. Replace the written-out password, token or key with a reference to an environment variable, such as ${API_TOKEN}, and set that variable in your shell instead. Treat the value as seen by others: change it at the service that issued it."
     description = "A well-formed credential in an MCP server entry: AWS access key id, GitHub token, Anthropic or OpenAI project key, Slack token, Google API key, PEM private key block, or a connection URL with an embedded password; a literal Authorization header; a token in the URL query; or an Anthropic environment variable forwarded into a remote server's headers or URL. Matches land on sensitive fields, so Findings show only a redacted form. Environment variable references such as ${GITHUB_TOKEN} are not matched. Exposure: never quarantined, offered a fix action instead."
     references  = "https://blog.gitguardian.com/the-state-of-secrets-sprawl-2026/ https://www.trendaisecurity.com/en-us/resources-insights/deep-research/update-on-exposed-mcp-servers-the-threat-widens-to-the-cloud"
     sensitive   = true

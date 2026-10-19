@@ -363,7 +363,7 @@ mod tests {
                      title = \"Heuristic {id}\"\n    tier = {tier}\n\
                      category = \"{category}\"\n    severity = \"{severity}\"\n\
 {weight}    class = 1\n    kinds = \"InstructionFile\"\n    status = \"{status}\"\n\
-                 plain = \"Plain {id}.\"\n    phrase = \"is under test\"\n    description = \"Under test.\"\n\
+                 plain = \"Plain {id}.\"\n    phrase = \"is under test\"\n    fix = \"Under test.\"\n    description = \"Under test.\"\n\
                  references = \"none\"\n    sensitive = false\n\
                strings:\n    $m = \"{marker}\"\n  condition:\n    $m\n}}\n"
             )

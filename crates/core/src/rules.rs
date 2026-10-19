@@ -132,6 +132,12 @@ pub struct RuleMeta {
     /// instructions"). Where it holds `{item}`, the kind and name stand there
     /// instead of in front of it.
     pub phrase: String,
+    /// The how-to behind **Show me how to fix this** on an Exposure (spec
+    /// section 8.5): what to change in the file the Finding concerns, in the
+    /// Simple Posture's plain words. Required on every Exposure, so a Rule
+    /// Pack from the Rule Feed brings its own; absent on a Threat that
+    /// declares none.
+    pub fix: Option<String>,
     /// What fires, what deliberately does not, and why.
     pub description: String,
     /// The primary sources behind the rule.
@@ -313,6 +319,10 @@ fn read_index(
             status,
             plain: text(&name, &meta, "plain")?.to_string(),
             phrase: text(&name, &meta, "phrase")?.to_string(),
+            fix: match meta.get("fix") {
+                Some(_) => Some(text(&name, &meta, "fix")?.to_string()),
+                None => None,
+            },
             description: text(&name, &meta, "description")?.to_string(),
             references: text(&name, &meta, "references")?.to_string(),
             sensitive: boolean(&name, &meta, "sensitive")?,
@@ -407,6 +417,16 @@ fn lint(
         return reject(format!(
             "`phrase` is a short verdict phrase with no full stop and at most one `{PHRASE_ITEM}`"
         ));
+    }
+
+    // An Exposure is the user's own setup and is never moved, so what it
+    // offers is the how-to; a pack that cannot show one does not load.
+    if rule.category == Category::Exposure
+        && rule.fix.as_deref().is_none_or(|fix| fix.trim().is_empty())
+    {
+        return reject(
+            "an exposure rule carries its how-to in `fix`, and it is not empty".to_string(),
+        );
     }
 
     if !(1..=6).contains(&rule.class) {
@@ -799,6 +819,55 @@ mod tests {
         .expect("one placeholder is allowed");
     }
 
+    #[test]
+    fn an_exposure_rule_without_a_how_to_is_rejected() {
+        let exposure = [
+            ("category", Some(r#""exposure""#)),
+            ("severity", Some(r#""medium""#)),
+        ];
+        for fix in [None, Some(r#""""#), Some(r#""   ""#)] {
+            let mut lines = exposure.to_vec();
+            lines.push(("fix", fix));
+            let problem =
+                lint_of(meta_variant(&lines)).expect_err("an Exposure carries its how-to");
+            assert!(problem.contains("fix"), "{problem}");
+        }
+        let mut lines = exposure.to_vec();
+        lines.push(("fix", Some(r#""Open the file and take the line out.""#)));
+        lint_of(meta_variant(&lines)).expect("an Exposure with its how-to loads");
+        lint_of(meta_variant(&[])).expect("a Threat needs no how-to");
+    }
+
+    #[test]
+    fn a_fix_that_is_not_text_is_rejected() {
+        let problem = lint_of(meta_variant(&[
+            ("category", Some(r#""exposure""#)),
+            ("severity", Some(r#""medium""#)),
+            ("fix", Some("true")),
+        ]))
+        .expect_err("the how-to is text");
+        assert!(problem.contains("fix"), "{problem}");
+    }
+
+    /// Every Exposure Rule and Heuristic of the bundled pack carries the
+    /// how-to behind **Show me how to fix this** (spec section 8.5), so a
+    /// pack from the Rule Feed brings its own for a new one.
+    #[test]
+    fn every_exposure_of_the_bundled_pack_carries_a_how_to() {
+        let pack = RulePack::bundled().expect("the bundled pack compiles");
+        let mut exposures = 0;
+        for meta in pack
+            .metas()
+            .filter(|meta| meta.category == Category::Exposure)
+        {
+            exposures += 1;
+            let fix = meta.fix.as_deref().unwrap_or_default();
+            assert!(!fix.trim().is_empty(), "{} has no how-to", meta.name);
+            assert!(!fix.contains('\u{2014}'), "{}", meta.name);
+        }
+        assert!(exposures >= 6, "the v1 pack has six Exposures");
+    }
+
     /// Every Rule and Heuristic of the bundled pack carries its phrase: the
     /// Simple Posture's titles are built from it.
     #[test]
@@ -884,6 +953,7 @@ mod tests {
             ("tier", Some("2")),
             ("category", Some("\"exposure\"")),
             ("severity", Some("\"medium\"")),
+            ("fix", Some("\"Open the file.\"")),
             ("weight", Some("2")),
         ]))
         .expect_err("an exposure heuristic carries no weight");

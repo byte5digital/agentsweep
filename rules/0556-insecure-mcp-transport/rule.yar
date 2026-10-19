@@ -10,6 +10,7 @@ rule as_0556_insecure_mcp_transport {
     status      = "stable"
     plain       = "Everything this server sends and receives travels in the clear, where anyone on the network can read it."
     phrase      = "sends everything in the clear"
+    fix         = "Open the file and find this MCP server. Change its address to one that starts with https, or ask whoever runs the server for its secure address. If it still uses the old sse transport, switch it to http with that https address."
     description = "An MCP server on the deprecated server-sent-events transport, or on plain http to a host that is not this machine. Tool arguments carry file contents and tokens, so the whole conversation with the server is readable and changeable in transit. Streamable http over TLS replaces both. A server on loopback is not matched, because nothing leaves the machine. Hygiene rather than a finding about the file, so it is an Exposure and never quarantined."
     references  = "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports docs/research/attack-catalogue.md#3"
     sensitive   = false

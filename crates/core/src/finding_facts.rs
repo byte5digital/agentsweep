@@ -199,6 +199,12 @@ pub struct FindingFacts {
     /// Finding, which the Simple Posture builds its title from. Empty for any
     /// other source and for a Rule the pack in force no longer holds.
     pub phrase: String,
+    /// The how-to of the Exposure Rule or Heuristic behind the Finding, which
+    /// the app shows behind **Show me how to fix this** (spec section 8.5).
+    /// Empty for a Threat, for any source other than a Rule and for a Rule
+    /// the pack in force no longer holds. The Rule Pack's to give, like the
+    /// phrase.
+    pub fix: String,
     /// The name of the plugin the Item came with, empty unless its Provenance
     /// is a plugin. The Simple Posture names a plugin's part by its plugin.
     pub plugin: String,
@@ -272,6 +278,7 @@ impl FindingFacts {
             band,
             rule_withdrawn: false,
             phrase: String::new(),
+            fix: String::new(),
             plugin: item
                 .and_then(|item| match &item.provenance {
                     Provenance::Plugin { id } => id.split('@').next().map(str::to_string),
@@ -324,6 +331,7 @@ impl FindingFacts {
             Value::from(self.drift_change.as_str()),
         );
         map.insert("excerpt".to_string(), Value::from(self.excerpt.as_str()));
+        map.insert("fix".to_string(), Value::from(self.fix.as_str()));
         map.insert(
             "heuristics".to_string(),
             Value::Array(
@@ -407,6 +415,7 @@ impl FindingFacts {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             phrase: text("phrase"),
+            fix: text("fix"),
             plugin: text("plugin"),
             drift_change: text("drift_change"),
             judgement_engine: text("judgement_engine"),
@@ -710,6 +719,7 @@ mod tests {
         assert_eq!(facts.plugin, "shipit");
         assert_eq!(facts.drift_change, "added");
         assert_eq!(facts.phrase, "", "the phrase is the Rule Pack's to give");
+        assert_eq!(facts.fix, "", "the how-to is the Rule Pack's to give");
 
         let still = FindingFacts::of(&finding_on(&skill(Scope::User), Source::Rule(1)), None);
         assert_eq!(still.plugin, "");
@@ -939,6 +949,7 @@ mod tests {
             band: "Suspicious".to_string(),
             rule_withdrawn: true,
             phrase: "contains hidden instructions".to_string(),
+            fix: "Open the file and take the line out.".to_string(),
             plugin: "shipit".to_string(),
             drift_change: "changed".to_string(),
             judgement_engine: "ollama".to_string(),

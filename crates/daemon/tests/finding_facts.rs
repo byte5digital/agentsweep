@@ -495,6 +495,22 @@ fn a_suspicious_finding_lists_its_heuristics_and_redacts_the_sensitive_one() {
         exposure.facts.why_nothing_happened,
         Some(WhyNothingHappened::Exposure)
     );
+
+    // The Exposure carries its Heuristic's how-to from the Rule Pack in
+    // force, and the file it concerns; a Threat carries no how-to.
+    let pack = RulePack::bundled().expect("the bundled pack compiles");
+    let how_to = pack
+        .metas()
+        .find(|meta| meta.id == exposure.rule_id)
+        .and_then(|meta| meta.fix.clone())
+        .expect("an Exposure of the bundled pack has a how-to");
+    assert_eq!(exposure.facts.fix, how_to);
+    assert!(
+        exposure.facts.path.ends_with(".claude.json"),
+        "{}",
+        exposure.facts.path
+    );
+    assert_eq!(suspicious.facts.fix, "", "a Threat offers no how-to");
 }
 
 /// User settings with one environment variable and an HTTP hook that sends a

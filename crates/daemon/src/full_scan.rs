@@ -917,12 +917,15 @@ fn facts(
             if facts.score > 0 || !facts.heuristics.is_empty() {
                 facts.bands = Some(bands);
             }
-            if let Source::Rule(id) = placed.finding.source {
-                facts.phrase = pack
-                    .metas()
-                    .find(|meta| meta.id == id)
-                    .map(|meta| meta.phrase.clone())
-                    .unwrap_or_default();
+            if let Source::Rule(id) = placed.finding.source
+                && let Some(meta) = pack.metas().find(|meta| meta.id == id)
+            {
+                facts.phrase = meta.phrase.clone();
+                // The how-to behind Show me how to fix this belongs to an
+                // Exposure, and travels with the Rule Pack in force.
+                if placed.finding.category == Category::Exposure {
+                    facts.fix = meta.fix.clone().unwrap_or_default();
+                }
             }
             // The engine, its model and its contained reason stand beside
             // the Finding a malicious Verdict opened, and beside nothing else.

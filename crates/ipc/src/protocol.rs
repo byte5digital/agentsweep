@@ -2830,6 +2830,7 @@ mod tests {
             band: "Suspicious".to_string(),
             rule_withdrawn: true,
             phrase: "downloads and runs hidden code".to_string(),
+            fix: "Open the file and take the line out.".to_string(),
             plugin: "shipit".to_string(),
             drift_change: "changed".to_string(),
             path: "/src/demo/.claude/skills/setup".to_string(),

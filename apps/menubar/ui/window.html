@@ -39,7 +39,16 @@
               <ul class="agents" id="overview-agents"></ul>
               <!-- "N projects not checked" with Check now, for projects that
                    Need Permission (spec section 8.1). -->
-              <div id="overview-permission" hidden></div>
+              <div id="overview-permission" hidden>
+                <p id="permission-line"></p>
+                <ul class="projects" id="permission-projects"></ul>
+                <button type="button" id="check-now">Check now</button>
+                <div id="permission-privacy" hidden>
+                  <p class="muted" id="privacy-sentence"></p>
+                  <button type="button" id="open-privacy"></button>
+                </div>
+                <p class="muted" id="permission-answer" hidden></p>
+              </div>
               <!-- The Gate's Health lines and "Gate off in this project",
                    one line per affected project (spec section 8.1). -->
               <div id="overview-gate" hidden></div>

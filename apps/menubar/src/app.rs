@@ -130,6 +130,7 @@ use crate::inventory::Inventory;
 use crate::link::{Link, Socket, Update};
 use crate::notifications::{Activation, Notice, Notifications, Notifier};
 use crate::onboarding::{self, Handover, Step, Wizard};
+use crate::permission;
 use crate::placement;
 use crate::popover::View;
 use crate::reveal::{self, SystemFinder};
@@ -1079,6 +1080,32 @@ fn open_full_disk_access() -> Result<(), String> {
     }
 }
 
+/// **Check now** on the Overview: sends check-now once, so the operating
+/// system's prompt appears right after the click, with the button disabled
+/// until the daemon answers ([`permission::check_now`]).
+#[tauri::command]
+async fn check_now(app: AppHandle) -> Result<bool, String> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let shell = handle.state::<Shell>();
+        permission::check_now(&shell.frame, &shell.asking, || render(&handle))
+    })
+    .await
+    .map_err(|error| format!("AgentSweep could not be asked: {error}"))?
+    .map_err(|error| refusal(&error))
+}
+
+/// System Settings at Files and Folders: each address of
+/// [`permission::privacy_panes`] in turn until one opens, the last one
+/// without an anchor.
+#[tauri::command]
+fn open_privacy() -> Result<(), String> {
+    match permission::privacy_panes().iter().any(|pane| open(&[pane])) {
+        true => Ok(()),
+        false => Err(permission::PRIVACY_UNOPENED.to_string()),
+    }
+}
+
 /// The user's own rules folder in Finder, or the data directory it belongs
 /// in while it does not exist yet. The app creates nothing there.
 #[tauri::command]
@@ -1504,6 +1531,8 @@ pub fn run(start: Start) {
             preview_request,
             install_cli,
             open_full_disk_access,
+            check_now,
+            open_privacy,
             show_rules_folder,
             open_not_protected,
             reveal_in_finder,

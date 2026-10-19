@@ -730,6 +730,7 @@ function renderOverview(overview) {
   $("overview-cap").textContent = overview.cap ?? "";
   $("overview-cap").hidden = (overview.cap ?? null) === null;
   renderGateLines(overview.gate);
+  renderPermission(overview.permission);
 }
 
 // The Gate on the Overview (spec sections 7.6, 8.1 and 8.6): the Health
@@ -744,6 +745,28 @@ function renderGateLines(gate) {
   });
   $("overview-gate").replaceChildren(...lines, ...projects);
   $("overview-gate").hidden = lines.length + projects.length === 0;
+}
+
+// "N projects not checked" with Check now, for projects that Need
+// Permission (spec section 8.6). The button stays disabled until the daemon
+// answers; after an answer the link to System Settings shows while projects
+// still Need Permission.
+function renderPermission(permission) {
+  $("overview-permission").hidden = permission === null;
+  if (permission === null) {
+    return;
+  }
+  $("permission-line").textContent = permission.line;
+  $("permission-projects").replaceChildren(
+    ...permission.projects.map((project) => el("li", "", project)),
+  );
+  $("check-now").textContent = permission.button;
+  $("check-now").disabled = !permission.enabled;
+  $("permission-privacy").hidden = permission.privacy === null;
+  if (permission.privacy !== null) {
+    $("privacy-sentence").textContent = permission.privacy.sentence;
+    $("open-privacy").textContent = permission.privacy.button;
+  }
 }
 
 // The record the Activity pane was asked to show, or null: the integrity
@@ -1176,6 +1199,24 @@ $("scan-now").addEventListener("click", async () => {
     $("scan-line").textContent = String(why);
   }
 });
+// Check now sends check-now once; the app disables the button until the
+// daemon answers and the stream shows the projects once they are checked.
+$("check-now").addEventListener("click", async () => {
+  $("check-now").disabled = true;
+  $("permission-answer").hidden = true;
+  try {
+    await invoke("check_now");
+  } catch (why) {
+    $("permission-answer").textContent = String(why);
+    $("permission-answer").hidden = false;
+  }
+});
+$("open-privacy").addEventListener("click", () =>
+  invoke("open_privacy").catch((why) => {
+    $("permission-answer").textContent = String(why);
+    $("permission-answer").hidden = false;
+  }),
+);
 $("scan-folder").addEventListener("click", () =>
   invoke("scan_folder").catch((why) => {
     $("scan-line").textContent = String(why);

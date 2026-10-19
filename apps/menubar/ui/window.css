@@ -429,6 +429,18 @@ dialog {
   margin-top: 12px;
 }
 
+#overview-permission {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--card);
+}
+
+#overview-permission .projects {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+}
+
 .summary {
   margin-top: 8px;
 }

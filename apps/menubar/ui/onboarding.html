@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Welcome to AgentSweep</title>
+    <link rel="stylesheet" href="onboarding.css" />
+    <script type="module" src="onboarding.js"></script>
+  </head>
+  <body>
+    <main class="wizard">
+      <p class="steps" id="steps"></p>
+
+      <section data-screen="welcome" hidden>
+        <h1>Welcome to AgentSweep</h1>
+        <p id="welcome-what"></p>
+        <p class="promise" id="welcome-promise"></p>
+      </section>
+
+      <section data-screen="found" hidden>
+        <h1>What was found</h1>
+        <ul class="agents" id="agents"></ul>
+        <p class="muted" id="none" hidden></p>
+        <p class="muted" id="own-lists"></p>
+      </section>
+
+      <section data-screen="detail" hidden>
+        <h1 id="detail-question"></h1>
+        <div class="choices" role="radiogroup">
+          <label><input type="radio" name="posture" value="simple" /> <span id="simple"></span></label>
+          <label><input type="radio" name="posture" value="developer" /> <span id="developer"></span></label>
+        </div>
+        <p class="muted" id="detail-later"></p>
+      </section>
+
+      <section data-screen="background" hidden>
+        <h1>Keep watching in the background</h1>
+        <p id="background-line"></p>
+      </section>
+
+      <footer>
+        <button type="button" id="back">Back</button>
+        <button type="button" id="next" class="primary">Continue</button>
+      </footer>
+      <p class="error" id="error" hidden></p>
+    </main>
+  </body>
+</html>

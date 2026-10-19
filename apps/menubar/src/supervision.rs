@@ -80,18 +80,41 @@ pub struct Launched {
     pub failures: Vec<String>,
 }
 
-/// What every launch of the app does: register the daemon and the login item
-/// when either is not registered, and leave alone what is. There is no
-/// onboarding yet to ask first; registering is what onboarding screen 5 will
-/// do (spec section 6.8). A registration that needs approval stays as it is:
-/// only the user can give it, in Login Items.
+/// True for a registration there is none of yet. SMAppService answers "not
+/// found" for a service that was never registered too.
+fn unregistered(state: ServiceState) -> bool {
+    matches!(state, ServiceState::NotRegistered | ServiceState::NotFound)
+}
+
+/// Whether this launch shows the onboarding wizard: whenever the daemon is
+/// not registered (the owner's decision of 2026-10-14). Onboarding is done
+/// when the daemon is registered, so no flag is kept, and a reinstall after
+/// Uninstall shows it again. A developer run supervises nothing and never
+/// shows it.
+pub fn shows_onboarding(services: &dyn Services) -> bool {
+    services.supervises() && unregistered(services.agent())
+}
+
+/// What every launch of the app does. A launch that shows the onboarding
+/// wizard registers nothing: onboarding screen 5 does (spec section 6.8).
+/// Any other launch registers the login item when it is not registered and
+/// leaves alone what is.
 pub fn on_launch(services: &dyn Services) -> Launched {
+    if shows_onboarding(services) {
+        return Launched::default();
+    }
+    register(services)
+}
+
+/// Registers the daemon and the login item, whichever is not registered,
+/// and leaves alone what is: what onboarding screen 5 does. A registration
+/// that needs approval stays as it is: only the user can give it, in Login
+/// Items.
+pub fn register(services: &dyn Services) -> Launched {
     let mut launched = Launched::default();
     if !services.supervises() {
         return launched;
     }
-    let unregistered =
-        |state| matches!(state, ServiceState::NotRegistered | ServiceState::NotFound);
     if unregistered(services.agent()) {
         match services.register_agent() {
             Ok(()) => launched.registered_agent = true,
@@ -491,10 +514,23 @@ pub(crate) mod tests {
         }
     }
 
+    /// A launch with the daemon not registered shows the onboarding wizard
+    /// and registers nothing: screen 5 does.
     #[test]
-    fn a_first_launch_registers_the_daemon_and_the_login_item() {
+    fn a_launch_that_shows_the_wizard_registers_nothing() {
+        for state in [ServiceState::NotRegistered, ServiceState::NotFound] {
+            let services = Recorded::with(state, state);
+            assert!(shows_onboarding(&services), "{state}");
+            assert_eq!(on_launch(&services), Launched::default());
+            assert!(services.calls().is_empty(), "{state}");
+        }
+    }
+
+    /// Screen 5 registers the daemon and the login item.
+    #[test]
+    fn registering_registers_the_daemon_and_the_login_item() {
         let services = Recorded::with(ServiceState::NotRegistered, ServiceState::NotRegistered);
-        let launched = on_launch(&services);
+        let launched = register(&services);
         assert!(launched.registered_agent);
         assert!(launched.registered_login_item);
         assert!(launched.failures.is_empty());
@@ -502,14 +538,15 @@ pub(crate) mod tests {
             services.calls(),
             vec!["register agent", "register login item"]
         );
+        assert!(!shows_onboarding(&services));
     }
 
     /// SMAppService says "not found" for an agent that was never registered,
-    /// and that is a first launch like any other.
+    /// and that is registered like any other.
     #[test]
     fn a_service_the_system_cannot_find_yet_is_registered() {
         let services = Recorded::with(ServiceState::NotFound, ServiceState::NotFound);
-        let launched = on_launch(&services);
+        let launched = register(&services);
         assert!(launched.registered_agent && launched.registered_login_item);
         assert_eq!(
             services.calls(),
@@ -517,9 +554,21 @@ pub(crate) mod tests {
         );
     }
 
+    /// A launch that does not show the wizard registers as before: the login
+    /// item when it is missing, and nothing that is registered.
+    #[test]
+    fn a_launch_that_does_not_show_the_wizard_registers_as_before() {
+        let services = Recorded::with(ServiceState::Enabled, ServiceState::NotRegistered);
+        assert!(!shows_onboarding(&services));
+        let launched = on_launch(&services);
+        assert!(!launched.registered_agent && launched.registered_login_item);
+        assert_eq!(services.calls(), vec!["register login item"]);
+    }
+
     #[test]
     fn a_later_launch_leaves_what_is_registered_alone() {
         let services = Recorded::with(ServiceState::Enabled, ServiceState::Enabled);
+        assert!(!shows_onboarding(&services));
         assert_eq!(on_launch(&services), Launched::default());
         assert!(services.calls().is_empty());
     }
@@ -542,7 +591,7 @@ pub(crate) mod tests {
     fn a_registration_that_fails_is_reported_not_hidden() {
         let mut services = Recorded::with(ServiceState::NotRegistered, ServiceState::NotRegistered);
         services.refuse = true;
-        let launched = on_launch(&services);
+        let launched = register(&services);
         assert!(!launched.registered_agent);
         assert_eq!(launched.failures.len(), 2);
         assert_eq!(
@@ -659,7 +708,9 @@ pub(crate) mod tests {
     /// Protection to what the socket says.
     #[test]
     fn a_developer_run_supervises_nothing() {
+        assert!(!shows_onboarding(&Unsupervised));
         assert_eq!(on_launch(&Unsupervised), Launched::default());
+        assert_eq!(register(&Unsupervised), Launched::default());
         assert_eq!(off_by_registration(Unsupervised.agent()), None);
         assert!(unregister_everything(&Unsupervised).is_empty());
     }

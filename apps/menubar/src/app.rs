@@ -45,6 +45,9 @@
 //!   stream.
 //! - `scan_folder`: the native folder picker, then a Folder Scan by the
 //!   daemon, whose answer arrives on `agentsweep://folder`.
+//! - `onboarding`, `onboarding_back`, `onboarding_choose`, `onboarding_next`:
+//!   the onboarding wizard's view and its moves ([`crate::onboarding`]); Next
+//!   on its last screen registers the daemon and the login item.
 //!
 //! Events the frontend may listen to:
 //! - `agentsweep://view`: the popover's view, whenever it changes.
@@ -65,7 +68,8 @@ use tauri::{
 };
 
 use agentsweep_core::paths::DataDirectory;
-use agentsweep_ipc::protocol::Message;
+use agentsweep_core::settings::Posture;
+use agentsweep_ipc::protocol::{Message, StateEvent};
 
 use crate::asking::{ActionRequest, Asking, refusal, scan_now_line};
 use crate::cli_link;
@@ -75,7 +79,9 @@ use crate::folder;
 use crate::frame::Frame;
 use crate::glyph::{self, Mark};
 use crate::how_to::{self, SystemOpener};
+use crate::inventory::Inventory;
 use crate::link::{Link, Socket, Update};
+use crate::onboarding::{Handover, Step, Wizard};
 use crate::placement;
 use crate::popover::View;
 use crate::reveal::{self, SystemFinder};
@@ -94,6 +100,9 @@ const POPOVER: &str = "popover";
 
 /// The Findings window's label, as `tauri.conf.json` declares it.
 const WINDOW: &str = "findings";
+
+/// The onboarding wizard's label, as `tauri.conf.json` declares it.
+const ONBOARDING: &str = "onboarding";
 
 /// The event the popover's view arrives on.
 pub const VIEW_EVENT: &str = "agentsweep://view";
@@ -114,6 +123,10 @@ struct Shell {
     frame: Mutex<Frame>,
     folder: Mutex<Value>,
     asking: Arc<Asking>,
+    /// The wizard while onboarding shows, nothing once it is done.
+    onboarding: Mutex<Option<Wizard>>,
+    /// The answers held for the daemon since onboarding.
+    handover: Mutex<Handover>,
 }
 
 /// The popover's view as it stands.
@@ -373,6 +386,108 @@ async fn change_settings(app: AppHandle, change: Value) -> Result<String, String
     Ok(settings_pane::RECORDED.to_string())
 }
 
+/// The onboarding wizard's view, or nothing once it is done.
+#[tauri::command]
+fn onboarding(shell: tauri::State<'_, Shell>) -> Value {
+    shell
+        .onboarding
+        .lock()
+        .expect("the wizard is not poisoned")
+        .as_ref()
+        .map_or(Value::Null, Wizard::to_value)
+}
+
+/// Back in the wizard.
+#[tauri::command]
+fn onboarding_back(shell: tauri::State<'_, Shell>) -> Value {
+    let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
+    held.as_mut().map_or(Value::Null, |wizard| {
+        wizard.back();
+        wizard.to_value()
+    })
+}
+
+/// An answer on screen 3: `simple` or `developer`.
+#[tauri::command]
+fn onboarding_choose(shell: tauri::State<'_, Shell>, posture: String) -> Result<Value, String> {
+    let posture = Posture::parse(&posture)
+        .ok_or_else(|| "That is not a choice AgentSweep knows.".to_string())?;
+    let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
+    Ok(held.as_mut().map_or(Value::Null, |wizard| {
+        wizard.choose(posture);
+        wizard.to_value()
+    }))
+}
+
+/// Next in the wizard. On screen 5 it registers the daemon and the login
+/// item, holds the answers until the daemon answers, and closes the wizard;
+/// the view is then nothing.
+#[tauri::command]
+async fn onboarding_next(app: AppHandle) -> Result<Value, String> {
+    let (step, answers) = {
+        let shell = app.state::<Shell>();
+        let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
+        let Some(wizard) = held.as_mut() else {
+            return Ok(Value::Null);
+        };
+        match wizard.forward() {
+            Step::Moved => return Ok(wizard.to_value()),
+            step => (step, wizard.answers()),
+        }
+    };
+    debug_assert_eq!(step, Step::Register);
+    let services = Arc::clone(&app.state::<Shell>().services);
+    let launched = tauri::async_runtime::spawn_blocking(move || supervision::register(&*services))
+        .await
+        .map_err(|error| format!("AgentSweep could not register its background item: {error}"))?;
+    for failure in &launched.failures {
+        eprintln!("agentsweep-menubar: {failure}");
+    }
+    let shell = app.state::<Shell>();
+    shell
+        .handover
+        .lock()
+        .expect("the hand-over is not poisoned")
+        .hold(answers);
+    *shell.onboarding.lock().expect("the wizard is not poisoned") = None;
+    if let Some(window) = app.get_webview_window(ONBOARDING) {
+        let _ = window.hide();
+    }
+    present(&app, presence(false));
+    Ok(Value::Null)
+}
+
+/// Hands the answers held since onboarding to the daemon, now that it
+/// answers, and shows the window in the Posture it took.
+fn hand_over(app: &AppHandle) {
+    let shell = app.state::<Shell>();
+    let state = shell
+        .handover
+        .lock()
+        .expect("the hand-over is not poisoned")
+        .deliver(&*shell.asking);
+    if let Some(state) = state {
+        let follow = shell
+            .frame
+            .lock()
+            .expect("the frame is not poisoned")
+            .settings(&state);
+        if follow != Follow::Nothing {
+            render(app);
+        }
+    }
+}
+
+/// Shows the onboarding wizard, which makes the app a regular app while it
+/// is open.
+fn show_onboarding(app: &AppHandle) {
+    present(app, presence(true));
+    if let Some(window) = app.get_webview_window(ONBOARDING) {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 /// **Install command line tool**: the link to the bundle's `agentsweep` in
 /// `~/.local/bin`, answered with the lines the pane shows.
 #[tauri::command]
@@ -628,6 +743,11 @@ fn take(app: &AppHandle, update: Update) {
             let _ = app.emit(VIEW_EVENT, view.to_value());
         }
         Update::Event(event) => {
+            // Health arrives only from a daemon that answers, which is when
+            // the answers held since onboarding are handed over.
+            if matches!(event, StateEvent::HealthChanged { .. }) {
+                hand_over(app);
+            }
             let follow = app
                 .state::<Shell>()
                 .frame
@@ -731,6 +851,8 @@ pub fn run() {
         frame: Mutex::new(rules_folder_named(Frame::new())),
         folder: Mutex::new(Value::Null),
         asking: Arc::new(Asking::new(socket.clone())),
+        onboarding: Mutex::new(None),
+        handover: Mutex::new(Handover::default()),
     };
 
     tauri::Builder::default()
@@ -759,7 +881,11 @@ pub fn run() {
             open_not_protected,
             reveal_in_finder,
             scan_now,
-            scan_folder
+            scan_folder,
+            onboarding,
+            onboarding_back,
+            onboarding_choose,
+            onboarding_next
         ])
         .setup(move |app| {
             // Menu bar only while idle: no Dock icon and no Cmd-Tab entry
@@ -826,12 +952,38 @@ pub fn run() {
                 }
             }
 
+            // Closing the wizard hides it; it shows again on the next launch,
+            // since the daemon is still not registered.
+            if let Some(window) = app.get_webview_window(ONBOARDING) {
+                let hide = window.clone();
+                let handle = app.handle().clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = hide.hide();
+                        present(&handle, presence(false));
+                    }
+                });
+            }
+
             // The registrations and the link run off the main thread: both
             // wait on the operating system, and the menu bar must not.
             let handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("agentsweep-link".to_string())
                 .spawn(move || {
+                    // A launch where the daemon is not registered shows the
+                    // onboarding wizard and registers nothing; its screen 2
+                    // is the Inventory, which the app runs itself.
+                    if supervision::shows_onboarding(&*services) {
+                        let inventory = Inventory::of_this_mac().unwrap_or_default();
+                        *handle
+                            .state::<Shell>()
+                            .onboarding
+                            .lock()
+                            .expect("the wizard is not poisoned") = Some(Wizard::new(inventory));
+                        show_onboarding(&handle);
+                    }
                     let launched = supervision::on_launch(&*services);
                     for failure in &launched.failures {
                         eprintln!("agentsweep-menubar: {failure}");

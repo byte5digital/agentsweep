@@ -32,6 +32,16 @@
         "minHeight": 400,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "onboarding",
+        "title": "Welcome to AgentSweep",
+        "url": "onboarding.html",
+        "width": 560,
+        "height": 460,
+        "resizable": false,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the popover and the Findings window may do: call the app's own commands and listen to its events. No plugin, no file system, no network; the folder picker is opened by the app, never by the page.",
-  "windows": ["popover", "findings"],
+  "description": "What the popover, the Findings window and the onboarding wizard may do: call the app's own commands and listen to its events. No plugin, no file system, no network; the folder picker is opened by the app, never by the page.",
+  "windows": ["popover", "findings", "onboarding"],
   "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
 }

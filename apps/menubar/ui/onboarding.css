@@ -1,0 +1,104 @@
+/* The onboarding wizard: one question per screen (spec section 8.3).
+   Placeholder styling. */
+
+:root {
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --surface: #ffffff;
+  --card: #f5f5f7;
+  --accent: #0a66d8;
+  --threat: #c7372f;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #f5f5f7;
+    --muted: #a1a1a6;
+    --surface: #1e1e20;
+    --card: #2a2a2d;
+  }
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+
+.wizard {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 24px 32px;
+}
+
+.steps,
+.muted {
+  color: var(--muted);
+}
+
+h1 {
+  font-size: 20px;
+  margin: 8px 0 16px;
+}
+
+.promise {
+  font-weight: 600;
+}
+
+.agents {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.agents li {
+  background: var(--card);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+}
+
+.agents li span {
+  float: right;
+  color: var(--muted);
+}
+
+.agents li p {
+  margin: 6px 0 0;
+}
+
+.choices label {
+  display: block;
+  background: var(--card);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+}
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+footer .primary {
+  margin-left: auto;
+}
+
+button.primary {
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #ffffff;
+  padding: 6px 14px;
+}
+
+.error {
+  color: var(--threat);
+}

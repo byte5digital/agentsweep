@@ -54,7 +54,7 @@ open ~/agentsweep-hand-check/AgentSweep.app
 launchctl print gui/$(id -u)/de.byte5.agentsweep.daemon | grep -E 'state|pid|program'
 ```
 
-`--developer-status` prints where both registrations stand: `enabled` for the daemon and the login item after the first launch. SMAppService answers `not found` for a service that was never registered, which is why the app registers on that answer too.
+The first launch opens the onboarding wizard and registers nothing yet: run `--developer-status` once before going on and it prints `not registered` or `not found` for both. Go through the wizard and click **Turn on protection** on its last screen. `--developer-status` then prints where both registrations stand: `enabled` for the daemon and the login item. SMAppService answers `not found` for a service that was never registered, which is why the wizard shows on that answer too.
 
 - [X] macOS shows a "Background Items Added" notice naming AgentSweep.
 - [X] The service is `running` with a pid, and its program is `.../AgentSweep.app/Contents/MacOS/agentsweepd`.

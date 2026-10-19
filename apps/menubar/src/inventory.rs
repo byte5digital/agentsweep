@@ -19,6 +19,7 @@ use agentsweep_adapter_claude_code::ClaudeCode;
 use agentsweep_adapter_codex::Codex;
 use agentsweep_core::adapter::SurfaceAdapter;
 use agentsweep_core::host::{Confinement, Host, Touched};
+use agentsweep_core::location::{LocationClass, classify};
 
 /// The line under the Agents (spec section 8.3, screen 2).
 pub const OWN_LISTS: &str =
@@ -72,6 +73,9 @@ impl Found {
 pub struct Inventory {
     /// The Agents found installed.
     pub agents: Vec<Found>,
+    /// The protected location classes (spec section 9.7) the registered
+    /// projects of every Agent sit in, decided from their paths alone.
+    pub protected: BTreeSet<LocationClass>,
 }
 
 impl Inventory {
@@ -129,6 +133,7 @@ pub fn take(home: &Path, search_path: Vec<PathBuf>, touched: Option<Arc<Touched>
     if let Some(touched) = touched {
         host = host.recording(touched);
     }
+    let mut protected = BTreeSet::new();
     let agents = adapters
         .iter()
         .filter_map(|adapter| {
@@ -141,6 +146,12 @@ pub fn take(home: &Path, search_path: Vec<PathBuf>, touched: Option<Arc<Touched>
                 .into_iter()
                 .map(|registration| registration.root)
                 .collect();
+            protected.extend(
+                roots
+                    .iter()
+                    .map(|root| classify(home, root))
+                    .filter(|class| class.is_protected()),
+            );
             let descriptor = adapter.descriptor();
             Some(Found {
                 agent: descriptor.agent,
@@ -151,7 +162,7 @@ pub fn take(home: &Path, search_path: Vec<PathBuf>, touched: Option<Arc<Touched>
             })
         })
         .collect();
-    Inventory { agents }
+    Inventory { agents, protected }
 }
 
 #[cfg(test)]
@@ -323,6 +334,25 @@ mod tests {
             }
         }
         assert_eq!(mac.snapshot(), before, "the Inventory wrote something");
+    }
+
+    /// The Inventory names the protected location classes the registered
+    /// projects sit in, from their paths alone: one project in Documents
+    /// makes Documents, and projects elsewhere make nothing.
+    #[test]
+    fn the_inventory_names_the_protected_classes_of_registered_projects() {
+        let mac = Mac::new();
+        let inventory = mac.take(None);
+        assert_eq!(
+            inventory.protected.iter().copied().collect::<Vec<_>>(),
+            vec![LocationClass::Documents]
+        );
+
+        mac.write(".claude.json", "{\"projects\": {}}");
+        mac.write(".codex/config.toml", "model = \"o9\"\n");
+        fs::remove_dir_all(mac.home.join(".codex/sessions")).expect("no sessions");
+        let inventory = mac.take(None);
+        assert!(inventory.protected.is_empty(), "{:?}", inventory.protected);
     }
 
     /// `detect` finds an Agent by a stat on the search path and never runs

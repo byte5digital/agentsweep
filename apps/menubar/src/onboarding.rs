@@ -254,6 +254,7 @@ mod tests {
                 projects: 2,
                 not_read: &["the cloud enterprise bundle", "the MDM managed preference"],
             }],
+            protected: Default::default(),
         }
     }
 

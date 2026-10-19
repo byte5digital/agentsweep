@@ -116,6 +116,15 @@ impl Report {
     }
 }
 
+/// The label of the button in a Finding's detail header, null where the
+/// Finding has nothing to report.
+pub fn button(finding: &RecordedFinding) -> Value {
+    match reportable(finding) {
+        true => Value::from(REPORT_BUTTON),
+        false => Value::Null,
+    }
+}
+
 /// True when a Finding has something to report: a Rule, an Exposure
 /// Heuristic or a Score of Threat Heuristics, with or without a Verdict. A
 /// Drift question, a Problem and an Item that keeps coming back name no Rule
@@ -580,11 +589,11 @@ mod tests {
                 Category::Threat,
                 FindingState::Open,
             );
-            assert_eq!(
-                crate::findings::card(&finding)["report"],
-                offered,
-                "{source}"
-            );
+            let label = crate::findings::card(&finding)["report"].clone();
+            match offered {
+                true => assert_eq!(label, REPORT_BUTTON, "{source}"),
+                false => assert!(label.is_null(), "{source}"),
+            }
         }
     }
 
@@ -744,5 +753,44 @@ mod tests {
             .expect("connect-src");
         assert_eq!(connect, "ipc: http://ipc.localhost");
         assert!(!policy.contains("github"), "{policy}");
+    }
+
+    /// No script of the page reaches out by itself or names an address:
+    /// the report's address is built and opened by the app alone.
+    #[test]
+    fn no_script_of_the_page_makes_a_request_or_names_an_address() {
+        let ui = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");
+        for entry in std::fs::read_dir(ui).expect("the page") {
+            let path = entry.expect("an entry").path();
+            if path.extension().is_none_or(|extension| extension != "js") {
+                continue;
+            }
+            let script = std::fs::read_to_string(&path).expect("a script");
+            for forbidden in [
+                "fetch(",
+                "XMLHttpRequest",
+                "WebSocket",
+                "EventSource",
+                "sendBeacon",
+                "window.open",
+                "location.href",
+                "github.com",
+            ] {
+                assert!(
+                    !script.contains(forbidden),
+                    "{} uses {forbidden}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// The dialog writes the prepared title and body as they are, as text.
+    #[test]
+    fn the_window_writes_the_prepared_issue_as_it_is() {
+        let script = app_file("ui/window.js");
+        assert!(script.contains("$(\"false-alarm-title\").textContent = shown.title;"));
+        assert!(script.contains("$(\"false-alarm-body\").textContent = shown.body;"));
+        assert!(script.contains("invoke(\"open_false_alarm_report\", { target })"));
     }
 }

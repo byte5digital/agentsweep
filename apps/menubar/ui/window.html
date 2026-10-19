@@ -287,5 +287,21 @@
         </div>
       </form>
     </dialog>
+
+    <!-- The false-alarm report (spec section 8.8): the issue the app
+         prepared, shown exactly as its address carries it. Its button opens
+         the issue in the browser; the app itself sends nothing. -->
+    <dialog id="false-alarm">
+      <form method="dialog">
+        <p class="message" id="false-alarm-heading"></p>
+        <p class="muted" id="false-alarm-lead"></p>
+        <p class="title" id="false-alarm-title"></p>
+        <pre id="false-alarm-body"></pre>
+        <div class="actions">
+          <button value="cancel">Cancel</button>
+          <button value="ok" class="primary" id="false-alarm-open"></button>
+        </div>
+      </form>
+    </dialog>
   </body>
 </html>

@@ -124,7 +124,99 @@ function renderAnswer(result) {
     details.append(el("summary", "", "Details"), el("pre", "", lines.join("\n")));
     node.append(details);
   }
+  if (result.falseAlarm) {
+    node.append(renderFalseAlarmCard(result));
+  }
+  if (result.reported) {
+    node.append(el("p", "muted", result.reported));
+  }
   return node;
+}
+
+// The one-time card after a Restore or a Trust (spec section 8.8). Report
+// it opens the dialog; No thanks dismisses it. Either way it is gone from
+// this answer for good, and the next answer carries none unless it is
+// another Restore or Trust.
+function renderFalseAlarmCard(result) {
+  const offer = result.falseAlarm;
+  const node = el("div", "false-alarm");
+  node.append(el("p", "", offer.question));
+  const actions = el("div", "actions");
+  const report = el("button", "", offer.report);
+  report.type = "button";
+  report.addEventListener("click", async () => {
+    let said;
+    try {
+      said = await reportFalseAlarm(offer.target, offer.issue);
+    } catch (why) {
+      said = String(why);
+    }
+    if (said === null) {
+      return;
+    }
+    result.falseAlarm = null;
+    result.reported = said;
+    if (view) {
+      render(view);
+    }
+  });
+  const dismiss = el("button", "", offer.dismiss);
+  dismiss.type = "button";
+  dismiss.addEventListener("click", () => {
+    result.falseAlarm = null;
+    if (view) {
+      render(view);
+    }
+  });
+  actions.append(report, dismiss);
+  node.append(actions);
+  return node;
+}
+
+// The false-alarm dialog: the issue the app prepared, written exactly as
+// its address carries it (the app's `issue`, or asked for by the Finding).
+// Open on GitHub asks the app to open that prepared issue in the browser;
+// the window names only the Finding, never an address. Answers with the
+// app's sentence, or null when the user cancelled.
+async function reportFalseAlarm(target, issue) {
+  const shown = issue ?? (await invoke("false_alarm_report", { target }));
+  const dialog = $("false-alarm");
+  $("false-alarm-heading").textContent = shown.heading;
+  $("false-alarm-lead").textContent = shown.lead;
+  $("false-alarm-title").textContent = shown.title;
+  $("false-alarm-body").textContent = shown.body;
+  $("false-alarm-open").textContent = shown.open;
+  const confirmed = await new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
+    dialog.showModal();
+  });
+  if (!confirmed) {
+    return null;
+  }
+  return invoke("open_false_alarm_report", { target });
+}
+
+// A Finding's detail header: its title and, where it names a Rule, a
+// Heuristic or a Verdict, Report false positive (spec section 8.8).
+function renderHeader(card, title) {
+  const header = el("div", "card-header");
+  header.append(el("p", "title", title));
+  if (card.report) {
+    const report = el("button", "link", card.report);
+    report.type = "button";
+    report.addEventListener("click", async () => {
+      try {
+        const said = await reportFalseAlarm(card.id, null);
+        if (said !== null) {
+          showResult({ message: said, lines: [], details: [], choices: [], conflict: false }, card);
+        }
+      } catch (why) {
+        showFailure(why, card);
+      }
+    });
+    header.append(report);
+  }
+  return header;
 }
 
 async function run(action, card) {
@@ -226,7 +318,7 @@ function renderSimpleCard(card) {
   const simple = card.simple;
   const node = el("article", "card");
   node.dataset.category = card.category;
-  node.append(el("p", "title", simple.title));
+  node.append(renderHeader(card, simple.title));
   const chips = el("div", "chips");
   chips.append(el("span", `chip ${simple.chip}`, simple.severity));
   node.append(chips);
@@ -289,7 +381,7 @@ function renderDeveloperCard(card) {
   const developer = card.developer;
   const node = el("article", "card");
   node.dataset.category = card.category;
-  node.append(el("p", "title", developer.title));
+  node.append(renderHeader(card, developer.title));
   const chips = el("div", "chips");
   for (const chip of developer.chips) {
     const span = el("span", "chip", chip.text);

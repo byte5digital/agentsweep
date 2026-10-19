@@ -651,3 +651,25 @@ dialog {
   gap: 8px;
   margin-top: 8px;
 }
+
+/* The false-alarm report (spec section 8.8): the button in a Finding's
+   detail header, the one-time card under an answer, and the dialog. */
+
+.card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.false-alarm {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--card);
+}
+
+#false-alarm pre {
+  max-height: 260px;
+  overflow-y: auto;
+}

@@ -37,6 +37,7 @@ use crate::overview::{self, OverviewView};
 use crate::popover::View;
 use crate::quarantine;
 use crate::settings_pane;
+use crate::verdict::{self, Queue};
 
 /// One entry of the sidebar, in the order spec section 8.1 lists them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -161,6 +162,8 @@ pub struct Frame {
     /// or "Not watching right now" for a registered daemon that is not
     /// running. Absent while a daemon answers.
     absent: Option<Banner>,
+    /// How far the AI Judgement queue has got, from the stream.
+    queue: Queue,
 }
 
 /// A follow-up that at least sends the view again.
@@ -300,6 +303,7 @@ impl Frame {
         self.overview = Overview::default();
         self.last_scan = None;
         self.activity.clear();
+        self.queue = Queue::default();
         match *self == was {
             true => Follow::Nothing,
             false => Follow::Render,
@@ -363,6 +367,19 @@ impl Frame {
                 at_least_render(self.findings.apply(event))
             }
             StateEvent::Activity { .. } => self.activity.apply(event),
+            StateEvent::JudgementProgress { done, total } => {
+                let queue = Queue {
+                    done: *done,
+                    total: *total,
+                };
+                match self.queue == queue {
+                    true => Follow::Nothing,
+                    false => {
+                        self.queue = queue;
+                        Follow::Render
+                    }
+                }
+            }
             other => self.findings.apply(other),
         }
     }
@@ -380,6 +397,9 @@ impl Frame {
             && let Some(absent) = &self.absent
         {
             view.banner = Some(absent.shown(self.posture));
+        }
+        if !view.off {
+            view.ai_check = verdict::progress_line(self.queue, self.posture);
         }
         view
     }
@@ -408,6 +428,7 @@ impl Frame {
             Posture::Developer => {
                 value["ambiguous"] =
                     Value::Array(self.overview.ambiguous.iter().map(ambiguous_card).collect());
+                value["checked"] = verdict::checked_value(&self.overview.checked, self.posture);
                 let decided: Vec<_> = self.findings.decided().collect();
                 if let Some(cards) = value["decided"].as_array_mut() {
                     for (card, finding) in cards.iter_mut().zip(decided) {
@@ -423,6 +444,9 @@ impl Frame {
         }
         value["overview"] = self.overview().to_value();
         value["activity"] = self.activity.view(self.posture);
+        value["activity"]["aiCheck"] = verdict::progress_line(self.queue, self.posture)
+            .filter(|_| !self.health.protection.is_off())
+            .map_or(Value::Null, Value::from);
         value["settings"] = self.settings_pane();
         let pane = |category: Category| -> Vec<Value> {
             self.findings

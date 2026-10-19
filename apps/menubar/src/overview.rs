@@ -15,10 +15,12 @@
 //! in the popover ([`crate::banner`]). The Gate's Health lines the sentence
 //! does not say, and "Gate off in this project" for each project that
 //! switched the check off, come from [`crate::gate`] (spec sections 8.1 and
-//! 8.6); neither offers an action. The lines for projects that Need
-//! Permission and the AI check progress line are other screens'; the window
-//! leaves their places in the layout and this view carries nothing for them
-//! yet.
+//! 8.6); neither offers an action. The AI check's lines are
+//! [`crate::verdict`]'s: the cap line in both Postures, and the queue
+//! progress line in the Developer Posture, which the window's frame fills in
+//! from the stream. The lines for projects that Need Permission are another
+//! screen's; the window leaves their place in the layout and this view
+//! carries nothing for them yet.
 
 use agentsweep_core::health::Health;
 use agentsweep_core::overview::{AgentRecord, Overview};
@@ -75,6 +77,13 @@ pub struct OverviewView {
     /// "Gate off in this project", one per project that switched the check
     /// off for itself (spec section 7.6). Shown, never fought: no action.
     pub gate_off: Vec<ProjectOff>,
+    /// "AI check: 3 of 12" while the AI Judgement queue runs, in the
+    /// Developer Posture only ([`crate::verdict::progress_line`]). The
+    /// window's frame follows the queue and fills it in.
+    pub ai_check: Option<String>,
+    /// The fixed cap line while a cap of AI Judgement holds Items back, in
+    /// both Postures ([`crate::verdict::cap_line`]).
+    pub cap: Option<String>,
 }
 
 impl OverviewView {
@@ -106,6 +115,8 @@ impl OverviewView {
                     .map(|project| json!({ "project": project.project, "line": project.line }))
                     .collect::<Vec<_>>(),
             },
+            "aiCheck": self.ai_check,
+            "cap": self.cap,
         })
     }
 }
@@ -150,6 +161,8 @@ pub fn view(
             banner: banner::choose(health, &Daemon::Off).map(|banner| banner.shown(posture)),
             gate_lines: Vec::new(),
             gate_off: Vec::new(),
+            ai_check: None,
+            cap: None,
         };
     }
     let sentence = health.headline_in(posture);
@@ -183,6 +196,8 @@ pub fn view(
             Posture::Simple => None,
         },
         banner: banner::choose(health, &Daemon::Answering).map(|banner| banner.shown(posture)),
+        ai_check: None,
+        cap: crate::verdict::cap_line(health),
     }
 }
 

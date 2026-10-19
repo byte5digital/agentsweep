@@ -58,6 +58,8 @@
 //!   `~/.local/bin`.
 //! - [`notifications`]: what each un-notified change says when the app
 //!   raises it, behind a Notifier seam, and the window it opens after.
+//! - [`verdict`]: how AI Judgement shows: the AI block of a malicious
+//!   Verdict, "checked by <engine>", the queue progress and the cap line.
 //! - [`window`]: when the app shows in the Dock and how it starts.
 //! - [`placement`]: where the popover and the Findings window open.
 //! - [`glyph`]: the menu bar icon in its three states.
@@ -93,5 +95,6 @@ pub mod reveal;
 pub mod settings_pane;
 pub mod supervision;
 pub mod uninstall;
+pub mod verdict;
 pub mod window;
 pub mod wording;

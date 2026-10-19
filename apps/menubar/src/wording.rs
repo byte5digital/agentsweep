@@ -23,10 +23,12 @@ use agentsweep_core::finding_facts::{HeuristicLine, WhyNothingHappened};
 use agentsweep_core::item::Kind;
 use agentsweep_core::pack::Bands;
 use agentsweep_core::rules::PHRASE_ITEM;
+use agentsweep_core::settings::Posture;
 use agentsweep_core::state::RecordedFinding;
 use serde_json::{Value, json};
 
 use crate::findings::probation;
+use crate::verdict::{Verdict, ai_block};
 
 /// The colour of the Severity chip: red for a Threat, amber for an Exposure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +58,9 @@ pub enum Part {
     Heuristic,
     /// The muted "Also noticed" line under a Probation Rule Finding.
     AlsoNoticed,
+    /// The AI block of a malicious Verdict: "AI explanation, from <engine>"
+    /// and the engine's contained reason ([`crate::verdict`]).
+    Ai,
     /// Whether the Agent would use the Item.
     Activation,
     /// Why AgentSweep did not act by itself.
@@ -73,6 +78,7 @@ impl Part {
             Part::Plain => "plain",
             Part::Heuristic => "heuristic",
             Part::AlsoNoticed => "also",
+            Part::Ai => "ai",
             Part::Activation => "activation",
             Part::WhyNothingHappened => "why",
             Part::Project => "project",
@@ -121,11 +127,7 @@ impl Wording {
             "title": self.title,
             "severity": self.severity,
             "chip": self.chip.as_str(),
-            "lines": self
-                .lines
-                .iter()
-                .map(|line| json!({ "part": line.part.as_str(), "text": line.text }))
-                .collect::<Vec<_>>(),
+            "lines": lines_value(&self.lines),
             "admin": self.admin_message.is_some(),
         })
     }
@@ -182,6 +184,34 @@ pub fn chip(category: Category) -> Chip {
 /// One Finding, worded for the Simple Posture.
 pub fn simple(finding: &RecordedFinding) -> Wording {
     let named = Named::of(finding);
+    Wording {
+        title: title(finding, &named),
+        severity: severity_word(finding.severity),
+        chip: chip(finding.category),
+        lines: body(finding, &named, Posture::Simple),
+        admin_message: managed(finding).then(|| admin_message(finding, &named)),
+    }
+}
+
+/// The body lines in the Developer Posture: the Simple Posture's, with the
+/// model added to the AI block's label (spec section 8.4).
+pub fn developer_lines(finding: &RecordedFinding) -> Vec<Line> {
+    body(finding, &Named::of(finding), Posture::Developer)
+}
+
+/// Body lines as the window receives them.
+pub fn lines_value(lines: &[Line]) -> Value {
+    Value::Array(
+        lines
+            .iter()
+            .map(|line| json!({ "part": line.part.as_str(), "text": line.text }))
+            .collect(),
+    )
+}
+
+/// The body in its fixed order (spec section 8.4); the Posture changes only
+/// the AI block's label.
+fn body(finding: &RecordedFinding, named: &Named, posture: Posture) -> Vec<Line> {
     let mut lines = Vec::new();
     let line = |part: Part, text: String| Line { part, text };
 
@@ -215,10 +245,13 @@ pub fn simple(finding: &RecordedFinding) -> Wording {
             format!("Also noticed: {}", noticed.join(" ")),
         ));
     }
-    if let Some(text) = activation(finding, &named) {
+    if let Some(text) = Verdict::of(finding).and_then(|verdict| ai_block(&verdict, posture)) {
+        lines.push(line(Part::Ai, text));
+    }
+    if let Some(text) = activation(finding, named) {
         lines.push(line(Part::Activation, text));
     }
-    if let Some(text) = why_nothing_happened(finding, &named) {
+    if let Some(text) = why_nothing_happened(finding, named) {
         lines.push(line(Part::WhyNothingHappened, text));
     }
     if named.project {
@@ -227,14 +260,7 @@ pub fn simple(finding: &RecordedFinding) -> Wording {
     if let Some(text) = drift_line(&finding.drift) {
         lines.push(line(Part::Drift, text));
     }
-
-    Wording {
-        title: title(finding, &named),
-        severity: severity_word(finding.severity),
-        chip: chip(finding.category),
-        lines,
-        admin_message: managed(finding).then(|| admin_message(finding, &named)),
-    }
+    lines
 }
 
 /// The message a user hands whoever administers their Mac about a Managed

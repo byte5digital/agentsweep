@@ -565,13 +565,21 @@ dialog {
 }
 
 /* The Ambiguous Items beneath the Threat Findings, Developer Posture only. */
-.ambiguous-items {
+.ambiguous-items,
+.checked-items {
   margin-top: 24px;
 }
 
-.ambiguous-items h3 {
+.ambiguous-items h3,
+.checked-items h3 {
   font-size: 13px;
   margin: 0 0 4px;
+}
+
+/* The AI block: the engine's own words, set apart from AgentSweep's. */
+.card p.ai {
+  border-left: 3px solid var(--rule);
+  padding-left: 8px;
 }
 
 .card.ambiguous {

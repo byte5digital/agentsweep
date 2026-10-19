@@ -54,6 +54,8 @@
               <!-- "AI check: 3 of 12" while the queue runs, in the Developer
                    Posture (spec section 6.4). -->
               <p class="muted" id="overview-ai-check" hidden></p>
+              <!-- The fixed cap line, in both Postures (spec section 8.4). -->
+              <p class="muted" id="overview-cap" hidden></p>
             </div>
           </section>
           <section class="pane" data-pane="threats" hidden>
@@ -69,6 +71,12 @@
               <h3>Ambiguous Items</h3>
               <p class="muted">Their Score fell in the Ambiguous Band. They are not Findings and nothing is asked of you.</p>
               <div class="list"></div>
+            </section>
+            <!-- The Developer Posture only: "checked by <engine>" for Items a
+                 benign Verdict moved to Clear (spec section 8.2). -->
+            <section class="checked-items" hidden>
+              <h3>Checked by AI Judgement</h3>
+              <ul class="list"></ul>
             </section>
           </section>
           <section class="pane" data-pane="exposures" hidden>
@@ -100,6 +108,9 @@
           <section class="pane" data-pane="activity" hidden>
             <h2 class="pane-title"></h2>
             <p class="muted empty" hidden>Nothing has happened yet.</p>
+            <!-- "AI check: 3 of 12" while the queue runs, in the Developer
+                 Posture (spec section 6.4). -->
+            <p class="muted" id="activity-ai-check" hidden></p>
             <ol class="activity" id="activity-lines"></ol>
             <p class="muted" id="activity-note" hidden></p>
           </section>

@@ -311,6 +311,8 @@ pub fn card(finding: &RecordedFinding) -> Value {
     value["simple"] = crate::wording::simple(finding).to_value();
     value["technical"] = crate::wording::technical_value(finding);
     value["developer"] = crate::developer::heading(finding).to_value();
+    value["developer"]["lines"] =
+        crate::wording::lines_value(&crate::wording::developer_lines(finding));
     // Reveal in Finder depends on the Posture, which the frame knows.
     value["reveal"] = Value::from(false);
     value

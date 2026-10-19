@@ -276,7 +276,8 @@ function renderLines(node, lines) {
       continue;
     }
     const muted = ["also", "project", "drift"].includes(line.part);
-    node.append(el("p", muted ? "muted" : "", line.text));
+    // The AI block is the engine's text, set as plain text, never markup.
+    node.append(el("p", muted ? "muted" : line.part === "ai" ? "ai" : "", line.text));
   }
 }
 
@@ -296,7 +297,7 @@ function renderDeveloperCard(card) {
     chips.append(span);
   }
   node.append(chips);
-  renderLines(node, card.simple.lines);
+  renderLines(node, developer.lines ?? card.simple.lines);
   node.append(renderTechnical(card));
   const actions = renderActions(card);
   if (card.reveal) {
@@ -425,6 +426,15 @@ function renderAmbiguousList(items) {
   const shown = isDeveloper() && Array.isArray(items) && items.length > 0;
   section.hidden = !shown;
   section.querySelector(".list").replaceChildren(...(shown ? items.map(renderAmbiguous) : []));
+}
+
+// The "checked by <engine>" notes of Items a benign Verdict moved to Clear.
+// The app sends them in the Developer Posture only (spec 8.2).
+function renderCheckedList(items) {
+  const section = pane("threats").querySelector(".checked-items");
+  const shown = isDeveloper() && Array.isArray(items) && items.length > 0;
+  section.hidden = !shown;
+  section.querySelector(".list").replaceChildren(...(shown ? items.map((item) => el("li", "id", item.line)) : []));
 }
 
 // A Finding of a Finding pane, in the Posture in force.
@@ -622,6 +632,11 @@ function renderOverview(overview) {
   $("scan-line").textContent = overview.scan.running ? overview.scan.progress : scanAnswer;
   $("overview-summary").textContent = overview.summary ?? "";
   $("overview-summary").hidden = overview.summary === null;
+  // "AI check: 3 of 12" in the Developer Posture; the cap line in both.
+  $("overview-ai-check").textContent = overview.aiCheck ?? "";
+  $("overview-ai-check").hidden = (overview.aiCheck ?? null) === null;
+  $("overview-cap").textContent = overview.cap ?? "";
+  $("overview-cap").hidden = (overview.cap ?? null) === null;
   renderGateLines(overview.gate);
 }
 
@@ -690,6 +705,8 @@ function renderActivity(activity, loaded) {
   $("activity-lines").replaceChildren(...items);
   $("activity-note").hidden = activity.note === null;
   $("activity-note").textContent = activity.note ?? "";
+  $("activity-ai-check").textContent = activity.aiCheck ?? "";
+  $("activity-ai-check").hidden = (activity.aiCheck ?? null) === null;
   if (activityFocus !== null) {
     // The first record at or after the one asked for, which is the oldest
     // line still at or past it in a list that runs newest first.
@@ -955,6 +972,7 @@ function render(list) {
   renderTrusted(list.trusted ?? []);
   renderActivity(list.activity, list.loaded);
   renderAmbiguousList(list.ambiguous);
+  renderCheckedList(list.checked);
   disableActions();
 }
 

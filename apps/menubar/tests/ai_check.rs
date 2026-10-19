@@ -294,3 +294,33 @@ fn preview_shows_the_daemons_redacted_request_verbatim() {
     let own_nonce = shown["nonce"].as_str().expect("a nonce");
     assert_eq!(user.replace(own_nonce, &nonce), direct_user);
 }
+
+/// The window keeps no copy of the key either: the consent screen empties
+/// the field before it asks the app to hand the key over, empties it however
+/// the screen closes, and no frontend file stores or logs anything.
+#[test]
+fn the_window_empties_the_key_field_and_stores_nothing() {
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");
+    let script = std::fs::read_to_string(ui.join("ai_check.js")).expect("the script");
+    let agree = script
+        .find("async function agreeToClaude")
+        .expect("the agree handler");
+    let emptied = agree + script[agree..].find("field.value = \"\"").expect("emptied");
+    let handed = agree
+        + script[agree..]
+            .find("\"turn_on_claude\"")
+            .expect("handed over");
+    assert!(
+        emptied < handed,
+        "the field is emptied before the hand-over"
+    );
+    assert!(script.contains("$(\"ai-consent\").addEventListener(\"close\""));
+    let page = std::fs::read_to_string(ui.join("window.html")).expect("the page");
+    assert!(page.contains("type=\"password\" id=\"ai-consent-key\" autocomplete=\"off\""));
+    for name in ["ai_check.js", "window.js", "posture.js"] {
+        let text = std::fs::read_to_string(ui.join(name)).expect("a script");
+        for forbidden in ["localStorage", "sessionStorage", "indexedDB", "console."] {
+            assert!(!text.contains(forbidden), "{name} uses {forbidden}");
+        }
+    }
+}

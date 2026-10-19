@@ -31,6 +31,10 @@
 //!   app never reads it (spec section 8.5).
 //! - `change_settings`: moves one choice of the Settings pane through the
 //!   daemon's `settings` request; the pane follows the answer.
+//! - `ai_check_look`, `change_engine`, `turn_on_claude`, `remove_claude_key`
+//!   and `preview_request`: the AI check in the Settings pane
+//!   ([`crate::ai_check`]). The Claude API key passes through
+//!   `turn_on_claude` once, to the daemon, and the app keeps no copy.
 //! - `install_cli`: **Install command line tool**, the link in
 //!   `~/.local/bin` ([`crate::cli_link`]).
 //! - `open_full_disk_access`: System Settings at Full Disk Access, best
@@ -80,6 +84,7 @@ use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::settings::Posture;
 use agentsweep_ipc::protocol::{Message, StateEvent};
 
+use crate::ai_check;
 use crate::asking::{ActionRequest, Asking, refusal, scan_now_line};
 use crate::cli_link;
 use crate::developer::offers_reveal;
@@ -471,6 +476,73 @@ async fn change_settings(app: AppHandle, change: Value) -> Result<String, String
         render(&app);
     }
     Ok(settings_pane::RECORDED.to_string())
+}
+
+/// Takes the daemon's engine answer into the frame, sends the window again
+/// and answers the line saying whether the change was recorded.
+fn take_engine(app: &AppHandle, state: &agentsweep_ipc::engine::EngineState) -> String {
+    let posture = {
+        let shell = app.state::<Shell>();
+        let mut frame = shell.frame.lock().expect("the frame is not poisoned");
+        frame.engine(state);
+        frame.posture()
+    };
+    render(app);
+    ai_check::recorded_line(state, posture)
+}
+
+/// Runs one AI check step off the main thread.
+async fn off_main<T: Send + 'static>(
+    step: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(step)
+        .await
+        .map_err(|error| format!("AgentSweep could not be asked: {error}"))?
+}
+
+/// Asks the daemon where the AI check stands, with whether Ollama runs and
+/// whether Apple's on-device model is available; the window asks it when
+/// the Settings pane opens.
+#[tauri::command]
+async fn ai_check_look(app: AppHandle) -> Result<(), String> {
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    let state = blocking(move || asking.engine()).await?;
+    take_engine(&app, &state);
+    Ok(())
+}
+
+/// Moves one choice of the AI check: an engine card, the Ollama address or
+/// the Claude model id.
+#[tauri::command]
+async fn change_engine(app: AppHandle, change: Value) -> Result<String, String> {
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    let state = off_main(move || ai_check::change(&asking, &change)).await?;
+    Ok(take_engine(&app, &state))
+}
+
+/// "I agree, turn it on": the typed key, if any, goes to the daemon once and
+/// is wiped here; then the Claude engine is turned on.
+#[tauri::command]
+async fn turn_on_claude(app: AppHandle, key: Option<String>) -> Result<String, String> {
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    let state = off_main(move || ai_check::turn_on_claude(&asking, key)).await?;
+    Ok(take_engine(&app, &state))
+}
+
+/// Removes the Claude API key, which turns the Claude engine off.
+#[tauri::command]
+async fn remove_claude_key(app: AppHandle) -> Result<String, String> {
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    let state = off_main(move || ai_check::remove_claude_key(&asking)).await?;
+    Ok(take_engine(&app, &state))
+}
+
+/// "Preview a request": the daemon's redacted request for Claude about one
+/// Item, or about the sample Item.
+#[tauri::command]
+async fn preview_request(app: AppHandle, item: Option<String>) -> Result<Value, String> {
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    off_main(move || ai_check::preview(&asking, item.as_deref())).await
 }
 
 /// The onboarding wizard's view, or nothing once it is done.
@@ -972,6 +1044,11 @@ pub fn run(start: Start) {
             copy_for_admin,
             open_the_file,
             change_settings,
+            ai_check_look,
+            change_engine,
+            turn_on_claude,
+            remove_claude_key,
+            preview_request,
             install_cli,
             open_full_disk_access,
             show_rules_folder,

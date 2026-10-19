@@ -121,8 +121,19 @@
               <div class="choices" role="radiogroup"></div>
             </div>
 
-            <!-- The AI check takes this place (spec section 8.10). -->
-            <div class="setting" id="settings-ai-check" hidden></div>
+            <!-- The AI check (spec section 8.10), rendered by ai_check.js. -->
+            <div class="setting" id="settings-ai-check" hidden>
+              <h3></h3>
+              <p class="muted intro"></p>
+              <div class="cards" role="radiogroup"></div>
+              <div class="key" hidden>
+                <p class="key-set"></p>
+                <p class="muted remove-line"></p>
+                <button type="button" class="remove"></button>
+              </div>
+              <div class="lines"></div>
+              <p class="muted" id="ai-check-answer" role="status"></p>
+            </div>
 
             <div class="setting" id="settings-background">
               <h3></h3>
@@ -144,9 +155,9 @@
               <h3></h3>
               <p class="muted dirs-line"></p>
               <div class="dirs"></div>
-              <!-- The Ollama address and the Claude model id take this place
-                   (spec section 8.10). -->
-              <div id="settings-advanced-ai" hidden></div>
+              <!-- The Ollama address and, in the Developer Posture, the
+                   Claude model id (spec section 8.10). -->
+              <div class="dirs" id="settings-advanced-ai" hidden></div>
               <div class="sub" id="settings-everything">
                 <h4></h4>
                 <div class="lines"></div>
@@ -182,6 +193,37 @@
           <button value="ok" class="primary" id="confirm-ok"></button>
         </div>
       </form>
+    </dialog>
+
+    <!-- The Ollama confirmation: the model and loopback only. -->
+    <dialog id="ai-ollama">
+      <form method="dialog">
+        <p class="message question"></p>
+        <div class="lines"></div>
+        <div class="actions">
+          <button value="cancel">Cancel</button>
+          <button value="ok" class="primary" id="ai-ollama-ok"></button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- The Claude consent screen: what, to whom, when, cost, the preview,
+         the key field. The key is never kept by the window. -->
+    <dialog id="ai-consent">
+      <p class="message title"></p>
+      <table class="technical consent"><tbody></tbody></table>
+      <button type="button" class="link" id="ai-consent-preview"></button>
+      <pre class="preview" id="ai-consent-preview-text" hidden></pre>
+      <label class="dir">
+        <span class="label key-label"></span>
+        <input type="password" id="ai-consent-key" autocomplete="off" spellcheck="false" />
+      </label>
+      <p class="key-set"></p>
+      <p class="muted key-line"></p>
+      <div class="actions">
+        <button type="button" id="ai-consent-cancel">Cancel</button>
+        <button type="button" class="primary" id="ai-consent-agree"></button>
+      </div>
     </dialog>
 
     <!-- A Restore that met something else at the original place (spec

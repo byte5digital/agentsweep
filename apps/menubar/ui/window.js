@@ -12,6 +12,7 @@
 // beneath the Findings (spec sections 4.3 and 8.2).
 
 import { isDeveloper, takePosture } from "./posture.js";
+import { lookAtAiCheck, renderAiCheck } from "./ai_check.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -453,6 +454,9 @@ function pane(id) {
 }
 
 function select(id) {
+  if (id === "settings" && selectedPane !== "settings") {
+    lookAtAiCheck();
+  }
   selectedPane = id;
   activityFocus = null;
   if (view) {
@@ -848,6 +852,7 @@ function render(list) {
   $("off").textContent = list.off === null ? "" : `Protection is off: ${list.off}.`;
   renderOverview(list.overview);
   renderSettings(list.settings);
+  renderAiCheck(list.settings.aiCheck);
   actionsWait = list.actionsWait;
   $("actions-wait").hidden = actionsWait === null;
   $("actions-wait").textContent = actionsWait === null ? "" : actionsWait;

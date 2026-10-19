@@ -469,6 +469,54 @@ dialog {
   min-width: 0;
 }
 
+/* The AI check's four cards and the consent screen. */
+
+.setting .cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.setting .card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  text-align: left;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+}
+
+.setting .card[aria-checked="true"] {
+  border-color: var(--clear);
+  box-shadow: inset 0 0 0 1px var(--clear);
+}
+
+.setting .card:disabled {
+  opacity: 0.6;
+}
+
+.setting .card .warning {
+  color: var(--exposure);
+}
+
+#ai-consent {
+  max-width: 560px;
+}
+
+#ai-consent .preview {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 11px;
+  padding: 6px 8px;
+  background: var(--card);
+  border-radius: 6px;
+}
+
 .note {
   padding: 6px 10px;
   border-radius: 6px;

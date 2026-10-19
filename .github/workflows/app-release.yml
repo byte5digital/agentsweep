@@ -114,7 +114,7 @@ jobs:
       # line interface is the npm one pinned to the version of the tauri crate
       # the workspace locks; what follows `--` goes to cargo.
       - name: Build, sign and notarize the app
-        uses: tauri-apps/tauri-action@0000000000000000000000000000000000000000 # v1.0.0, placeholder SHA to be replaced with the commit of that tag
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}

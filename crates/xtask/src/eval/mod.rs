@@ -40,8 +40,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use agentsweep_core::finding::{Category, Tier};
 use agentsweep_core::judged::Judge;
-use agentsweep_core::judgement::{self, JudgementEngine, NoVerdict, PROMPT_VERSION, Verdict};
-use agentsweep_core::judgement_request::{NoRequest, Normalisation};
+use agentsweep_core::judgement::{
+    self, JudgementEngine, NONCE_CHARS, NoVerdict, PROMPT_VERSION, SYSTEM_PROMPT, Verdict,
+    user_turn,
+};
+use agentsweep_core::judgement_request::{ByteEstimate, NoRequest, Normalisation, TokenCounter};
 use agentsweep_core::rules::RulePack;
 use agentsweep_core::scan::Scanners;
 
@@ -80,6 +83,40 @@ pub struct Engine<'e> {
     pub budget: usize,
     /// The engine itself.
     pub asker: &'e dyn JudgementEngine,
+    /// How many tokens the engine counted for the prompt it was last
+    /// handed, where it reports one: Ollama's prompt evaluation count. The
+    /// report holds it against the byte estimate the request was cut to.
+    pub counted: Option<&'e dyn Fn() -> Option<u64>>,
+}
+
+/// Ollama's prompt evaluation counts held against the byte estimate the
+/// requests were built under (the owner's decision on Ollama: the count is
+/// used only to check the estimate in the eval report).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EstimateCheck {
+    /// The answered requests the engine reported a count for.
+    pub requests: usize,
+    /// Those whose count was above the estimate.
+    pub over: usize,
+    /// The highest count as a share of its estimate, in per cent.
+    pub highest_percent: u64,
+}
+
+impl EstimateCheck {
+    fn add(&mut self, estimate: usize, counted: u64) {
+        self.requests += 1;
+        if counted > estimate as u64 {
+            self.over += 1;
+        }
+        let percent = counted * 100 / (estimate.max(1) as u64);
+        self.highest_percent = self.highest_percent.max(percent);
+    }
+
+    fn merge(&mut self, other: EstimateCheck) {
+        self.requests += other.requests;
+        self.over += other.over;
+        self.highest_percent = self.highest_percent.max(other.highest_percent);
+    }
 }
 
 /// What one Item came to.
@@ -98,6 +135,12 @@ pub enum Outcome {
 
 /// Asks the engine about one Item along the daemon's path.
 pub fn judge(engine: &Engine<'_>, item: &EvalItem) -> Outcome {
+    judge_counted(engine, item).0
+}
+
+/// The same, with the byte estimate of the whole prompt and the count the
+/// engine reported for it, where it reports one and answered.
+fn judge_counted(engine: &Engine<'_>, item: &EvalItem) -> (Outcome, Option<(usize, u64)>) {
     let judge = Judge::new(
         &engine.engine,
         &engine.model,
@@ -106,10 +149,10 @@ pub fn judge(engine: &Engine<'_>, item: &EvalItem) -> Outcome {
     );
     let request = match judge.request(&item.item, &item.fired) {
         Ok(request) => request,
-        Err(NoRequest::TooLarge { .. }) => return Outcome::NoVerdict("too large"),
-        Err(NoRequest::Redaction(_)) => return Outcome::NoVerdict("redaction failed"),
+        Err(NoRequest::TooLarge { .. }) => return (Outcome::NoVerdict("too large"), None),
+        Err(NoRequest::Redaction(_)) => return (Outcome::NoVerdict("redaction failed"), None),
     };
-    match judgement::judge(engine.asker, &request, &item.fired) {
+    let outcome = match judgement::judge(engine.asker, &request, &item.fired) {
         Ok(Verdict::Malicious { .. }) => Outcome::Malicious,
         Ok(Verdict::Benign) => Outcome::Benign,
         Ok(Verdict::Unsure) => Outcome::Unsure,
@@ -117,7 +160,21 @@ pub fn judge(engine: &Engine<'_>, item: &EvalItem) -> Outcome {
         Err(NoVerdict::Unparsable(_)) => Outcome::NoVerdict("unparsable"),
         Err(NoVerdict::Engine(_)) => Outcome::NoVerdict("engine error"),
         Err(NoVerdict::NoNonce(_)) => Outcome::NoVerdict("no nonce"),
+    };
+    if matches!(
+        outcome,
+        Outcome::NoVerdict("engine error" | "no nonce" | "too large" | "redaction failed")
+    ) {
+        return (outcome, None);
     }
+    let count = engine.counted.and_then(|counted| counted()).map(|counted| {
+        let prompt = format!(
+            "{SYSTEM_PROMPT}{}",
+            user_turn(&"0".repeat(NONCE_CHARS), request.serialised())
+        );
+        (ByteEstimate.tokens(&prompt), counted)
+    });
+    (outcome, count)
 }
 
 /// The outcomes over one population of Items.
@@ -157,6 +214,8 @@ pub struct SetTally {
     pub ambiguous: Tally,
     /// The Items with no Verdict, by reason.
     pub no_verdict: BTreeMap<&'static str, usize>,
+    /// The engine's own token counts against the estimate.
+    pub estimate: EstimateCheck,
 }
 
 impl SetTally {
@@ -164,7 +223,10 @@ impl SetTally {
         let mut tally = SetTally::default();
         let mut outcomes = Vec::with_capacity(items.len());
         for item in items {
-            let outcome = judge(engine, item);
+            let (outcome, count) = judge_counted(engine, item);
+            if let Some((estimate, counted)) = count {
+                tally.estimate.add(estimate, counted);
+            }
             tally.all.add(outcome);
             if item.awaits_judgement {
                 tally.ambiguous.add(outcome);
@@ -231,6 +293,9 @@ pub struct Report {
     pub wrappers: usize,
     /// The bad corpus run.
     pub bad_corpus: bad::Report,
+    /// The engine's own token counts against the estimate over all three
+    /// sets; none for an engine that reports no count.
+    pub estimate: Option<EstimateCheck>,
 }
 
 /// Runs one engine over the three sets.
@@ -241,6 +306,14 @@ pub fn measure(engine: &Engine<'_>, sets: &Sets) -> Report {
     };
     let (bad, bad_outcomes) = SetTally::of(engine, &sets.bad);
     let (injection, injection_outcomes) = SetTally::of(engine, &sets.injection);
+    let estimate = engine.counted.map(|_| {
+        let mut check = bad.estimate;
+        check.merge(injection.estimate);
+        if let Some(benign) = &benign {
+            check.merge(benign.estimate);
+        }
+        check
+    });
     let mut flips = (0, 0);
     for (bare, wrapped) in bad_outcomes.iter().zip(&injection_outcomes) {
         if *bare == Outcome::Malicious {
@@ -266,6 +339,7 @@ pub fn measure(engine: &Engine<'_>, sets: &Sets) -> Report {
         flips,
         wrappers: sets.wrappers,
         bad_corpus: sets.bad_corpus.clone(),
+        estimate,
     }
 }
 
@@ -397,6 +471,18 @@ impl Report {
             write_tally(&mut out, &self.injection);
         }
         let _ = writeln!(out);
+
+        if let Some(check) = self.estimate {
+            let _ = writeln!(
+                out,
+                "Token estimate ({} bytes to a token) against the engine's own prompt count: {} answered requests, {} counted above the estimate, highest count {} % of its estimate",
+                agentsweep_core::judgement_request::BYTES_PER_TOKEN,
+                check.requests,
+                check.over,
+                check.highest_percent
+            );
+            let _ = writeln!(out);
+        }
 
         let _ = writeln!(
             out,

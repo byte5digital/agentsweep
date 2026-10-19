@@ -88,6 +88,7 @@ fn engine<'e>(asker: &'e dyn JudgementEngine) -> Engine<'e> {
         model: "fake".to_string(),
         budget: OLLAMA_BUDGET,
         asker,
+        counted: None,
     }
 }
 
@@ -412,4 +413,24 @@ fn offline_with_the_corpus_required_is_a_failure() {
         "{problem}"
     );
     assert!(!report_path.exists());
+}
+
+/// An engine that reports its own prompt count, as Ollama does, has it held
+/// against the byte estimate the request was cut to.
+#[test]
+fn an_engine_count_is_held_against_the_byte_estimate() {
+    let quiet = Fake(|_: &str| answer("benign", &[]));
+    let huge = || Some(1_000_000u64);
+    let mut under_eval = engine(&quiet);
+    under_eval.counted = Some(&huge);
+    let benign: Vec<EvalItem> = (0..3)
+        .map(|i| benign_item(i, "Plain notes.", false))
+        .collect();
+    let report = eval::measure(&under_eval, &sets_with_benign(benign));
+    let check = report.estimate.expect("the engine reports a count");
+    assert_eq!((check.requests, check.over), (3, 3));
+    assert!(report.render().contains("3 counted above the estimate"));
+
+    let report = eval::measure(&engine(&quiet), &sets_with_benign(Vec::new()));
+    assert_eq!(report.estimate, None);
 }

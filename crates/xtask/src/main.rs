@@ -245,6 +245,7 @@ fn run_judgement_eval(arguments: &[String]) -> Result<String, String> {
     let refused = |error: &dyn std::fmt::Display| format!("the engine cannot be asked: {error}\n");
 
     let asker: Box<dyn JudgementEngine>;
+    let mut ollama_engine: Option<std::rc::Rc<OllamaEngine>> = None;
     let (name, reported, budget) = match engine.as_str() {
         "ollama" => {
             if model.is_empty() {
@@ -257,7 +258,9 @@ fn run_judgement_eval(arguments: &[String]) -> Result<String, String> {
             let ollama = OllamaEngine::for_model(OllamaClient::new(&address), &model)
                 .map_err(|error| refused(&error))?;
             let reported = ollama.model_id();
-            asker = Box::new(ollama);
+            let ollama = std::rc::Rc::new(ollama);
+            ollama_engine = Some(std::rc::Rc::clone(&ollama));
+            asker = Box::new(Shared(ollama));
             (settings::JudgementEngine::Ollama, reported, OLLAMA_BUDGET)
         }
         "claude" => {
@@ -310,11 +313,20 @@ fn run_judgement_eval(arguments: &[String]) -> Result<String, String> {
         }
     };
 
+    let count = || {
+        ollama_engine
+            .as_ref()
+            .and_then(|ollama| ollama.last_prompt_eval_count())
+    };
     let under_eval = eval::Engine {
         engine: name.as_str().to_string(),
         model: reported,
         budget,
         asker: asker.as_ref(),
+        counted: match &ollama_engine {
+            Some(_) => Some(&count),
+            None => None,
+        },
     };
     let required = std::env::var(benign::REQUIRED).is_ok_and(|value| !value.is_empty());
     let ran = eval::run(
@@ -329,6 +341,19 @@ fn run_judgement_eval(arguments: &[String]) -> Result<String, String> {
         ran.report.render(),
         report.display()
     ))
+}
+
+/// One engine asked through a shared handle, so the eval can read what the
+/// engine reports after each call while the harness holds it as an asker.
+struct Shared<E>(std::rc::Rc<E>);
+
+impl<E: JudgementEngine> JudgementEngine for Shared<E> {
+    fn judge(
+        &self,
+        prompt: &agentsweep_core::judgement::Prompt,
+    ) -> Result<String, agentsweep_core::judgement::EngineError> {
+        self.0.judge(prompt)
+    }
 }
 
 /// Renders every Indicator List, or reports the ones whose committed Rule is

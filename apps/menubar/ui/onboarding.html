@@ -33,9 +33,36 @@
         <p class="muted" id="detail-later"></p>
       </section>
 
+      <section data-screen="ai" hidden>
+        <h1 id="ai-title"></h1>
+        <div class="choices cards" id="ai-choices" role="radiogroup"></div>
+        <p class="muted" id="ai-others-line" hidden></p>
+        <div class="choices cards" id="ai-others" role="radiogroup"></div>
+        <p class="muted" id="ai-later"></p>
+      </section>
+
       <section data-screen="background" hidden>
         <h1>Keep watching in the background</h1>
-        <p id="background-line"></p>
+        <div id="background-lines"></div>
+        <p class="muted" id="background-disclosure"></p>
+        <div class="toggles" id="background-toggles"></div>
+        <div class="protected" id="protected" hidden>
+          <p id="protected-line"></p>
+          <button type="button" id="protected-button"></button>
+          <p class="muted" id="protected-sent" hidden></p>
+        </div>
+      </section>
+
+      <section data-screen="first" hidden>
+        <h1 id="first-title"></h1>
+        <p class="muted" id="first-waiting" hidden></p>
+        <div id="first-done" hidden>
+          <p id="first-items"></p>
+          <p id="first-baseline"></p>
+          <p id="first-stopped-line"></p>
+          <ul id="first-stopped"></ul>
+          <p class="promise" id="first-result"></p>
+        </div>
       </section>
 
       <footer>
@@ -44,5 +71,32 @@
       </footer>
       <p class="error" id="error" hidden></p>
     </main>
+
+    <dialog id="ollama">
+      <form method="dialog">
+        <p class="question"></p>
+        <div class="lines"></div>
+        <div class="buttons">
+          <button value="cancel">Cancel</button>
+          <button value="ok" class="primary" id="ollama-ok"></button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="consent">
+      <p class="title"></p>
+      <table><tbody></tbody></table>
+      <button type="button" class="link" id="consent-preview"></button>
+      <p class="muted" id="consent-preview-text" hidden></p>
+      <label>
+        <span class="key-label"></span>
+        <input type="password" id="consent-key" autocomplete="off" spellcheck="false" />
+      </label>
+      <p class="muted key-line"></p>
+      <div class="buttons">
+        <button type="button" id="consent-cancel">Cancel</button>
+        <button type="button" class="primary" id="consent-agree"></button>
+      </div>
+    </dialog>
   </body>
 </html>

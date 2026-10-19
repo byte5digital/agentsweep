@@ -102,3 +102,72 @@ button.primary {
 .error {
   color: var(--threat);
 }
+
+.cards .card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--card);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+}
+
+.cards .card[aria-checked="true"] {
+  border-color: var(--accent);
+}
+
+.cards .card:disabled {
+  opacity: 0.6;
+}
+
+.cards .card span {
+  display: block;
+}
+
+.cards .card .label {
+  font-weight: 600;
+}
+
+.toggles label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.protected {
+  background: var(--card);
+  border-radius: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+}
+
+dialog {
+  max-width: 460px;
+  border: none;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+dialog th {
+  text-align: left;
+  vertical-align: top;
+  padding-right: 8px;
+}
+
+dialog .buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+}

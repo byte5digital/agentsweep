@@ -456,7 +456,7 @@ fn said(error: &agentsweep_ipc::ClientError) -> String {
 }
 
 /// Overwrites the text of a typed key before its memory is given back.
-fn wipe(mut typed: String) {
+pub(crate) fn wipe(mut typed: String) {
     // SAFETY: zero bytes are valid UTF-8, so the string stays a string.
     let bytes = unsafe { typed.as_mut_vec() };
     for byte in bytes.iter_mut() {

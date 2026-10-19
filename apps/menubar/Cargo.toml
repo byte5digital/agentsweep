@@ -23,8 +23,11 @@ tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
 # Health and its precedence, the same sentence the command line interface
-# prints. Never the `daemon` feature: the app writes no store.
-agentsweep-core.workspace = true
+# prints. Never the `daemon` feature: the app writes no store. The `apple`
+# feature only for onboarding screen 4, which asks the Apple judgement helper
+# beside the app whether Apple's on-device model is available before any
+# daemon runs (spec section 4.4); the app never judges an Item.
+agentsweep-core = { workspace = true, features = ["apple"] }
 # The client half of the vocabulary. The app is a peer of the daemon like the
 # in-bundle command line interface, with the role `app`.
 agentsweep-ipc.workspace = true

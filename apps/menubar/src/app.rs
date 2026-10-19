@@ -55,9 +55,11 @@
 //!   stream.
 //! - `scan_folder`: the native folder picker, then a Folder Scan by the
 //!   daemon, whose answer arrives on `agentsweep://folder`.
-//! - `onboarding`, `onboarding_back`, `onboarding_choose`, `onboarding_next`:
-//!   the onboarding wizard's view and its moves ([`crate::onboarding`]); Next
-//!   on its last screen registers the daemon and the login item.
+//! - `onboarding`, `onboarding_back`, `onboarding_choose`, `onboarding_next`,
+//!   `onboarding_engine`, `onboarding_claude`, `onboarding_toggle`,
+//!   `onboarding_look_there`: the onboarding wizard's view and its moves
+//!   ([`crate::onboarding`]); Next on screen 5 registers the daemon and the
+//!   login item, and on screen 6 closes the wizard.
 //!
 //! Events the frontend may listen to:
 //! - `agentsweep://view`: the popover's view, whenever it changes.
@@ -88,8 +90,10 @@ use tauri::{
 };
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 
+use agentsweep_core::envelope::Timestamp;
+use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::paths::DataDirectory;
-use agentsweep_core::settings::Posture;
+use agentsweep_core::settings::{JudgementEngine, Posture};
 use agentsweep_ipc::protocol::{Message, StateEvent};
 
 use crate::ai_check;
@@ -106,7 +110,7 @@ use crate::integrity;
 use crate::inventory::Inventory;
 use crate::link::{Link, Socket, Update};
 use crate::notifications::{Activation, Notice, Notifications, Notifier};
-use crate::onboarding::{Handover, Step, Wizard};
+use crate::onboarding::{self, Handover, Step, Wizard};
 use crate::placement;
 use crate::popover::View;
 use crate::reveal::{self, SystemFinder};
@@ -129,6 +133,10 @@ const WINDOW: &str = "findings";
 
 /// The onboarding wizard's label, as `tauri.conf.json` declares it.
 const ONBOARDING: &str = "onboarding";
+
+/// The event the onboarding wizard's view arrives on when it changed
+/// outside its own commands: the engine look, and the first check finished.
+pub const ONBOARDING_EVENT: &str = "agentsweep://onboarding";
 
 /// The event the popover's view arrives on.
 pub const VIEW_EVENT: &str = "agentsweep://view";
@@ -698,42 +706,229 @@ fn onboarding_choose(shell: tauri::State<'_, Shell>, posture: String) -> Result<
     }))
 }
 
+/// Renders the wizard's view in the onboarding window, for a change that
+/// did not come from one of its own commands.
+fn show_wizard(app: &AppHandle) {
+    let view = app
+        .state::<Shell>()
+        .onboarding
+        .lock()
+        .expect("the wizard is not poisoned")
+        .as_ref()
+        .map_or(Value::Null, Wizard::to_value);
+    if !view.is_null() {
+        let _ = app.emit(ONBOARDING_EVENT, view);
+    }
+}
+
+/// Closes the wizard: it is done, and the app is a menu bar app again.
+fn close_wizard(app: &AppHandle) {
+    *app.state::<Shell>()
+        .onboarding
+        .lock()
+        .expect("the wizard is not poisoned") = None;
+    if let Some(window) = app.get_webview_window(ONBOARDING) {
+        let _ = window.hide();
+    }
+    present(app, presence(false));
+}
+
 /// Next in the wizard. On screen 5 it registers the daemon and the login
-/// item, holds the answers until the daemon answers, and closes the wizard;
-/// the view is then nothing.
+/// item once, asks for notification permission, holds the answers until the
+/// daemon answers, and moves to screen 6; on screen 6, once the first check
+/// finished, it closes the wizard and the view is then nothing.
 #[tauri::command]
 async fn onboarding_next(app: AppHandle) -> Result<Value, String> {
-    let (step, answers) = {
+    let step = {
         let shell = app.state::<Shell>();
         let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
         let Some(wizard) = held.as_mut() else {
             return Ok(Value::Null);
         };
         match wizard.forward() {
-            Step::Moved => return Ok(wizard.to_value()),
-            step => (step, wizard.answers()),
+            Step::Register => Step::Register,
+            Step::Done => Step::Done,
+            Step::Moved | Step::ConfirmOllama | Step::Waiting => return Ok(wizard.to_value()),
         }
     };
-    debug_assert_eq!(step, Step::Register);
-    let services = Arc::clone(&app.state::<Shell>().services);
-    let launched = tauri::async_runtime::spawn_blocking(move || supervision::register(&*services))
-        .await
-        .map_err(|error| format!("AgentSweep could not register its background item: {error}"))?;
-    for failure in &launched.failures {
+    if step == Step::Done {
+        close_wizard(&app);
+        return Ok(Value::Null);
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let shell = handle.state::<Shell>();
+        let launched = {
+            let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
+            let mut handover = shell
+                .handover
+                .lock()
+                .expect("the hand-over is not poisoned");
+            held.as_mut().and_then(|wizard| {
+                wizard.leave_background(&*shell.services, &mut handover, Timestamp::now())
+            })
+        };
+        for failure in launched.iter().flat_map(|launched| &launched.failures) {
+            eprintln!("agentsweep-menubar: {failure}");
+        }
+        if let Some(notifications) = handle.try_state::<Notifications>() {
+            notifications.ask_permission_now();
+        }
+    })
+    .await
+    .map_err(|error| format!("AgentSweep could not register its background item: {error}"))?;
+    // A daemon that already answers, as after a reinstall, takes the
+    // answers now rather than at its next Health.
+    let handle = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || hand_over(&handle)).await;
+    Ok(onboarding(app.state::<Shell>()))
+}
+
+/// A choice on screen 4: `apple`, `ollama` or `off`. With `confirmed`, the
+/// one confirmation Ollama needs was given.
+#[tauri::command]
+fn onboarding_engine(
+    shell: tauri::State<'_, Shell>,
+    engine: String,
+    confirmed: Option<bool>,
+) -> Result<Value, String> {
+    let engine = JudgementEngine::parse(&engine)
+        .ok_or_else(|| "That is not a choice AgentSweep knows.".to_string())?;
+    let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
+    let Some(wizard) = held.as_mut() else {
+        return Ok(Value::Null);
+    };
+    wizard.choose_engine(engine)?;
+    if confirmed == Some(true) {
+        wizard.confirm_ollama();
+    }
+    Ok(wizard.to_value())
+}
+
+/// "I agree, turn it on" on the Claude consent screen in the wizard: the
+/// typed key is held in memory for the daemon, which takes it once it
+/// answers; the typed text is wiped before this returns.
+#[tauri::command]
+fn onboarding_claude(shell: tauri::State<'_, Shell>, key: Option<String>) -> Result<Value, String> {
+    let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
+    let Some(wizard) = held.as_mut() else {
+        if let Some(typed) = key {
+            ai_check::wipe(typed);
+        }
+        return Ok(Value::Null);
+    };
+    match key {
+        Some(typed) => {
+            let key = ClaudeKey::new(&typed);
+            ai_check::wipe(typed);
+            let key = key.map_err(|_| {
+                "Nothing was changed: that does not look like a Claude API key.".to_string()
+            })?;
+            shell
+                .handover
+                .lock()
+                .expect("the hand-over is not poisoned")
+                .hold_key(key);
+        }
+        None => return Err("Nothing was changed: a Claude API key is needed.".to_string()),
+    }
+    wizard.agree_to_claude();
+    Ok(wizard.to_value())
+}
+
+/// A toggle on screen 5: `rule_feed` or `update_check`.
+#[tauri::command]
+fn onboarding_toggle(
+    shell: tauri::State<'_, Shell>,
+    key: String,
+    on: bool,
+) -> Result<Value, String> {
+    let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
+    let Some(wizard) = held.as_mut() else {
+        return Ok(Value::Null);
+    };
+    wizard.toggle(&key, on)?;
+    Ok(wizard.to_value())
+}
+
+/// The button of screen 5's protected-location line: registers the daemon
+/// and the login item once, and sends check-now once, as soon as the daemon
+/// answers and its first Full Scan has found the projects that Need
+/// Permission, so the operating system's prompt appears while the user is
+/// looking.
+#[tauri::command]
+fn onboarding_look_there(app: AppHandle) -> Value {
+    let shell = app.state::<Shell>();
+    let launched = {
+        let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
+        let Some(wizard) = held.as_mut() else {
+            return Value::Null;
+        };
+        if !wizard.look_there() {
+            return wizard.to_value();
+        }
+        let now = Timestamp::now();
+        let launched = wizard.register_once(&*shell.services, now);
+        (wizard.to_value(), launched, now)
+    };
+    let (view, launched, since) = launched;
+    for failure in launched.iter().flat_map(|launched| &launched.failures) {
         eprintln!("agentsweep-menubar: {failure}");
     }
-    let shell = app.state::<Shell>();
-    shell
-        .handover
-        .lock()
-        .expect("the hand-over is not poisoned")
-        .hold(answers);
-    *shell.onboarding.lock().expect("the wizard is not poisoned") = None;
-    if let Some(window) = app.get_webview_window(ONBOARDING) {
-        let _ = window.hide();
+    let asking = Arc::clone(&shell.asking);
+    let _ = std::thread::Builder::new()
+        .name("agentsweep-check-now".to_string())
+        .spawn(move || check_now_when_ready(&asking, since));
+    view
+}
+
+/// Waits, for five minutes at most, until the daemon answers and a Full
+/// Scan that finished after `since` has pooled the projects, then sends
+/// check-now once.
+fn check_now_when_ready(asking: &Asking, since: Timestamp) {
+    for _ in 0..300 {
+        if let Ok(status) = asking.status()
+            && !status.health.scanning
+            && status
+                .scan
+                .as_ref()
+                .is_some_and(|scan| scan.finished_at() >= since)
+        {
+            if let Err(error) = asking.check_now() {
+                eprintln!("agentsweep-menubar: check-now was not taken: {error}");
+            }
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
-    present(&app, presence(false));
-    Ok(Value::Null)
+    eprintln!("agentsweep-menubar: the daemon did not answer, so check-now was not sent");
+}
+
+/// Screen 6 asks the daemon for its status after `event` while it waits for
+/// the first check, and shows what it found.
+fn first_check(app: &AppHandle, event: &StateEvent) {
+    let shell = app.state::<Shell>();
+    let wants = shell
+        .onboarding
+        .lock()
+        .expect("the wizard is not poisoned")
+        .as_ref()
+        .is_some_and(|wizard| wizard.wants_status(event));
+    if !wants {
+        return;
+    }
+    let Ok(status) = shell.asking.status() else {
+        return;
+    };
+    let done = shell
+        .onboarding
+        .lock()
+        .expect("the wizard is not poisoned")
+        .as_mut()
+        .is_some_and(|wizard| wizard.take_status(&status));
+    if done {
+        show_wizard(app);
+    }
 }
 
 /// Hands the answers held since onboarding to the daemon, now that it
@@ -1032,6 +1227,7 @@ fn take(app: &AppHandle, update: Update) {
             if matches!(event, StateEvent::HealthChanged { .. }) {
                 hand_over(app);
             }
+            first_check(app, &event);
             let follow = app
                 .state::<Shell>()
                 .frame
@@ -1188,7 +1384,11 @@ pub fn run(start: Start) {
             onboarding_choose,
             onboarding_next,
             uninstall_offer,
-            uninstall_agentsweep
+            uninstall_agentsweep,
+            onboarding_engine,
+            onboarding_claude,
+            onboarding_toggle,
+            onboarding_look_there
         ])
         .setup(move |app| {
             // Menu bar only while idle: no Dock icon and no Cmd-Tab entry
@@ -1291,6 +1491,24 @@ pub fn run(start: Start) {
                             .lock()
                             .expect("the wizard is not poisoned") = Some(Wizard::new(inventory));
                         show_onboarding(&handle);
+                        // Screen 4 preselects from the engine answer: the
+                        // daemon's, when one already answers, else the same
+                        // look taken on this Mac.
+                        let look = handle
+                            .state::<Shell>()
+                            .asking
+                            .engine()
+                            .unwrap_or_else(|_| onboarding::look_here());
+                        if let Some(wizard) = handle
+                            .state::<Shell>()
+                            .onboarding
+                            .lock()
+                            .expect("the wizard is not poisoned")
+                            .as_mut()
+                        {
+                            wizard.look(look);
+                        }
+                        show_wizard(&handle);
                     }
                     let launched = supervision::on_launch(&*services);
                     for failure in &launched.failures {

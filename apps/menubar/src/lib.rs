@@ -63,6 +63,9 @@
 //!   raises it, behind a Notifier seam, and the window it opens after.
 //! - [`verdict`]: how AI Judgement shows: the AI block of a malicious
 //!   Verdict, "checked by <engine>", the queue progress and the cap line.
+//! - [`updater`]: the app update check at launch and once a day, the
+//!   update downloaded and verified in the background, its line in the
+//!   popover and its install on the next quit.
 //! - [`window`]: when the app shows in the Dock and how it starts.
 //! - [`placement`]: where the popover and the Findings window open.
 //! - [`glyph`]: the menu bar icon in its three states.
@@ -100,6 +103,7 @@ pub mod reveal;
 pub mod settings_pane;
 pub mod supervision;
 pub mod uninstall;
+pub mod updater;
 pub mod verdict;
 pub mod window;
 pub mod wording;

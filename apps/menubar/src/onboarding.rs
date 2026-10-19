@@ -778,6 +778,14 @@ impl Handover {
         self.key = Some(key);
     }
 
+    /// The update toggle of screen 5 while it waits for a daemon, so the
+    /// app's update check follows it before the daemon knows it.
+    pub fn update_check(&self) -> Option<bool> {
+        self.settings
+            .as_ref()
+            .and_then(|change| change.update_check)
+    }
+
     /// True while answers wait for a daemon.
     pub fn is_pending(&self) -> bool {
         self.settings.is_some() || self.key.is_some() || self.engine.is_some()
@@ -1250,6 +1258,9 @@ mod tests {
         assert!(handover.deliver(&link).is_none());
         assert!(handover.is_pending());
         assert!(link.settings.borrow().is_empty());
+        // The app's update check follows the held "off" until a daemon
+        // takes it.
+        assert_eq!(handover.update_check(), Some(false));
 
         *link.answering.borrow_mut() = true;
         let state = handover
@@ -1258,6 +1269,7 @@ mod tests {
         assert_eq!(state.posture, Posture::Developer);
         assert!(!state.rule_feed);
         assert!(!handover.is_pending());
+        assert_eq!(handover.update_check(), None);
         assert!(handover.deliver(&link).is_none());
         let settings = link.settings.borrow();
         assert_eq!(settings.len(), 1);

@@ -230,6 +230,15 @@ impl Notifications {
         }
     }
 
+    /// Asks the operating system for permission to notify now, prompting
+    /// the user the first time: onboarding screen 5 does, so the prompt
+    /// comes while the user is looking. The answer is kept, so the first
+    /// change to say does not ask again. Answers whether the app may.
+    pub fn ask_permission_now(&self) -> bool {
+        let mut permission = self.raising.lock().expect("the raise is not poisoned");
+        *permission.get_or_insert_with(|| self.notifier.ask_permission())
+    }
+
     /// Asks the daemon for every un-notified change, raises each once and
     /// confirms what was raised. The permission is asked when there is
     /// first something to say; while it is refused nothing is raised and
@@ -289,6 +298,8 @@ impl Notifications {
 mod tests {
     use super::*;
 
+    use std::sync::Arc;
+
     use agentsweep_core::item::{ItemId, Kind};
 
     fn change(class: NotificationClass) -> Unnotified {
@@ -339,6 +350,27 @@ mod tests {
                 .body
                 .ends_with("AgentSweep could not tell whether Claude Code is running. If it is open, restart it so it picks up the change."),
         );
+    }
+
+    #[test]
+    fn the_permission_asked_on_onboarding_screen_five_is_asked_once_and_kept() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Counting(Arc<AtomicUsize>);
+        impl Notifier for Counting {
+            fn ask_permission(&self) -> bool {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                true
+            }
+            fn show(&self, _: &Notice) -> bool {
+                true
+            }
+        }
+        let asked = Arc::new(AtomicUsize::new(0));
+        let notifications = Notifications::new(Box::new(Counting(Arc::clone(&asked))));
+        assert!(notifications.ask_permission_now());
+        assert!(notifications.ask_permission_now());
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
     }
 
     #[test]

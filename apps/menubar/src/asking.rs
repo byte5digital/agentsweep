@@ -263,6 +263,13 @@ impl Asking {
         self.with(false, Client::acknowledge_chain_broken)
     }
 
+    /// Asks for the first reads into the protected locations that Need
+    /// Permission (spec section 9.7); true when the daemon started them.
+    /// Asked once only, so the operating system's prompt is asked for once.
+    pub fn check_now(&self) -> Result<bool, ClientError> {
+        self.with(false, Client::check_now)
+    }
+
     /// Carries out one action and renders the answer for the window.
     pub fn act(&self, request: &ActionRequest) -> Value {
         match self.with(false, |client| request.send(client)) {

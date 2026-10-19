@@ -390,6 +390,17 @@ dialog {
   color: var(--muted);
 }
 
+/* The Gate on the Overview: a line per project, with no button. */
+#overview-gate {
+  margin: 0 0 12px;
+}
+
+#overview-gate .gate-off {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0;
+}
+
 #overview-scan {
   margin-top: 12px;
 }

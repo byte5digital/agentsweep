@@ -630,6 +630,21 @@ function renderOverview(overview) {
   $("scan-line").textContent = overview.scan.running ? overview.scan.progress : scanAnswer;
   $("overview-summary").textContent = overview.summary ?? "";
   $("overview-summary").hidden = overview.summary === null;
+  renderGateLines(overview.gate);
+}
+
+// The Gate on the Overview (spec sections 7.6, 8.1 and 8.6): the Health
+// lines the sentence does not say, and "Gate off in this project" for each
+// project that switched the check off. Shown, never fought: no button.
+function renderGateLines(gate) {
+  const lines = gate.lines.map((line) => el("p", "muted", line));
+  const projects = gate.projects.map((entry) => {
+    const row = el("p", "gate-off");
+    row.append(el("span", "project", entry.project), el("span", "muted", entry.line));
+    return row;
+  });
+  $("overview-gate").replaceChildren(...lines, ...projects);
+  $("overview-gate").hidden = lines.length + projects.length === 0;
 }
 
 // The record the Activity pane was asked to show, or null: the integrity
@@ -901,6 +916,34 @@ $("settings-not-protected")
   .querySelector(".link")
   .addEventListener("click", () => invoke("open_not_protected").catch((why) => settingsAnswer(String(why))));
 
+// The Gate switch in Background (spec section 8.10). The daemon writes and
+// removes the entries; the switch shows where the daemon says it stands.
+function renderGateSwitch(gate) {
+  const label = el("label", "toggle");
+  const input = el("input");
+  input.type = "checkbox";
+  input.checked = gate.on;
+  input.disabled = !gate.available;
+  input.addEventListener("change", async () => {
+    input.disabled = true;
+    try {
+      settingsAnswer(await invoke("switch_gate", { on: input.checked }));
+    } catch (why) {
+      settingsAnswer(String(why));
+    }
+    if (view) {
+      render(view);
+    }
+  });
+  label.append(input, el("span", "", gate.label));
+  const parts = [label, el("p", "muted", gate.subtitle)];
+  for (const location of gate.locations ?? []) {
+    parts.push(el("p", "id", location));
+  }
+  $("settings-gate").replaceChildren(...parts);
+  $("settings-gate").hidden = false;
+}
+
 function render(list) {
   view = list;
   takePosture(list.posture);
@@ -909,6 +952,7 @@ function render(list) {
   renderOverview(list.overview);
   renderSettings(list.settings);
   renderAiCheck(list.settings.aiCheck);
+  renderGateSwitch(list.settings.gate);
   actionsWait = list.actionsWait;
   $("actions-wait").hidden = actionsWait === null;
   $("actions-wait").textContent = actionsWait === null ? "" : actionsWait;

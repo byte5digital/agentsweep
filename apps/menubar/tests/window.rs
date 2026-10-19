@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use agentsweep_core::finding::{Category, FindingState};
+use agentsweep_core::gate_registration::GateCommand;
 use agentsweep_core::item::Kind;
 use agentsweep_core::keychain::MemoryKeySource;
 use agentsweep_core::pack::Manifest;
@@ -37,6 +38,7 @@ use agentsweep_menubar::banner::{Banner, Button};
 use agentsweep_menubar::findings::{Findings, Follow};
 use agentsweep_menubar::folder::result_view;
 use agentsweep_menubar::frame::{Frame, Pane};
+use agentsweep_menubar::gate;
 use agentsweep_menubar::integrity;
 use agentsweep_menubar::link::{Link, Socket, Update};
 use agentsweep_menubar::notifications::{
@@ -49,6 +51,10 @@ use agentsweep_menubar::wording::PROJECT_LINE;
 use serde_json::Value;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
+
+/// Where the bundle puts the command line interface the Gate's entries name.
+/// Nothing runs it, and it sits outside every temporary directory.
+const GATE_CLI: &str = "/Applications/AgentSweep.app/Contents/MacOS/agentsweep";
 
 /// A Finder that records what it was asked to show and opens nothing.
 #[derive(Default)]
@@ -106,6 +112,13 @@ impl Sandbox {
     }
 
     fn start(&self) -> Background {
+        // The window follows the Scans this test causes; a Gate registration
+        // write would start a Change Scan of its own.
+        self.start_with_gate(None)
+    }
+
+    /// A daemon whose Full Scans register the Gate under `gate`, or none.
+    fn start_with_gate(&self, gate: Option<GateCommand>) -> Background {
         let options = Options {
             data_dir: DataDirectory::at(self.root.join("data")),
             socket: self.socket.clone(),
@@ -119,9 +132,7 @@ impl Sandbox {
             Box::new(MemoryKeySource::empty()),
             Tuning {
                 watch: Timings::of(Duration::from_millis(100), Duration::from_millis(500)),
-                // The window follows the Scans this test causes; a Gate
-                // registration write would start a Change Scan of its own.
-                gate: None,
+                gate,
                 ..Tuning::default()
             },
         )
@@ -1311,4 +1322,58 @@ fn the_key_missing_banner_answers_through_the_daemon_and_opens_activity_at_the_r
     let health = asking.status().expect("a status").health;
     assert!(!health.state_was_reset(), "{:?}", health.rung());
     assert_eq!(View::of(&health).banner, None);
+}
+
+/// Spec sections 7.6 and 8.10: the Settings switch **Stop the AI from using
+/// flagged items** sends the daemon's `gate-hooks` request, the pane follows
+/// the answer, and the daemon takes the Gate's entries out of the temporary
+/// Agent settings files and puts them back. The user's own settings stay as
+/// they were, and the app writes nothing into an Agent's files itself.
+#[test]
+fn the_gate_switch_takes_the_entries_away_and_back_through_the_daemon() {
+    let sandbox = Sandbox::new("gate");
+    std::fs::create_dir_all(sandbox.home.join(".codex")).expect("an installed Codex");
+    let _daemon = sandbox.start_with_gate(Some(GateCommand::at(GATE_CLI)));
+    let claude = sandbox.home.join(".claude/settings.json");
+    let codex = sandbox.home.join(".codex/hooks.json");
+    let holds = |path: &Path| {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .contains(GATE_CLI)
+    };
+    assert!(
+        holds(&claude) && holds(&codex),
+        "the first Full Scan registers the Gate with both Agents"
+    );
+
+    let asking = sandbox.asking();
+    let mut frame = Frame::new();
+    frame.load(&asking.status().expect("a status"));
+    frame.settings(&asking.settings().expect("the settings"));
+    assert_eq!(frame.settings_pane()["gate"]["on"], true);
+    assert_eq!(frame.settings_pane()["gate"]["label"], gate::SWITCH_LABEL);
+
+    let off = gate::switch(&asking, false).expect("switched off");
+    assert!(!off);
+    assert_eq!(frame.gate_hooks(off), Follow::Render);
+    assert_eq!(frame.settings_pane()["gate"]["on"], false);
+    assert!(!holds(&claude), "the entries left Claude Code's settings");
+    assert!(!holds(&codex), "the entries left Codex's hooks file");
+    let users = std::fs::read_to_string(&claude).expect("the user's settings");
+    assert!(users.contains("bypassPermissions"), "{users}");
+    assert!(users.contains("\"model\": \"opus\""), "{users}");
+
+    let on = gate::switch(&asking, true).expect("switched on");
+    assert!(on);
+    assert_eq!(frame.gate_hooks(on), Follow::Render);
+    assert_eq!(frame.settings_pane()["gate"]["on"], true);
+    assert!(
+        holds(&claude),
+        "the entries returned to Claude Code's settings"
+    );
+    assert!(holds(&codex), "the entries returned to Codex's hooks file");
+    assert!(
+        asking.status().expect("a status").health.gate_hooks,
+        "the daemon says the switch is on"
+    );
 }

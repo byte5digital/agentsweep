@@ -32,6 +32,7 @@ use crate::ai_check;
 use crate::banner::Banner;
 use crate::developer::{ambiguous_card, offers_reveal};
 use crate::findings::{Findings, Follow};
+use crate::gate;
 use crate::overview::{self, OverviewView};
 use crate::popover::View;
 use crate::quarantine;
@@ -255,6 +256,15 @@ impl Frame {
             self.rules_folder.as_deref(),
         );
         let state = self.engine_state();
+        pane["gate"] = gate::switch_view(
+            &self.health,
+            &self
+                .choices
+                .as_ref()
+                .map(|choices| choices.config_dirs.clone())
+                .unwrap_or_default(),
+            self.posture,
+        );
         pane["aiCheck"] = ai_check::view(
             state.as_ref(),
             self.posture,
@@ -265,6 +275,18 @@ impl Frame {
             },
         );
         pane
+    }
+
+    /// Takes the daemon's answer to the Gate switch: where the switch stands
+    /// now, which the Settings pane shows.
+    pub fn gate_hooks(&mut self, on: bool) -> Follow {
+        match self.health.gate_hooks == on {
+            true => Follow::Nothing,
+            false => {
+                self.health.gate_hooks = on;
+                Follow::Render
+            }
+        }
     }
 
     /// No daemon answers: see [`Findings::off`]. The Overview drops what it

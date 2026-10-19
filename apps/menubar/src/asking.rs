@@ -187,6 +187,13 @@ impl Asking {
         self.with(true, |client| client.change_settings(change.clone()))
     }
 
+    /// Turns the Gate switch on or off and answers where it stands
+    /// afterwards. Asking twice sets the same value again, which changes
+    /// nothing the second time, so it may be.
+    pub fn set_gate_hooks(&self, enabled: bool) -> Result<bool, ClientError> {
+        self.with(true, |client| client.set_gate_hooks(enabled))
+    }
+
     /// Where the AI Judgement choices stand, with whether Ollama runs and
     /// whether Apple's on-device model is available. It only reads.
     pub fn engine(&self) -> Result<EngineState, ClientError> {

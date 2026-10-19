@@ -37,6 +37,9 @@
 //!   app never reads it (spec section 8.5).
 //! - `change_settings`: moves one choice of the Settings pane through the
 //!   daemon's `settings` request; the pane follows the answer.
+//! - `switch_gate`: **Stop the AI from using flagged items**, the daemon's
+//!   `gate-hooks` request ([`crate::gate`]); the daemon writes or removes
+//!   the entries and the pane follows its answer.
 //! - `ai_check_look`, `change_engine`, `turn_on_claude`, `remove_claude_key`
 //!   and `preview_request`: the AI check in the Settings pane
 //!   ([`crate::ai_check`]). The Claude API key passes through
@@ -106,6 +109,7 @@ use crate::developer::offers_reveal;
 use crate::findings::Follow;
 use crate::folder;
 use crate::frame::Frame;
+use crate::gate;
 use crate::glyph::{self, Mark};
 use crate::how_to::{self, SystemOpener};
 use crate::integrity;
@@ -562,6 +566,25 @@ async fn change_settings(app: AppHandle, change: Value) -> Result<String, String
         .lock()
         .expect("the frame is not poisoned")
         .settings(&answer);
+    if follow != Follow::Nothing {
+        render(&app);
+    }
+    Ok(settings_pane::RECORDED.to_string())
+}
+
+/// Turns the Gate switch on or off through the daemon, which takes the
+/// entries away from every Agent or registers them again; the pane follows
+/// the answer.
+#[tauri::command]
+async fn switch_gate(app: AppHandle, on: bool) -> Result<String, String> {
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    let answer = off_main(move || gate::switch(&asking, on)).await?;
+    let follow = app
+        .state::<Shell>()
+        .frame
+        .lock()
+        .expect("the frame is not poisoned")
+        .gate_hooks(answer);
     if follow != Follow::Nothing {
         render(&app);
     }
@@ -1369,6 +1392,7 @@ pub fn run(start: Start) {
             copy_for_admin,
             open_the_file,
             change_settings,
+            switch_gate,
             ai_check_look,
             change_engine,
             turn_on_claude,

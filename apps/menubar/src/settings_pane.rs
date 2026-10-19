@@ -285,7 +285,7 @@ pub fn change_of(asked: &Value) -> Result<SettingsChange, String> {
 pub const RECORDED: &str = "Saved.";
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use agentsweep_core::settings::{CloudCaps, JudgementEngine};

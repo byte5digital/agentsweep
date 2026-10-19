@@ -130,6 +130,8 @@ dependencies = [
 name = "agentsweep-menubar"
 version = "0.1.0"
 dependencies = [
+ "agentsweep-adapter-claude-code",
+ "agentsweep-adapter-codex",
  "agentsweep-core",
  "agentsweep-daemon",
  "agentsweep-ipc",

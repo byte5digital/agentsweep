@@ -28,6 +28,11 @@ agentsweep-core.workspace = true
 # The client half of the vocabulary. The app is a peer of the daemon like the
 # in-bundle command line interface, with the role `app`.
 agentsweep-ipc.workspace = true
+# The onboarding Inventory (spec section 6.8): the app calls each Agent
+# adapter's `detect` and `projects` itself, on a confined Host, and never
+# `enumerate`. Nothing else of the adapters is used by the app.
+agentsweep-adapter-claude-code.workspace = true
+agentsweep-adapter-codex.workspace = true
 serde_json = "1.0.151"
 # The shell (spec section 6.1): Tauri 2.11.5, the last 2.x, with the tray.
 tauri = { version = "=2.11.5", features = ["tray-icon"] }

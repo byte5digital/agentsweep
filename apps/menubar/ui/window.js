@@ -256,9 +256,12 @@ function renderSimpleCard(card) {
     });
     actions.append(copy);
   }
+  const howTo = document.createDocumentFragment();
+  addHowTo(card, howTo, actions);
   if (actions.childElementCount > 0) {
     node.append(actions);
   }
+  node.append(howTo);
   node.append(renderToggle(card.id));
   if (detailsOpen.has(card.id)) {
     node.append(renderTechnical(card));
@@ -320,10 +323,68 @@ function renderDeveloperCard(card) {
     });
     actions.append(reveal);
   }
+  const howTo = document.createDocumentFragment();
+  addHowTo(card, howTo, actions);
   if (actions.childElementCount > 0) {
     node.append(actions);
   }
+  node.append(howTo);
   return node;
+}
+
+// The Exposure Findings whose how-to is open, by id.
+const howToOpen = new Set();
+
+// Show me how to fix this on an Exposure, put first among its buttons, and
+// when open the how-to under them: the steps the Rule Pack carries, the file
+// by the name or path the app chose for the Posture, and Open the file,
+// which names only the Finding (spec section 8.5).
+function addHowTo(card, node, actions) {
+  const howTo = card.howTo;
+  if (!howTo) {
+    return;
+  }
+  const open = howToOpen.has(card.id);
+  const show = el("button", "", howTo.label);
+  show.type = "button";
+  show.setAttribute("aria-expanded", String(open));
+  show.addEventListener("click", () => {
+    if (howToOpen.has(card.id)) {
+      howToOpen.delete(card.id);
+    } else {
+      howToOpen.add(card.id);
+    }
+    render(view);
+  });
+  actions.prepend(show);
+  if (!open) {
+    return;
+  }
+  const section = el("section", "how-to");
+  section.append(el("p", "", howTo.steps));
+  section.append(el("p", "muted", `The file: ${howTo.file}`));
+  const file = el("button", "", howTo.open);
+  file.type = "button";
+  file.addEventListener("click", async () => {
+    try {
+      showResult(
+        {
+          message: await invoke("open_the_file", { target: card.id }),
+          lines: [],
+          details: [],
+          choices: [],
+          conflict: false,
+        },
+        card,
+      );
+    } catch (why) {
+      showFailure(why, card);
+    }
+  });
+  const buttons = el("div", "actions");
+  buttons.append(file);
+  section.append(buttons);
+  node.append(section);
 }
 
 // The Show technical details toggle of one Finding or Ambiguous Item.

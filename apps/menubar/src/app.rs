@@ -26,6 +26,9 @@
 //!   in place, and its Restore switches the line back on.
 //! - `copy_for_admin`: puts the message about a Managed Finding for whoever
 //!   administers the Mac on the clipboard (spec section 8.4).
+//! - `open_the_file`: **Open the file** in an Exposure's how-to, which asks
+//!   macOS to open the file the Finding concerns in the default editor; the
+//!   app never reads it (spec section 8.5).
 //! - `change_settings`: moves one choice of the Settings pane through the
 //!   daemon's `settings` request; the pane follows the answer.
 //! - `install_cli`: **Install command line tool**, the link in
@@ -71,6 +74,7 @@ use crate::findings::Follow;
 use crate::folder;
 use crate::frame::Frame;
 use crate::glyph::{self, Mark};
+use crate::how_to::{self, SystemOpener};
 use crate::link::{Link, Socket, Update};
 use crate::placement;
 use crate::popover::View;
@@ -263,6 +267,28 @@ fn copy_for_admin(shell: tauri::State<'_, Shell>, target: String) -> Result<Stri
         true => Ok("A message for your admin is on the clipboard.".to_string()),
         false => Err("The message could not be put on the clipboard.".to_string()),
     }
+}
+
+/// **Open the file** in an Exposure's how-to: the file the daemon named
+/// beside the Finding opens in the user's default editor. The window names
+/// only the Finding, never a path, and the app never reads the file.
+#[tauri::command]
+async fn open_the_file(app: AppHandle, target: String) -> Result<String, String> {
+    let (finding, posture) = {
+        let shell = app.state::<Shell>();
+        let frame = shell.frame.lock().expect("the frame is not poisoned");
+        let finding = frame
+            .findings()
+            .get(&target)
+            .cloned()
+            .ok_or_else(|| "That Finding is no longer listed.".to_string())?;
+        (finding, frame.posture())
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        how_to::open_the_file(&finding, posture, &SystemOpener)
+    })
+    .await
+    .map_err(|error| format!("The file could not be opened: {error}"))?
 }
 
 /// **Reveal in Finder** on a quarantined Item, in the Developer Posture: the
@@ -725,6 +751,7 @@ pub fn run() {
             purge,
             untrust,
             copy_for_admin,
+            open_the_file,
             change_settings,
             install_cli,
             open_full_disk_access,

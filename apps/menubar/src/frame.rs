@@ -336,8 +336,9 @@ impl Frame {
 
     /// Applies one state event: a moved choice may change the Posture, a
     /// Health or an `overview-changed` event moves the Overview, an
-    /// `activity` event grows the Activity, and every other event goes to
-    /// the list.
+    /// `activity` event grows the Activity, a `judgement-progress` event
+    /// moves the AI check's progress line, and every other event goes to the
+    /// list.
     pub fn apply(&mut self, event: &StateEvent) -> Follow {
         match event {
             StateEvent::SettingsChanged { settings } => self.settings(settings),

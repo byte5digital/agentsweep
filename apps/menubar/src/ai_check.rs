@@ -517,11 +517,12 @@ pub fn preview_view(preview: &RequestPreview) -> Value {
             tokens,
             budget,
             windowed,
-            ..
+            nonce,
         } => json!({
             "about": about,
             "system": system,
             "user": user,
+            "nonce": nonce,
             "lines": [
                 "Passwords, tokens and other secrets show only as <redacted:type:len>.",
                 "The marker around the item is new for every request.",
@@ -536,6 +537,7 @@ pub fn preview_view(preview: &RequestPreview) -> Value {
             "about": about,
             "system": Value::Null,
             "user": Value::Null,
+            "nonce": Value::Null,
             "lines": [format!(
                 "Too large to send: about {tokens} tokens, over the limit of {budget}. Nothing \
                  would be sent about it."

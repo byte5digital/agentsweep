@@ -15,6 +15,7 @@
 pub mod bad;
 pub mod benign;
 pub mod corpus;
+pub mod eval;
 pub mod fixture;
 pub mod iocs;
 pub mod pack_release;

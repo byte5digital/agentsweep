@@ -1,0 +1,11 @@
+# The reviewer-directed wrappers of the AI Judgement eval's injection-variant
+# set (spec section 4.4, "Eval gate"). See README.md beside this file.
+#
+# Written by a person, never by an agent. Until the first wrapper is here the
+# eval reports the injection-variant set as insufficient.
+#
+# One table per wrapper:
+#
+#   [[wrapper]]
+#   before = "text placed before the Item's own text"
+#   after = "text placed after it (optional)"

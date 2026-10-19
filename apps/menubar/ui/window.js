@@ -82,6 +82,9 @@ let answer = null;
 
 // The title a Finding shows in the Posture in force.
 function titleOf(card) {
+  if (card.trustedTitle) {
+    return card.trustedTitle;
+  }
   return isDeveloper() ? `${card.kind} · ${card.name}` : card.simple.title;
 }
 
@@ -128,6 +131,7 @@ async function run(action, card) {
     const asked = {
       trust: card?.trustConfirm,
       "restore-trust": card?.restoreConfirm,
+      purge: card?.purgeConfirm,
     }[action.confirm];
     if (asked && !(await confirmWith(asked))) {
       return;
@@ -373,14 +377,15 @@ function renderFinding(card) {
   return isDeveloper() ? renderDeveloperCard(card) : renderSimpleCard(card);
 }
 
-// The two panes that list Findings: a list beside the selected Finding.
-const FINDING_PANES = ["threats", "exposures"];
+// The panes that list a list beside the selected entry: the two Finding
+// panes and the Quarantine pane.
+const FINDING_PANES = ["threats", "exposures", "quarantine"];
 
 // The view the app sent last, rendered again when the selection moves.
 let view = null;
 // The pane in sight, and the Finding selected in each Finding pane.
 let selectedPane = "overview";
-const selectedFinding = { threats: null, exposures: null };
+const selectedFinding = { threats: null, exposures: null, quarantine: null };
 
 function pane(id) {
   return document.querySelector(`.pane[data-pane="${id}"]`);
@@ -438,9 +443,55 @@ function renderRow(id, card) {
   return row;
 }
 
-// The pane a Finding is listed in.
+// The pane a Finding is listed in: what is stopped or trusted is in the
+// Quarantine pane.
 function paneOf(card) {
+  if (card.state === "stopped" || card.state === "trusted") {
+    return "quarantine";
+  }
   return card.category === "exposure" ? "exposures" : "threats";
+}
+
+// One entry of the Quarantine pane: the Finding's card with, under its
+// chips, who stopped it and when, the withdrawn Rule line, the fixed version
+// line and, in the Developer Posture only, the Receipt id.
+function renderQuarantineEntry(card) {
+  const node = renderFinding(card);
+  const lines = el("div", "quarantine-lines");
+  const stopped = card.stopped;
+  lines.append(el("p", "", stopped.at ? `${stopped.line} on ${when(stopped.at)}.` : `${stopped.line}.`));
+  if (card.withdrawn) {
+    lines.append(el("p", "withdrawn", card.withdrawn));
+  }
+  if (card.fixedLine) {
+    lines.append(el("p", "", card.fixedLine));
+  }
+  if (isDeveloper() && card.receiptId) {
+    lines.append(el("p", "id", `Receipt ${card.receiptId}`));
+  }
+  node.querySelector(".chips").after(lines);
+  return node;
+}
+
+// The Trusted section at the foot of the Quarantine pane, each with Stop
+// trusting this in both Postures. Its answer shows in the pane's detail.
+function renderTrusted(entries) {
+  const section = pane("quarantine").querySelector(".trusted");
+  section.hidden = entries.length === 0;
+  const rows = entries.map((entry) => {
+    const row = el("div", "trusted-entry");
+    row.setAttribute("role", "listitem");
+    row.append(el("span", "title", entry.title));
+    const button = el("button", "", entry.action.label);
+    button.type = "button";
+    button.dataset.action = entry.action.command;
+    button.addEventListener("click", () =>
+      run(entry.action, { id: entry.id, state: "trusted", trustedTitle: entry.title }),
+    );
+    row.append(button);
+    return row;
+  });
+  section.querySelector(".trusted-list").replaceChildren(...rows);
 }
 
 // The Finding selected in the pane in sight, if that pane lists Findings.
@@ -464,7 +515,7 @@ function renderFindingPane(id, cards, loaded) {
   const selected = cards.find((card) => card.id === selectedFinding[id]);
   const detail = [];
   if (selected) {
-    detail.push(renderFinding(selected));
+    detail.push(id === "quarantine" ? renderQuarantineEntry(selected) : renderFinding(selected));
   } else if (kept) {
     detail.push(el("p", "title", answer.title));
   }
@@ -743,6 +794,7 @@ function render(list) {
   for (const id of FINDING_PANES) {
     renderFindingPane(id, list.panes[id], list.loaded);
   }
+  renderTrusted(list.trusted ?? []);
   renderActivity(list.activity, list.loaded);
   renderAmbiguousList(list.ambiguous);
   disableActions();

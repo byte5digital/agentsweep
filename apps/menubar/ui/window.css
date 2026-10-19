@@ -493,3 +493,31 @@ dialog {
 .card.ambiguous {
   border-style: dashed;
 }
+
+/* The Quarantine pane: who stopped an entry and when, under its chips, and
+   the Trusted section at the foot of the pane. */
+.quarantine-lines p {
+  margin: 4px 0;
+}
+
+.quarantine-lines .withdrawn {
+  font-weight: 600;
+}
+
+.trusted {
+  margin-top: 24px;
+}
+
+.trusted h3 {
+  font-size: 13px;
+  margin: 0 0 4px;
+}
+
+.trusted-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--rule);
+}

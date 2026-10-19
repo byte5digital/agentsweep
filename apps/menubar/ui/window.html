@@ -84,8 +84,20 @@
               <div class="detail"></div>
             </div>
           </section>
+          <!-- Every Item in quarantine as a list beside the selected entry,
+               and the Items the user trusted at its foot (spec section 8.1). -->
           <section class="pane" data-pane="quarantine" hidden>
             <h2 class="pane-title"></h2>
+            <p class="muted empty" hidden>Nothing is in quarantine.</p>
+            <div class="split">
+              <div class="list" role="list"></div>
+              <div class="detail"></div>
+            </div>
+            <section class="trusted" hidden>
+              <h3>Trusted</h3>
+              <p class="muted">You decided these are safe. AgentSweep checks each again as soon as anything in it changes.</p>
+              <div class="trusted-list" role="list"></div>
+            </section>
           </section>
           <!-- The Event Log as the daemon worded it, newest first; the
                Developer Posture adds each record's technical columns (spec

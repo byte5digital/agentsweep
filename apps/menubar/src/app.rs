@@ -56,6 +56,14 @@
 //! - `agentsweep://findings`: the Findings window's view, whenever the list,
 //!   a count, the Overview or the Posture changes.
 //! - `agentsweep://folder`: the Folder Scan in hand: running, done or failed.
+//! - `agentsweep://pane`: the pane the Findings window turns to, by its id,
+//!   when a click on a notification brought the app to the front.
+//!
+//! Notifications (spec sections 6.7 and 8.7) are raised here through the
+//! notification plugin, on every launch and on every stream event that may
+//! carry one ([`crate::notifications`]). Launched with the windowless
+//! argument, the app starts into the menu bar with no window
+//! ([`crate::window::Start`]).
 
 use std::sync::{Arc, Mutex};
 
@@ -63,9 +71,10 @@ use serde_json::Value;
 use tauri::image::Image;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, Manager, Monitor, PhysicalPosition, Rect, WebviewWindow,
-    WindowEvent,
+    AppHandle, Emitter, LogicalPosition, Manager, Monitor, PhysicalPosition, Rect, RunEvent,
+    WebviewWindow, WindowEvent,
 };
+use tauri_plugin_notification::{NotificationExt, PermissionState};
 
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::settings::Posture;
@@ -81,6 +90,7 @@ use crate::glyph::{self, Mark};
 use crate::how_to::{self, SystemOpener};
 use crate::inventory::Inventory;
 use crate::link::{Link, Socket, Update};
+use crate::notifications::{Activation, Notice, Notifications, Notifier};
 use crate::onboarding::{Handover, Step, Wizard};
 use crate::placement;
 use crate::popover::View;
@@ -89,7 +99,7 @@ use crate::settings_pane::{
     self, FULL_DISK_ACCESS_PANES, FULL_DISK_ACCESS_UNOPENED, NOT_PROTECTED_LINK,
 };
 use crate::supervision::{self, Services, SystemServices, Unsupervised};
-use crate::window::{Presence, presence};
+use crate::window::{Presence, Start, presence};
 use crate::wording;
 
 /// The tray icon's id.
@@ -115,6 +125,83 @@ pub const FINDINGS_EVENT: &str = "agentsweep://findings";
 
 /// The event the Folder Scan in hand arrives on.
 pub const FOLDER_EVENT: &str = "agentsweep://folder";
+
+/// The event that turns the Findings window to a pane.
+pub const PANE_EVENT: &str = "agentsweep://pane";
+
+/// The notification plugin, which posts through the operating system.
+struct PluginNotifier(AppHandle);
+
+impl Notifier for PluginNotifier {
+    fn ask_permission(&self) -> bool {
+        matches!(
+            self.0.notification().request_permission(),
+            Ok(PermissionState::Granted)
+        )
+    }
+
+    fn show(&self, notice: &Notice) -> bool {
+        self.0
+            .notification()
+            .builder()
+            .title(&notice.title)
+            .body(&notice.body)
+            .show()
+            .is_ok()
+    }
+}
+
+/// Raises every un-notified change the daemon holds when `event` may carry
+/// one. The Health that opens every subscription is how this runs on
+/// launch. A daemon that does not answer leaves them for the next trigger.
+fn notify(app: &AppHandle, event: &StateEvent) {
+    let Some(notifications) = app.try_state::<Notifications>() else {
+        return;
+    };
+    let _ = notifications.follow(&app.state::<Shell>().asking, event);
+}
+
+/// The app came to the front: after a notification the Findings window
+/// opens on Needs your decision; an ordinary activation does nothing extra.
+fn activated(app: &AppHandle, activation: Activation) {
+    let Some(pane) = app
+        .try_state::<Notifications>()
+        .and_then(|notifications| notifications.activated(activation))
+    else {
+        return;
+    };
+    show_window(app);
+    let _ = app.emit(PANE_EVENT, pane.id());
+}
+
+/// Tells [`activated`] whenever the app becomes the active one, which is
+/// what a click on one of its notifications does: the plugin has no click
+/// callbacks on desktop (spec section 6.1).
+#[cfg(target_os = "macos")]
+fn observe_activation(app: &AppHandle) {
+    use objc2_app_kit::NSApplicationDidBecomeActiveNotification;
+    use objc2_foundation::{NSNotification, NSNotificationCenter};
+
+    let handle = app.clone();
+    let block = block2::RcBlock::new(move |_: std::ptr::NonNull<NSNotification>| {
+        activated(&handle, Activation::BecameActive);
+    });
+    // SAFETY: the name is AppKit's own constant, no object or queue narrows
+    // the observation, and the block captures only a handle that lives as
+    // long as the app. The observer stays for the life of the process.
+    let observer = unsafe {
+        NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(NSApplicationDidBecomeActiveNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+    std::mem::forget(observer);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn observe_activation(_app: &AppHandle) {}
 
 /// What the shell holds while it runs.
 struct Shell {
@@ -636,6 +723,9 @@ fn tell_folder(app: &AppHandle, view: Value) {
 /// open (spec section 8.1; Tauri issue 15005 is why [`crate::window`] says
 /// this is a hand check).
 fn show_window(app: &AppHandle) {
+    if let Some(notifications) = app.try_state::<Notifications>() {
+        notifications.seen();
+    }
     if let Some(popover) = app.get_webview_window(POPOVER) {
         let _ = popover.hide();
     }
@@ -754,6 +844,7 @@ fn take(app: &AppHandle, update: Update) {
                 .lock()
                 .expect("the frame is not poisoned")
                 .apply(&event);
+            notify(app, &event);
             let _ = app.emit(STATE_EVENT, Message::Event(event).to_value());
             match follow {
                 Follow::Nothing => {}
@@ -792,6 +883,11 @@ fn toggle(app: &AppHandle, anchor: Rect) {
         };
         let placed = placement::popover_position(icon, display, size_of(&window));
         let _ = window.set_position(LogicalPosition::new(placed.x, placed.y));
+    }
+    // A user who opens the popover has looked: bringing the app to the
+    // front for it is an ordinary activation.
+    if let Some(notifications) = app.try_state::<Notifications>() {
+        notifications.seen();
     }
     let _ = window.show();
     let _ = window.set_focus();
@@ -836,8 +932,8 @@ fn rules_folder_named(mut frame: Frame) -> Frame {
     frame
 }
 
-/// Runs the app until it is quit.
-pub fn run() {
+/// Runs the app until it is quit, started the way `start` says.
+pub fn run(start: Start) {
     // A debug build pointed at a developer's daemon supervises nothing, so a
     // hand run never registers the real launch agent or a login item.
     let socket = Socket::for_this_build();
@@ -855,7 +951,8 @@ pub fn run() {
         handover: Mutex::new(Handover::default()),
     };
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(shell)
         .invoke_handler(tauri::generate_handler![
             popover,
@@ -890,8 +987,12 @@ pub fn run() {
         .setup(move |app| {
             // Menu bar only while idle: no Dock icon and no Cmd-Tab entry
             // (spec section 8.1).
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            // A windowless start, by the daemon, is menu bar only too.
+            present(app.handle(), start.presence());
+            app.manage(Notifications::new(Box::new(PluginNotifier(
+                app.handle().clone(),
+            ))));
+            observe_activation(app.handle());
 
             TrayIconBuilder::with_id(TRAY)
                 .icon(icon(&View::unknown()))
@@ -946,6 +1047,7 @@ pub fn run() {
                     }
                 });
                 if cfg!(debug_assertions)
+                    && start == Start::Ordinary
                     && std::env::var_os("AGENTSWEEP_DEV_SHOW_WINDOW").is_some()
                 {
                     show_window(app.handle());
@@ -975,7 +1077,7 @@ pub fn run() {
                     // A launch where the daemon is not registered shows the
                     // onboarding wizard and registers nothing; its screen 2
                     // is the Inventory, which the app runs itself.
-                    if supervision::shows_onboarding(&*services) {
+                    if start.shows_onboarding(supervision::shows_onboarding(&*services)) {
                         let inventory = Inventory::of_this_mac().unwrap_or_default();
                         *handle
                             .state::<Shell>()
@@ -992,6 +1094,16 @@ pub fn run() {
                 })?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("the AgentSweep app runs");
+        .build(tauri::generate_context!())
+        .expect("the AgentSweep app builds");
+    app.run(|app, event| {
+        // macOS asks a running app to reopen when it is launched again or
+        // clicked in Finder; after a notification that opens the window.
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Reopen { .. } = event {
+            activated(app, Activation::Reopen);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event);
+    });
 }

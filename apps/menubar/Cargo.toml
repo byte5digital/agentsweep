@@ -36,19 +36,28 @@ agentsweep-adapter-codex.workspace = true
 serde_json = "1.0.151"
 # The shell (spec section 6.1): Tauri 2.11.5, the last 2.x, with the tray.
 tauri = { version = "=2.11.5", features = ["tray-icon"] }
+# Notifications (spec sections 6.1, 6.7 and 8.7), raised by the app only. On
+# macOS it posts through notify-rust and mac-notification-sys; no click
+# callbacks on desktop, so a click activates the app through the operating
+# system and the app opens its window on Needs your decision.
+tauri-plugin-notification = "=2.4.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # SMAppService: the daemon as a launch agent from the plist inside the bundle,
 # and the app as a login item (spec section 9.5).
 objc2 = "0.6.4"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError", "NSNotification", "NSOperation", "block2"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 # The native folder picker behind "Scan a folder" (AppKit's NSOpenPanel). MIT.
 # Called from Rust, so the webview gets no dialog or file system permission.
 rfd = { version = "0.17.2", default-features = false }
 # The general pasteboard behind "Copy a message for your admin" (spec section
 # 8.4). Already in the tree through Tauri; only the pasteboard is asked for.
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSWorkspace", "NSApplication"] }
+# A click on a notification activates the app; the app observes that through
+# NSNotificationCenter with a block (spec section 6.1: no click callbacks).
+# Already in the tree through Tauri.
+block2 = "0.6.2"
 
 [dev-dependencies]
 # The window's tests run a real daemon in the process, on a temporary home,

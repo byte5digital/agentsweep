@@ -1,6 +1,8 @@
 //! The AgentSweep menu bar app. Everything is in the library beside this file.
 //!
-//! The app takes no arguments. The exceptions are two developer flags:
+//! The app takes one argument, `--windowless`, with which the daemon starts
+//! it into the menu bar with no window when it has something to tell (spec
+//! section 6.7). Beside it are two developer flags:
 //! `--developer-status` prints where the daemon's and the login item's
 //! registrations stand, and `--developer-unregister` unregisters both for the
 //! bundle it is run from. Each exits without opening anything. It is how
@@ -10,6 +12,7 @@
 use std::process::ExitCode;
 
 use agentsweep_menubar::supervision::{self, SystemServices};
+use agentsweep_menubar::window::Start;
 
 fn main() -> ExitCode {
     if std::env::args()
@@ -37,6 +40,6 @@ fn main() -> ExitCode {
             false => ExitCode::FAILURE,
         };
     }
-    agentsweep_menubar::app::run();
+    agentsweep_menubar::app::run(Start::of(std::env::args().skip(1)));
     ExitCode::SUCCESS
 }

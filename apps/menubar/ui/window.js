@@ -906,5 +906,8 @@ $("scan-folder").addEventListener("click", () =>
 await listen("agentsweep://findings", (event) => render(event.payload));
 await listen("agentsweep://folder", (event) => renderFolder(event.payload));
 await listen("agentsweep://activity-at", (event) => showActivityAt(event.payload));
+// A click on a notification brought the app to the front: the window turns
+// to Needs your decision.
+await listen("agentsweep://pane", (event) => select(event.payload));
 renderFolder(await invoke("folder"));
 render(await invoke("findings"));

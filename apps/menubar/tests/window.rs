@@ -21,6 +21,7 @@ use agentsweep_core::finding::{Category, FindingState};
 use agentsweep_core::gate_registration::GateCommand;
 use agentsweep_core::item::Kind;
 use agentsweep_core::keychain::MemoryKeySource;
+use agentsweep_core::overview::ProjectCheck;
 use agentsweep_core::pack::Manifest;
 use agentsweep_core::paths::DataDirectory;
 use agentsweep_core::quarantine::Conflict;
@@ -44,6 +45,7 @@ use agentsweep_menubar::link::{Link, Socket, Update};
 use agentsweep_menubar::notifications::{
     Activation, NEEDS_YOU_BODY, Notice, Notifications, Notifier,
 };
+use agentsweep_menubar::permission;
 use agentsweep_menubar::popover::View;
 use agentsweep_menubar::reveal::{Finder, reveal_in_finder};
 use agentsweep_menubar::supervision::Unsupervised;
@@ -853,6 +855,85 @@ fn the_overview_shows_only_protection_off_until_the_daemon_answers() {
         asking.status().expect("a status").health.headline()
     );
     assert!(shown.rules_updated.is_some());
+}
+
+/// Needs Permission against a real daemon (spec sections 8.6 and 9.7): a
+/// registered project in the temporary home's stand-in Documents folder is
+/// not read at start, the popover's sentence is the Health rung and the
+/// Overview names the project; Check now sends check-now once with the
+/// button disabled until the daemon answers, and the stream then shows the
+/// project checked. The stand-in folder lives in a temporary directory, so
+/// no operating system prompt can appear.
+#[test]
+fn check_now_from_the_overview_moves_a_project_in_documents_to_checked() {
+    let sandbox = Sandbox::new("permission");
+    let project = sandbox.home.join("Documents/shop");
+    std::fs::create_dir_all(project.join(".claude")).expect("a project in Documents");
+    std::fs::write(project.join(".claude/settings.json"), b"{}\n").expect("project settings");
+    std::fs::write(
+        sandbox.home.join(".claude.json"),
+        format!(
+            "{{\n  \"projects\": {{\n    \"{}\": {{ \"hasTrustDialogAccepted\": true }}\n  }}\n}}\n",
+            project.display()
+        ),
+    )
+    .expect("a registry naming the project");
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let following = Following::start(&sandbox);
+
+    let status: Status = asking.status().expect("a status");
+    assert_eq!(
+        status.health.projects_need_permission, 1,
+        "{:?}",
+        status.overview
+    );
+    assert_eq!(status.health.headline(), "1 project needs permission.");
+    let mut frame = Frame::new();
+    frame.load(&status);
+    frame.settings(&asking.settings().expect("the settings"));
+    let shown = frame.overview();
+    assert_eq!(shown.sentence, "1 project needs permission.");
+    let line = shown.permission.expect("the Needs Permission line");
+    assert_eq!(line.line, "1 project not checked.");
+    assert_eq!(
+        line.projects,
+        vec!["shop"],
+        "the Simple Posture names the folder"
+    );
+    assert!(line.enabled && line.privacy.is_none());
+
+    let frame = Mutex::new(frame);
+    let rendered = Mutex::new(Vec::new());
+    let started = permission::check_now(&frame, &asking, || {
+        let enabled = frame
+            .try_lock()
+            .ok()
+            .and_then(|frame| frame.overview().permission)
+            .map(|line| line.enabled);
+        rendered.lock().expect("the record").push(enabled);
+    })
+    .expect("check-now was answered");
+    assert!(started, "the daemon started the first read");
+    assert_eq!(
+        *rendered.lock().expect("the record"),
+        vec![Some(false), Some(true)],
+        "disabled until the daemon answered, then offered again"
+    );
+
+    let mut frame = frame.into_inner().expect("the frame");
+    following.until_frame(&mut frame, &asking, "the project checked", |frame| {
+        frame.overview().permission.is_none() && frame.health().projects_need_permission == 0
+    });
+    let status = asking.status().expect("a status");
+    let record = status
+        .overview
+        .projects
+        .iter()
+        .find(|record| record.root == project.display().to_string())
+        .expect("the project is still listed");
+    assert_eq!(record.check, ProjectCheck::Checked);
+    assert_ne!(status.health.headline(), "1 project needs permission.");
 }
 
 /// A registry that knows one project and holds one plain MCP server.

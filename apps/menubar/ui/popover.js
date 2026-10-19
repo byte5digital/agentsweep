@@ -20,6 +20,7 @@ const openWindow = document.getElementById("open-window");
 const scanNow = document.getElementById("scan-now");
 const scanFolder = document.getElementById("scan-folder");
 const scanLine = document.getElementById("scan-line");
+const updateReady = document.getElementById("update-ready");
 const quit = document.getElementById("quit");
 
 function when(text) {
@@ -47,6 +48,10 @@ function render(view) {
   // When no daemon answers the app shows its banner and offers nothing else
   // (spec section 6.2).
   asking.hidden = view.protectionOff;
+  // "Update ready, restart AgentSweep" once an update is downloaded and
+  // verified; quitting installs it (spec section 9.4).
+  updateReady.textContent = view.updateReady ?? "";
+  updateReady.hidden = !view.updateReady;
 }
 
 function say(line) {

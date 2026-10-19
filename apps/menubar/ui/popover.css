@@ -82,6 +82,12 @@ body {
   margin-top: 10px;
 }
 
+.update-ready {
+  margin: 12px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 hr {
   border: 0;
   border-top: 1px solid var(--rule);

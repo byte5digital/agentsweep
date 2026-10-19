@@ -90,6 +90,11 @@
 //! - `agentsweep://onboarding`: the onboarding wizard's view, when the engine
 //!   look arrived or screen 6's first check finished.
 //!
+//! The update check (spec section 9.4) runs on a thread of its own from
+//! launch ([`crate::updater`]); the popover's view carries "Update ready,
+//! restart AgentSweep" once an update is downloaded and verified, and the
+//! quit installs it.
+//!
 //! Notifications (spec sections 6.7 and 8.7) are raised here through the
 //! notification plugin, on every launch and on every stream event that may
 //! carry one ([`crate::notifications`]). Launched with the windowless
@@ -139,6 +144,9 @@ use crate::settings_pane::{
 };
 use crate::supervision::{self, Services, SystemServices, Unsupervised};
 use crate::uninstall;
+use crate::updater::{
+    self, Look, PluginInstaller, PluginSource, Preferences, Ready, Remembered, Updates,
+};
 use crate::window::{Presence, Start, presence};
 use crate::wording;
 
@@ -261,6 +269,9 @@ struct Shell {
     onboarding: Mutex<Option<Wizard>>,
     /// The answers held for the daemon since onboarding.
     handover: Mutex<Handover>,
+    /// The app updater: when the next check is due and the update that is
+    /// ready to install at quit.
+    updates: Arc<Updates<Ready>>,
 }
 
 /// The popover's view as it stands, in the window's Posture.
@@ -271,11 +282,12 @@ fn popover(shell: tauri::State<'_, Shell>) -> Value {
         .lock()
         .expect("the frame is not poisoned")
         .posture();
-    shell
+    let view = shell
         .view
         .lock()
         .expect("the view is not poisoned")
-        .to_value(posture)
+        .to_value(posture);
+    updater::into_popover(view, shell.updates.line())
 }
 
 /// Sends the popover's view as it stands, in the window's Posture.
@@ -623,6 +635,9 @@ async fn change_settings(app: AppHandle, change: Value) -> Result<String, String
     let answer = blocking(move || asking.change_settings(&change))
         .await
         .map_err(|why| why.replace("Nothing was done", "Nothing was changed"))?;
+    // The app keeps its own copy of the update toggle, so a user's "off"
+    // holds while no daemon answers (the owner's decision of 2026-10-14).
+    Preferences.remember(answer.update_check);
     let follow = app
         .state::<Shell>()
         .frame
@@ -751,6 +766,8 @@ async fn uninstall_agentsweep(app: AppHandle, asked: Value) -> Result<Vec<String
     })
     .await
     .map_err(|error| format!("AgentSweep could not be asked: {error}"))??;
+    // The bundle is going: no update may be put in its place at the quit.
+    app.state::<Shell>().updates.forget();
     if done.trashed.is_ok() {
         let handle = app.clone();
         std::thread::spawn(move || {
@@ -1029,6 +1046,7 @@ fn hand_over(app: &AppHandle) {
         .expect("the hand-over is not poisoned")
         .deliver(&*shell.asking);
     if let Some(state) = state {
+        Preferences.remember(state.update_check);
         let follow = shell
             .frame
             .lock()
@@ -1318,6 +1336,7 @@ fn refresh(app: &AppHandle) {
         // Settings that cannot be read leave the Posture as it was.
         if let Ok(settings) = settings {
             frame.settings(&settings);
+            Preferences.remember(settings.update_check);
         }
         frame.to_value()
     };
@@ -1475,6 +1494,56 @@ fn rules_folder_named(mut frame: Frame) -> Frame {
     frame
 }
 
+/// The update check, off the main thread: a look at the schedule now, for
+/// the check at launch, and once a minute after, so the daily check follows
+/// a day after the last. No check is made while the onboarding wizard is
+/// open, since its screen 5 is where the check is disclosed and switched;
+/// then the toggle is the one the wizard holds for the daemon, the daemon's,
+/// or the app's copy of it ([`updater::toggle`]).
+fn check_for_updates(app: &AppHandle) {
+    let handle = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("agentsweep-updates".to_string())
+        .spawn(move || {
+            let source = PluginSource(handle.clone());
+            let updates = Arc::clone(&handle.state::<Shell>().updates);
+            loop {
+                let on = || {
+                    let shell = handle.state::<Shell>();
+                    if shell
+                        .onboarding
+                        .lock()
+                        .expect("the wizard is not poisoned")
+                        .is_some()
+                    {
+                        return false;
+                    }
+                    let held = shell
+                        .handover
+                        .lock()
+                        .expect("the hand-over is not poisoned")
+                        .update_check();
+                    let daemon = match held {
+                        Some(_) => None,
+                        None => shell.asking.settings().ok().map(|state| state.update_check),
+                    };
+                    updater::toggle(held, daemon, &Preferences)
+                };
+                match updates.look(std::time::SystemTime::now(), on, &source) {
+                    Look::Ready => send_view(&handle),
+                    Look::Failed(why) => {
+                        eprintln!("agentsweep-menubar: the update check failed: {why}");
+                    }
+                    Look::NotDue | Look::Off | Look::Current => {}
+                }
+                std::thread::sleep(updater::LOOK_EVERY);
+            }
+        });
+    if let Err(error) = spawned {
+        eprintln!("agentsweep-menubar: the update check could not start: {error}");
+    }
+}
+
 /// Runs the app until it is quit, started the way `start` says.
 pub fn run(start: Start) {
     // A debug build pointed at a developer's daemon supervises nothing, so a
@@ -1492,10 +1561,12 @@ pub fn run(start: Start) {
         asking: Arc::new(Asking::new(socket.clone())),
         onboarding: Mutex::new(None),
         handover: Mutex::new(Handover::default()),
+        updates: Arc::new(Updates::new()),
     };
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(shell)
         .manage(Reports::default())
         .invoke_handler(tauri::generate_handler![
@@ -1636,6 +1707,15 @@ pub fn run(start: Start) {
                 });
             }
 
+            // Only an app that runs out of its bundle, against the installed
+            // daemon, checks for updates: the install replaces the bundle
+            // the app runs from, which a developer run does not have.
+            let bundled = std::env::current_exe()
+                .ok()
+                .and_then(|exe| uninstall::bundle_of(&exe))
+                .is_some();
+            let checks_updates = bundled && socket == Socket::Installed;
+
             // The registrations and the link run off the main thread: both
             // wait on the operating system, and the menu bar must not.
             let handle = app.handle().clone();
@@ -1672,6 +1752,11 @@ pub fn run(start: Start) {
                         }
                         show_wizard(&handle);
                     }
+                    // Once the wizard is decided on, so a launch that shows
+                    // it makes no check before its screen 5 was answered.
+                    if checks_updates {
+                        check_for_updates(&handle);
+                    }
                     let launched = supervision::on_launch(&*services);
                     for failure in &launched.failures {
                         eprintln!("agentsweep-menubar: {failure}");
@@ -1683,6 +1768,16 @@ pub fn run(start: Start) {
         .build(tauri::generate_context!())
         .expect("the AgentSweep app builds");
     app.run(|app, event| {
+        // The quit, from the popover, from Cmd-Q or after Uninstall, installs
+        // an update that is ready, once; nothing restarts the app (spec
+        // section 9.4). The daemon's bundle watch brings it back on the new
+        // version (spec section 9.5).
+        if let RunEvent::Exit = event {
+            if let Some(Err(why)) = app.state::<Shell>().updates.on_quit(&PluginInstaller) {
+                eprintln!("agentsweep-menubar: the update could not be installed: {why}");
+            }
+            return;
+        }
         // macOS asks a running app to reopen when it is launched again or
         // clicked in Finder; after a notification that opens the window.
         #[cfg(target_os = "macos")]

@@ -22,11 +22,13 @@ use agentsweep_core::health::Health;
 use agentsweep_core::overview::Overview;
 use agentsweep_core::settings::Posture;
 use agentsweep_core::state::ScanSummary;
+use agentsweep_ipc::engine::EngineState;
 use agentsweep_ipc::protocol::{SettingsState, StateEvent, Status};
 use serde_json::{Value, json};
 
 use crate::actions::card_in;
 use crate::activity::Activity;
+use crate::ai_check;
 use crate::developer::{ambiguous_card, offers_reveal};
 use crate::findings::{Findings, Follow};
 use crate::overview::{self, OverviewView};
@@ -147,6 +149,10 @@ pub struct Frame {
     choices: Option<SettingsState>,
     /// Where the user's own rules folder is, for the Settings pane.
     rules_folder: Option<String>,
+    /// The daemon's last answer to an `engine` request, for what only that
+    /// answer carries: whether Ollama runs and whether Apple's on-device
+    /// model is available, for the AI check.
+    presence: Option<EngineState>,
     /// The Activity lines of the last status, followed from the stream.
     activity: Activity,
 }
@@ -204,6 +210,32 @@ impl Frame {
         }
     }
 
+    /// Takes the daemon's answer to an `engine` request: the choices it
+    /// names, and whether Ollama runs and Apple's model is available.
+    pub fn engine(&mut self, state: &EngineState) -> Follow {
+        if let Some(choices) = self.choices.as_mut() {
+            choices.engine = EngineState {
+                recorded: 0,
+                ollama: None,
+                apple: None,
+                ..state.clone()
+            };
+        }
+        self.presence = Some(state.clone());
+        Follow::Render
+    }
+
+    /// The AI Judgement choices as the AI check shows them: the daemon's
+    /// latest choices with the presence its last `engine` answer reported.
+    fn engine_state(&self) -> Option<EngineState> {
+        let mut state = self.choices.as_ref()?.engine.clone();
+        if let Some(presence) = &self.presence {
+            state.ollama = presence.ollama.clone();
+            state.apple = presence.apple.clone();
+        }
+        Some(state)
+    }
+
     /// Names the user's own rules folder for the Settings pane.
     pub fn set_rules_folder(&mut self, folder: impl Into<String>) {
         self.rules_folder = Some(folder.into());
@@ -211,12 +243,23 @@ impl Frame {
 
     /// The Settings pane as it stands.
     pub fn settings_pane(&self) -> Value {
-        settings_pane::view(
+        let mut pane = settings_pane::view(
             self.choices.as_ref(),
             &self.health,
             self.posture,
             self.rules_folder.as_deref(),
-        )
+        );
+        let state = self.engine_state();
+        pane["aiCheck"] = ai_check::view(
+            state.as_ref(),
+            self.posture,
+            !self.health.protection.is_off(),
+            &|engine| match &state {
+                Some(state) => ai_check::bar_of(state, engine),
+                None => ai_check::Bar::Within,
+            },
+        );
+        pane
     }
 
     /// No daemon answers: see [`Findings::off`]. The Overview drops what it

@@ -19,8 +19,12 @@ use std::sync::Mutex;
 
 use agentsweep_core::eventlog::Outcome;
 use agentsweep_core::item::ItemId;
+use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::quarantine::{Conflict, RestoreReport};
+use agentsweep_core::settings::JudgementEngine;
+use agentsweep_ipc::engine::{EngineChange, EngineState};
 use agentsweep_ipc::notifications::Unnotified;
+use agentsweep_ipc::preview::RequestPreview;
 use agentsweep_ipc::protocol::{
     ActionReport, FolderScanResult, RevealedReceipt, Sessions, SettingsChange, SettingsState,
     Status,
@@ -179,6 +183,40 @@ impl Asking {
     /// it may be.
     pub fn change_settings(&self, change: &SettingsChange) -> Result<SettingsState, ClientError> {
         self.with(true, |client| client.change_settings(change.clone()))
+    }
+
+    /// Where the AI Judgement choices stand, with whether Ollama runs and
+    /// whether Apple's on-device model is available. It only reads.
+    pub fn engine(&self) -> Result<EngineState, ClientError> {
+        self.with(true, Client::engine)
+    }
+
+    /// Moves some AI Judgement choices. Asking twice sets the same values
+    /// again and records nothing the second time, so it may be.
+    pub fn change_engine(&self, change: &EngineChange) -> Result<EngineState, ClientError> {
+        self.with(true, |client| client.change_engine(change.clone()))
+    }
+
+    /// Hands the Claude API key to the daemon. It is sent once: asked again
+    /// only when it provably never reached the daemon. The key is consumed
+    /// here and wiped when its last copy drops.
+    pub fn set_claude_key(&self, key: ClaudeKey) -> Result<EngineState, ClientError> {
+        self.with(false, |client| client.set_claude_key(key.clone()))
+    }
+
+    /// Removes the Claude API key, which turns an active Claude engine off.
+    pub fn remove_claude_key(&self) -> Result<EngineState, ClientError> {
+        self.with(false, Client::remove_claude_key)
+    }
+
+    /// "Preview a request" for one Item, or for the sample Item. It only
+    /// reads.
+    pub fn preview_request(
+        &self,
+        item: Option<&str>,
+        engine: JudgementEngine,
+    ) -> Result<RequestPreview, ClientError> {
+        self.with(true, |client| client.preview_request(item, engine))
     }
 
     /// Whether Agent sessions appear to be running right now.

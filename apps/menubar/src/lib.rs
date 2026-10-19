@@ -44,6 +44,9 @@
 //! - [`folder`]: the answer of a Folder Scan as the window shows it.
 //! - [`settings_pane`]: the Settings pane: the Detail choice, the background
 //!   toggles, Advanced and what AgentSweep does not protect against.
+//! - [`ai_check`]: the AI check in the Settings pane: the four engine
+//!   cards, the Ollama confirmation, the Claude consent screen and the key
+//!   handed to the daemon once.
 //! - [`cli_link`]: **Install command line tool**, the link in
 //!   `~/.local/bin`.
 //! - [`notifications`]: what each un-notified change says when the app
@@ -57,6 +60,7 @@
 
 pub mod actions;
 pub mod activity;
+pub mod ai_check;
 pub mod app;
 pub mod asking;
 pub mod cli_link;

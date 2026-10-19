@@ -127,11 +127,20 @@ jobs:
 
       # The Tauri command line interface from npm, pinned to the exact version
       # of the tauri crate the workspace locks. What follows `--` goes to cargo.
+      # `createUpdaterArtifacts` signs the updater archive; here with the
+      # development updater key, whose public half `tauri.conf.json` pins
+      # until the release prerequisites produce the real one. Its secret half
+      # is committed for this and the tests alone, encrypted with an empty
+      # password; the release signs with the updater key from the `release`
+      # environment.
       - name: Build the universal bundle
         working-directory: apps/menubar
         env:
           APPLE_SIGNING_IDENTITY: "-"
-        run: npx --yes @tauri-apps/cli@2.11.5 build --target universal-apple-darwin --config tauri.bundle.conf.json -- --locked
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: |
+          TAURI_SIGNING_PRIVATE_KEY="$(cat development-keys/updater-development.secret)" \
+            npx --yes @tauri-apps/cli@2.11.5 build --target universal-apple-darwin --config tauri.bundle.conf.json -- --locked
 
       - name: Check what the bundle carries
         run: |
@@ -143,6 +152,9 @@ jobs:
           plutil -lint "$app/Contents/Library/LaunchAgents/de.byte5.agentsweep.daemon.plist"
           test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = "14.0"
           test "$(plutil -extract LSUIElement raw "$app/Contents/Info.plist")" = "true"
+          # The updater archive and its signature (spec section 9.4).
+          test -s "$app.tar.gz"
+          test -s "$app.tar.gz.sig"
 
       # The release bundle checker, release checklist items 2, 3, 14, 15 and
       # 16, in ad hoc mode: every Mach-O in the bundle verifies strictly, is

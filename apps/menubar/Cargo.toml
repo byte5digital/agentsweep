@@ -44,13 +44,20 @@ tauri = { version = "=2.11.5", features = ["tray-icon"] }
 # callbacks on desktop, so a click activates the app through the operating
 # system and the app opens its window on Needs your decision.
 tauri-plugin-notification = "=2.4.0"
+# The app updater (spec section 9.4): the second of the three disclosed
+# requests, a GET of the fixed `latest.json` with no identifiers, a minisign
+# signature check of the downloaded archive against the key pinned in
+# `tauri.conf.json`, and the install on the next quit. 2.12 is the last line
+# that runs on Tauri 2.11; 2.13 and later need 2.12. Rustls only: no system
+# proxy lookup and no zip, which only the Windows installer reads.
+tauri-plugin-updater = { version = "=2.12.0", default-features = false, features = ["rustls-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # SMAppService: the daemon as a launch agent from the plist inside the bundle,
 # and the app as a login item (spec section 9.5). The file manager moves the
 # app to the Trash on Uninstall (spec section 9.6).
 objc2 = "0.6.4"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError", "NSNotification", "NSOperation", "block2", "NSFileManager", "NSURL"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError", "NSNotification", "NSOperation", "block2", "NSFileManager", "NSURL", "NSUserDefaults"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 # The native folder picker behind "Scan a folder" (AppKit's NSOpenPanel). MIT.
 # Called from Rust, so the webview gets no dialog or file system permission.
@@ -64,6 +71,13 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 block2 = "0.6.2"
 
 [dev-dependencies]
+# The updater's tests run the real plugin on Tauri's mock runtime, against a
+# loopback fixture server; the shipped app never builds the mock runtime.
+tauri = { version = "=2.11.5", features = ["tray-icon", "test"] }
+# Signs the fixture archive with the development updater key, the way the
+# Tauri command line interface signs the release archive.
+minisign = "0.10.0"
+base64 = "0.22.1"
 # The window's tests run a real daemon in the process, on a temporary home,
 # with the chain key in memory. Test builds only: the app never links it.
 agentsweep-core = { workspace = true, features = ["development-keys"] }

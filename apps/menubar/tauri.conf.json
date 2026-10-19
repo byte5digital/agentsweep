@@ -50,6 +50,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["app"],
     "category": "DeveloperTool",
     "icon": [
@@ -64,6 +65,14 @@
       "files": {
         "Library/LaunchAgents/de.byte5.agentsweep.daemon.plist": "LaunchAgents/de.byte5.agentsweep.daemon.plist"
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IEFnZW50U3dlZXAgdXBkYXRlciBERVZFTE9QTUVOVCBwdWJsaWMga2V5ClJXVE5wUUsyM1R2VkJCSlBEdVB4Z3BZQXl4bnl6RGxhT1FmR2pJSit4OXd2QkJBWG9uT01hci9lCg==",
+      "endpoints": [
+        "https://github.com/byte5digital/agentsweep/releases/latest/download/latest.json"
+      ]
     }
   }
 }

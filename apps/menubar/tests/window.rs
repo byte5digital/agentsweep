@@ -431,9 +431,16 @@ fn the_window_lists_the_status_and_follows_every_action_from_the_stream() {
     );
 
     // Scan now: followed from the stream to its end.
-    asking.scan_now().expect("a Full Scan");
+    // A Full Scan the watcher asked for after the actions above may be under
+    // way, and Scan now rightly joins it (spec section 6.4); then its own
+    // trigger names the finished Scan.
+    let started = asking.scan_now().expect("a Full Scan");
+    let finished = match started {
+        true => "Last full Scan (scan-now)",
+        false => "Last full Scan (",
+    };
     following.until(&mut list, &asking, "a finished Scan", |list| {
-        !list.scan().running && list.scan().line.starts_with("Last full Scan (scan-now)")
+        !list.scan().running && list.scan().line.starts_with(finished)
     });
     // Once Health no longer says "checking now", the actions can be pressed
     // again, and the stream alone said so.

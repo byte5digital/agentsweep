@@ -41,6 +41,7 @@ ls ~/Library/Application\ Support/de.byte5.agentsweep      # no such file
 ls ~/Library/Logs/AgentSweep                               # no such file
 ls "$TMPDIR"de.byte5.agentsweep.sock                       # no such file
 security find-generic-password -s de.byte5.agentsweep.daemon -a chain-key   # not found
+security find-generic-password -s de.byte5.agentsweep.daemon -a claude-api-key   # not found
 pgrep -fl agentsweep                                       # nothing
 ```
 
@@ -462,6 +463,25 @@ With the app running and the popover showing its usual sentence, take the job ou
 - [ ] While the daemon runs, `kill` it (not `kill -9`) and press **Start it** while the banner shows, before `KeepAlive` brings it back on its own: the daemon starts at once.
 
 Seams in the suite: `banner::tests` in the app (the four banners, their buttons, the Health precedence, the Developer additions only in the Developer Posture), `popover::tests` (the banner replaces the sentence, Not watching offers Start it and no Login Items, no Finding, Finding action or progress count in either Posture), `link::tests` (Not watching only for an enabled registration with no daemon answering), `supervision::tests` (Start it asks launchd through the fake service layer, registers again a job launchd no longer holds, starts only an enabled registration), `integrity::tests` (each integrity button sends its request and opens Activity at the break point or the restart record) and `the_key_missing_banner_answers_through_the_daemon_and_opens_activity_at_the_restart` in the app's `window` integration tests.
+
+## 20. Uninstall from Settings with each choice, and the drag to Trash
+
+Release checklist item 8. Run it on the hand-check install once per choice: install, go through the wizard, quarantine at least one Item by hand (the Fixture skill of section 16 is enough, with the Gate on so both Agents carry AgentSweep's entries), then open Settings, press **Uninstall AgentSweep…** and pick the choice. The dialog shows the number of quarantined Items in the Restore line and comes with **Keep them in quarantine** selected. Before each round, note what `~/.claude/settings.json`, `~/.claude/skills` and `~/.codex/hooks.json` hold.
+
+- [ ] Every choice: the pane says what was done and that AgentSweep is in the Trash, and the app quits a few seconds later. `~/.claude/settings.json` and `~/.codex/hooks.json` no longer carry any AgentSweep group and `~/.codex/config.toml` no longer carries the pins; every entry of your own is still there. `launchctl print gui/$(id -u)/de.byte5.agentsweep.daemon` finds no service, `pgrep -x agentsweepd` finds nothing, and the app is in `~/.Trash`.
+- [ ] **Keep them in quarantine**: the "Before" commands still find the data directory with `events.jsonl` and `quarantine/`, the log directory and the chain key; the quarantined Item is not back on its Surface. Reinstall the same build and go through the wizard: the Quarantine pane lists the Item again and the Activity kept its lines.
+- [ ] **Restore all N quarantined items**: every quarantined Item is back where it was, the pane lists each Restore, and the data directory, the log directory and the chain key are still there (only the choice Delete everything removes them).
+- [ ] **Delete everything**: every "Before" command reports nothing, also for `security find-generic-password -s de.byte5.agentsweep.daemon -a claude-api-key`, and `~/Library/Caches/de.byte5.agentsweep`, `~/Library/WebKit/de.byte5.agentsweep` and `~/Library/Preferences/de.byte5.agentsweep.plist` are gone. If the preferences file came back after the app quit, note it under Record of runs: the system's preferences daemon may write it once more for an app it still holds in memory.
+- [ ] From a terminal instead: `agentsweep uninstall` (or `--restore-all`, `--delete-everything`) prints what the daemon did and asks to move AgentSweep to the Trash. Drag it there: about ten seconds later `agentsweepd` is gone, as in section 5.
+
+The plain drag to Trash, with nothing chosen (stack research, unverified item 8): install again, then drag the app from `~/agentsweep-hand-check` to the Trash without uninstalling.
+
+- [ ] About ten seconds later `agentsweepd` exits and stays down, as in section 5, and the data directory is still there, so a reinstall resumes the Event Log.
+- [ ] Open System Settings at General, Login Items: write under Record of runs whether AgentSweep is still listed right after the drag, after logging out and in, and the next day. Apple says the entry may stay visible until its overnight maintenance; this records how long it stays on the current macOS.
+
+Clean up with the section below after the last round; after Delete everything there is nothing left but the bundle in the Trash.
+
+Seams in the suite: the daemon's `uninstall` tests (two quarantined Items on a temporary home: Keep leaves the store and the quarantine records as they were and adds only `gate-removed` events, Restore all restores both and records each, its conflict rule leaves a changed place alone, Delete everything removes what AgentSweep made and nothing beside it, and the daemon takes no further work), the app's `uninstall` tests (the Settings flow with stand-in registrations and Trash: the Gate entries are gone when the daemon is unregistered, on every choice, Keep is the default, and without a daemon nothing is unregistered or trashed), and the CLI's `uninstall_without_a_flag_keeps_and_takes_the_gate_away` in its `variants` tests.
 
 ## Dogfooding: one day with the app
 

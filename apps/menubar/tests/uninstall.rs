@@ -93,6 +93,10 @@ impl Services for Recorded {
         self.call("register agent");
         Ok(())
     }
+    fn start_agent(&self) -> Result<(), String> {
+        self.call("start agent");
+        Ok(())
+    }
     fn unregister_agent(&self) -> Result<(), String> {
         *self.gate_at_unregister.lock().expect("the record") = Some(gate_in(&self.settings));
         self.call("unregister agent");

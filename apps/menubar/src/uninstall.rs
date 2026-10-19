@@ -102,14 +102,20 @@ fn explanation(choice: UninstallChoice) -> &'static str {
     }
 }
 
-/// The Uninstall section and its dialog, for the number of Items in
-/// quarantine. Keep is the one selected.
-pub fn view(quarantined: usize) -> Value {
+/// The Uninstall section of the Settings pane, at its foot.
+pub fn section() -> Value {
     json!({
         "title": "Uninstall AgentSweep",
         "line": "Takes AgentSweep's hooks out of Claude Code and Codex, stops it, and moves the \
                  app to the Trash.",
         "button": "Uninstall AgentSweep…",
+    })
+}
+
+/// The dialog the button opens, for the number of Items in quarantine. Keep
+/// is the one selected.
+pub fn view(quarantined: usize) -> Value {
+    json!({
         "question": "What should happen to what is in quarantine?",
         "choices": UninstallChoice::ALL
             .iter()
@@ -242,6 +248,6 @@ mod tests {
             view["choices"][0]["label"],
             "Restore all 2 quarantined items"
         );
-        assert_eq!(view["button"], "Uninstall AgentSweep…");
+        assert_eq!(section()["button"], "Uninstall AgentSweep…");
     }
 }

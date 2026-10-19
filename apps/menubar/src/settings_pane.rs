@@ -1,5 +1,6 @@
 //! The Settings pane (spec section 8.10), apart from the AI check, the Gate
-//! switch and Uninstall, which fill their own places in it.
+//! switch and Uninstall, which fill their own places in it ([`crate::uninstall`]
+//! words Uninstall's section and dialog).
 //!
 //! - **Detail**: Keep it simple / I am a developer, the Posture.
 //! - **Background**: the Rule Feed toggle and the app update toggle under one
@@ -236,6 +237,7 @@ pub fn view(
             "paragraph": not_protected_paragraph(),
             "link": { "label": "The full list", "url": NOT_PROTECTED_LINK },
         },
+        "uninstall": crate::uninstall::section(),
     })
 }
 

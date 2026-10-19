@@ -183,8 +183,14 @@
               <button type="button" class="link"></button>
             </div>
 
-            <!-- Uninstall AgentSweep takes this place (spec section 9.6). -->
-            <div class="setting" id="settings-uninstall" hidden></div>
+            <!-- Uninstall AgentSweep (spec section 9.6): the dialog asks
+                 what happens to what is in quarantine, Keep selected. -->
+            <div class="setting" id="settings-uninstall">
+              <h3></h3>
+              <p class="muted line"></p>
+              <button type="button" class="uninstall"></button>
+              <div class="uninstall-answer" role="status"></div>
+            </div>
           </section>
         </main>
       </div>
@@ -209,6 +215,18 @@
         <div class="actions">
           <button value="cancel">Cancel</button>
           <button value="ok" class="primary" id="ai-ollama-ok"></button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Uninstall's three choices about what is in quarantine. -->
+    <dialog id="uninstall">
+      <form method="dialog">
+        <p class="message" id="uninstall-question"></p>
+        <div id="uninstall-choices" role="radiogroup"></div>
+        <div class="actions">
+          <button value="cancel">Cancel</button>
+          <button value="ok" class="primary" id="uninstall-ok"></button>
         </div>
       </form>
     </dialog>

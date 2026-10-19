@@ -816,6 +816,43 @@ function renderSettings(settings) {
   notProtected.querySelector("h3").textContent = settings.notProtected.title;
   notProtected.querySelector(".paragraph").textContent = settings.notProtected.paragraph;
   notProtected.querySelector(".link").textContent = settings.notProtected.link.label;
+
+  const uninstall = $("settings-uninstall");
+  uninstall.querySelector("h3").textContent = settings.uninstall.title;
+  uninstall.querySelector(".line").textContent = settings.uninstall.line;
+  uninstall.querySelector(".uninstall").textContent = settings.uninstall.button;
+  uninstall.querySelector(".uninstall").disabled = disabled;
+}
+
+// Uninstall's dialog as the app worded it: answers the choice picked, or
+// null when the user cancelled. Keep comes selected.
+function askUninstall(offer) {
+  const dialog = $("uninstall");
+  $("uninstall-question").textContent = offer.question;
+  $("uninstall-ok").textContent = offer.ok;
+  $("uninstall-choices").replaceChildren(
+    ...offer.choices.map((choice) => {
+      const label = el("label", "choice");
+      const input = el("input");
+      input.type = "radio";
+      input.name = "uninstall-choice";
+      input.value = choice.choice;
+      input.checked = choice.selected;
+      label.append(input, el("span", "", choice.label), el("p", "muted", choice.line));
+      return label;
+    }),
+  );
+  return new Promise((resolve) => {
+    dialog.addEventListener(
+      "close",
+      () => {
+        const picked = dialog.querySelector("input[name=uninstall-choice]:checked");
+        resolve(dialog.returnValue === "ok" && picked ? picked.value : null);
+      },
+      { once: true },
+    );
+    dialog.showModal();
+  });
 }
 
 $("settings-cli")
@@ -843,6 +880,21 @@ $("settings-rules")
       settingsAnswer(await invoke("show_rules_folder"));
     } catch (why) {
       settingsAnswer(String(why));
+    }
+  });
+$("settings-uninstall")
+  .querySelector(".uninstall")
+  .addEventListener("click", async () => {
+    const answer = $("settings-uninstall").querySelector(".uninstall-answer");
+    try {
+      const choice = await askUninstall(await invoke("uninstall_offer"));
+      if (choice === null) {
+        return;
+      }
+      const lines = await invoke("uninstall_agentsweep", { asked: { choice } });
+      answer.replaceChildren(...lines.map((line) => el("p", "muted", line)));
+    } catch (why) {
+      answer.replaceChildren(el("p", "muted", String(why)));
     }
   });
 $("settings-not-protected")

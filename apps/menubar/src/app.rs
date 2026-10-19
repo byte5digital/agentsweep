@@ -114,6 +114,7 @@ use crate::settings_pane::{
     self, FULL_DISK_ACCESS_PANES, FULL_DISK_ACCESS_UNOPENED, NOT_PROTECTED_LINK,
 };
 use crate::supervision::{self, Services, SystemServices, Unsupervised};
+use crate::uninstall;
 use crate::window::{Presence, Start, presence};
 use crate::wording;
 
@@ -622,6 +623,46 @@ async fn remove_claude_key(app: AppHandle) -> Result<String, String> {
 async fn preview_request(app: AppHandle, item: Option<String>) -> Result<Value, String> {
     let asking = Arc::clone(&app.state::<Shell>().asking);
     off_main(move || ai_check::preview(&asking, item.as_deref())).await
+}
+
+/// The Uninstall dialog, with how many Items are in quarantine now.
+#[tauri::command]
+async fn uninstall_offer(app: AppHandle) -> Result<Value, String> {
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    let receipts = blocking(move || asking.receipts()).await?;
+    Ok(uninstall::view(receipts.len()))
+}
+
+/// **Uninstall AgentSweep…** with the choice the dialog sent: the daemon
+/// applies it, the registrations go, the app goes to the Trash and quits a
+/// moment later, so the pane can say what was done (spec section 9.6).
+#[tauri::command]
+async fn uninstall_agentsweep(app: AppHandle, asked: Value) -> Result<Vec<String>, String> {
+    let choice = uninstall::choice_of(&asked)?;
+    let asking = Arc::clone(&app.state::<Shell>().asking);
+    let services = Arc::clone(&app.state::<Shell>().services);
+    let bundle = std::env::current_exe()
+        .ok()
+        .and_then(|exe| uninstall::bundle_of(&exe));
+    let done = tauri::async_runtime::spawn_blocking(move || {
+        uninstall::carry_out(
+            &asking,
+            &*services,
+            &uninstall::SystemTrash,
+            bundle.as_deref(),
+            choice,
+        )
+    })
+    .await
+    .map_err(|error| format!("AgentSweep could not be asked: {error}"))??;
+    if done.trashed.is_ok() {
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(4));
+            handle.exit(0);
+        });
+    }
+    Ok(done.lines())
 }
 
 /// The onboarding wizard's view, or nothing once it is done.
@@ -1145,7 +1186,9 @@ pub fn run(start: Start) {
             onboarding,
             onboarding_back,
             onboarding_choose,
-            onboarding_next
+            onboarding_next,
+            uninstall_offer,
+            uninstall_agentsweep
         ])
         .setup(move |app| {
             // Menu bar only while idle: no Dock icon and no Cmd-Tab entry

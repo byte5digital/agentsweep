@@ -53,6 +53,8 @@ pub trait Services: Send + Sync {
     fn register_agent(&self) -> Result<(), String>;
     /// Unregisters it, which stops it.
     fn unregister_agent(&self) -> Result<(), String>;
+    /// Asks launchd to start the registered job now.
+    fn start_agent(&self) -> Result<(), String>;
     /// What launchd holds about the daemon's job, where it says anything.
     /// SMAppService answers only whether the job is enabled, so this is the
     /// one place that reads past it.
@@ -144,6 +146,29 @@ pub fn restart_daemon(services: &dyn Services) -> Result<(), String> {
         services.unregister_agent()?;
     }
     services.register_agent()
+}
+
+/// **Start it** on "Not watching right now" (spec section 8.6): asks
+/// launchd to start the registered daemon job. A job launchd no longer holds
+/// (one taken out with `launchctl bootout`, while SMAppService still calls
+/// the registration enabled) cannot be started that way, so the daemon is
+/// registered again instead, which loads and starts it. Only an enabled
+/// registration is started: one waiting for approval is the user's to give
+/// in Login Items, and a developer run supervises nothing.
+pub fn start_daemon(services: &dyn Services) -> Result<(), String> {
+    if !services.supervises() {
+        return Err("a developer run starts nothing".to_string());
+    }
+    if services.agent() != ServiceState::Enabled {
+        return Err(format!(
+            "the background item is {}, so there is nothing to start",
+            services.agent()
+        ));
+    }
+    match services.start_agent() {
+        Ok(()) => Ok(()),
+        Err(_) => restart_daemon(services),
+    }
 }
 
 /// The version the bundle carries, which is the app's own: Tauri takes the
@@ -288,6 +313,9 @@ impl Services for Unsupervised {
     fn unregister_agent(&self) -> Result<(), String> {
         Err("a developer run registers nothing".to_string())
     }
+    fn start_agent(&self) -> Result<(), String> {
+        Err("a developer run starts nothing".to_string())
+    }
     fn login_item(&self) -> ServiceState {
         ServiceState::NotFound
     }
@@ -359,6 +387,24 @@ mod system {
             done(unsafe { agent().unregisterAndReturnError() })
         }
 
+        /// SMAppService cannot start a registered job, so this asks
+        /// launchd with `launchctl kickstart`, which starts the job as
+        /// registered and runs no other program.
+        fn start_agent(&self) -> Result<(), String> {
+            let target = format!("gui/{}/{DAEMON_LABEL}", getuid());
+            let status = std::process::Command::new("/bin/launchctl")
+                .args(["kickstart", &target])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map_err(|error| error.to_string())?;
+            match status.success() {
+                true => Ok(()),
+                false => Err(format!("launchd did not start the job: {status}")),
+            }
+        }
+
         /// SMAppService answers neither the bundle version a job was
         /// registered by nor its last exit, so this reads launchd's own
         /// record of the job with `launchctl print`, which only reads. A job
@@ -413,6 +459,9 @@ impl Services for SystemServices {
     fn unregister_agent(&self) -> Result<(), String> {
         Err("there is no service manager on this platform".to_string())
     }
+    fn start_agent(&self) -> Result<(), String> {
+        Err("there is no service manager on this platform".to_string())
+    }
     fn login_item(&self) -> ServiceState {
         ServiceState::NotFound
     }
@@ -439,6 +488,8 @@ pub(crate) mod tests {
         pub(crate) login_item: Mutex<ServiceState>,
         pub(crate) calls: Mutex<Vec<&'static str>>,
         pub(crate) refuse: bool,
+        /// True when launchd no longer holds the job, so starting it fails.
+        pub(crate) unloaded: bool,
         /// What launchd would say about the job, which a test sets and a
         /// registration replaces with a fresh job of this bundle.
         pub(crate) job: Mutex<Option<Job>>,
@@ -451,6 +502,7 @@ pub(crate) mod tests {
                 login_item: Mutex::new(login_item),
                 calls: Mutex::new(Vec::new()),
                 refuse: false,
+                unloaded: false,
                 job: Mutex::new(None),
             }
         }
@@ -492,6 +544,13 @@ pub(crate) mod tests {
             *self.agent.lock().expect("the agent") = ServiceState::NotRegistered;
             *self.job.lock().expect("the job") = None;
             Ok(())
+        }
+        fn start_agent(&self) -> Result<(), String> {
+            self.call("start agent")?;
+            match self.unloaded {
+                true => Err("Could not find service".to_string()),
+                false => Ok(()),
+            }
         }
         fn job(&self) -> Option<Job> {
             self.job.lock().expect("the job").clone()
@@ -612,6 +671,44 @@ pub(crate) mod tests {
         let services = Recorded::with(ServiceState::NotRegistered, ServiceState::Enabled);
         restart_daemon(&services).expect("a restart");
         assert_eq!(services.calls(), vec!["register agent"]);
+    }
+
+    /// Start it asks launchd to start the registered job and registers
+    /// nothing while launchd holds it.
+    #[test]
+    fn start_it_asks_launchd_to_start_the_registered_job() {
+        let services = Recorded::with(ServiceState::Enabled, ServiceState::Enabled);
+        start_daemon(&services).expect("a start");
+        assert_eq!(services.calls(), vec!["start agent"]);
+    }
+
+    /// A job launchd no longer holds is registered again, which loads it.
+    #[test]
+    fn start_it_registers_again_a_job_launchd_no_longer_holds() {
+        let mut services = Recorded::with(ServiceState::Enabled, ServiceState::Enabled);
+        services.unloaded = true;
+        start_daemon(&services).expect("a start");
+        assert_eq!(
+            services.calls(),
+            vec!["start agent", "unregister agent", "register agent"]
+        );
+        assert_eq!(services.agent(), ServiceState::Enabled);
+    }
+
+    /// Only an enabled registration is started; a developer run starts
+    /// nothing.
+    #[test]
+    fn start_it_starts_only_an_enabled_registration() {
+        for state in [
+            ServiceState::RequiresApproval,
+            ServiceState::NotRegistered,
+            ServiceState::NotFound,
+        ] {
+            let services = Recorded::with(state, ServiceState::Enabled);
+            assert!(start_daemon(&services).is_err(), "{state}");
+            assert!(services.calls().is_empty(), "{state}");
+        }
+        assert!(start_daemon(&Unsupervised).is_err());
     }
 
     fn job(version: &str, last_exit: Option<i32>) -> Job {

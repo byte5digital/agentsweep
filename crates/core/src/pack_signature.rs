@@ -20,10 +20,16 @@
 //! minisign has written by default since 0.8; the legacy mode signs the raw
 //! bytes and is refused.
 //!
-//! **The real key pairs do not exist yet** (spec section 9.8, item 2). Until
-//! they do, [`PINNED_KEYS`] holds a development pair whose secret halves are
-//! committed under `crates/core/development-keys/` and used by tests alone.
-//! [`PINNED_KEYS`] is the one place a release swaps them.
+//! **Which keys a build pins.** A build without the test-only
+//! `development-keys` feature, which is every shipped binary, pins byte5's
+//! two Rule Pack public keys, [`RELEASE_KEYS`] (spec section 9.8, item 2),
+//! whose secret halves never enter the repository. A test build turns the
+//! feature on and pins the development pairs instead, whose secret halves are
+//! committed under `crates/core/development-keys/` so the tests can sign;
+//! such a build trusts no release key, and no build without the feature can
+//! trust a development key, because the development table is not compiled
+//! into it at all. The release bundle checker reads the daemon and the CLI of
+//! a bundle and refuses one that carries a development public key.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -84,22 +90,36 @@ impl PinnedKey {
 /// The Rule Pack public keys this binary trusts: active first, standby
 /// second.
 ///
-/// **Development keys.** The real pairs are generated as a release
-/// prerequisite (spec section 9.8); until then both entries are development
-/// keys whose secret halves sit in `crates/core/development-keys/` for the
-/// tests. Swapping them for the real ones is a change to this table and
-/// nothing else, plus turning `development` off, which the test that holds
-/// the table to the development pairs then asks to be rewritten.
-pub const PINNED_KEYS: [PinnedKey; 2] = [
+/// A shipped binary pins [`RELEASE_KEYS`]. Only a build with the test-only
+/// `development-keys` feature pins the development pairs of
+/// `development::KEYS` instead, and then it pins nothing else.
+#[cfg(not(feature = "development-keys"))]
+pub const PINNED_KEYS: [PinnedKey; 2] = RELEASE_KEYS;
+
+/// The Rule Pack public keys this binary trusts: active first, standby
+/// second.
+///
+/// This is a test build: the `development-keys` feature is on, so the
+/// development pairs of [`development::KEYS`] are pinned in place of
+/// [`RELEASE_KEYS`], and the tests sign with their committed secret halves.
+#[cfg(feature = "development-keys")]
+pub const PINNED_KEYS: [PinnedKey; 2] = development::KEYS;
+
+/// byte5's Rule Pack public keys, which every shipped binary pins: the active
+/// key the release workflow signs with (key id `5DDA49F105939297`) and the
+/// standby key generated offline (key id `EA33B324921AC1B3`). Their secret
+/// halves never enter the repository. A rotation changes this table in an
+/// app release (ADR 0006).
+pub const RELEASE_KEYS: [PinnedKey; 2] = [
     PinnedKey {
         role: KeyRole::Active,
-        public_key: "RWTZoZrRXs0kE+haygvOOKaRDbtDUSc8L5YKr/o+X3VsI5peZv07AXaL",
-        development: true,
+        public_key: "RWSXkpMF8UnaXfCLhUIS/VYdBBYCYBTezI6UjTQ7uZLJ+AUyjyoEeGMy",
+        development: false,
     },
     PinnedKey {
         role: KeyRole::Standby,
-        public_key: "RWRNqibQ4kJKgnptbB11DaW4nFmh3O4rwaSlLf76s9ut12aQ3XX7o9KL",
-        development: true,
+        public_key: "RWSzwRqSJLMz6nWd521dwCELV2stAyN2a0cR/5ThTsTK2l/1B6QYPiam",
+        development: false,
     },
 ];
 
@@ -233,9 +253,11 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
 /// Signing with the development key pairs, for tests alone.
 ///
 /// Compiled only with the `development-keys` feature, which only a test build
-/// turns on: a shipped binary verifies and never signs. The secret halves are
-/// named as development keys, are unencrypted on purpose, and protect nothing
-/// real; nothing but the development [`PINNED_KEYS`] trusts them.
+/// turns on: a shipped binary verifies and never signs, and does not even
+/// carry the development public keys. The secret halves are named as
+/// development keys, are unencrypted on purpose, and protect nothing real;
+/// nothing but a test build, which pins `KEYS` in place of the release
+/// keys, trusts them.
 ///
 /// The feature builds inside the repository alone: the core published to
 /// crates.io leaves the secret halves out of its package, so turning the
@@ -243,6 +265,23 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
 #[cfg(feature = "development-keys")]
 pub mod development {
     use super::{KeyRole, PINNED_KEYS, PinnedKey};
+
+    /// The development Rule Pack public keys, active first, standby second,
+    /// which a test build pins in place of the release keys. The release
+    /// bundle checker knows them too, and refuses a bundle whose daemon or
+    /// CLI carries either.
+    pub const KEYS: [PinnedKey; 2] = [
+        PinnedKey {
+            role: KeyRole::Active,
+            public_key: "RWTZoZrRXs0kE+haygvOOKaRDbtDUSc8L5YKr/o+X3VsI5peZv07AXaL",
+            development: true,
+        },
+        PinnedKey {
+            role: KeyRole::Standby,
+            public_key: "RWRNqibQ4kJKgnptbB11DaW4nFmh3O4rwaSlLf76s9ut12aQ3XX7o9KL",
+            development: true,
+        },
+    ];
 
     /// The secret half of the development active key.
     pub const ACTIVE_SECRET: &str =
@@ -384,19 +423,69 @@ mod tests {
         ));
     }
 
-    /// The pinned table is the one place a release swaps keys. While it holds
-    /// development keys, every entry says so, and the secret halves in the
-    /// repository are the pairs of exactly those keys.
+    /// A test build pins the development pairs and nothing else, and the
+    /// secret halves in the repository are the pairs of exactly those keys.
     #[test]
-    fn the_pinned_keys_are_the_development_pairs_until_the_real_ones_exist() {
+    fn a_test_build_pins_the_development_pairs_and_no_release_key() {
+        assert_eq!(PINNED_KEYS, super::development::KEYS);
         for key in PINNED_KEYS {
             assert!(key.development, "{} is a development key", key.role);
             let (id, text) = sign(key.role, MANIFEST);
             assert_eq!(id, key.key_id());
             assert!(verify_with(&[key], MANIFEST, &one((id, text))).is_ok());
         }
+        for release in RELEASE_KEYS {
+            assert!(
+                !PINNED_KEYS.contains(&release),
+                "{} is pinned",
+                release.role
+            );
+        }
         assert!(super::development::ACTIVE_SECRET.contains("DEVELOPMENT"));
         assert!(super::development::STANDBY_SECRET.contains("DEVELOPMENT"));
+    }
+
+    /// The table a shipped binary pins holds byte5's active and standby keys,
+    /// neither marked as a development key, under the key ids the owner noted
+    /// when the pairs were generated.
+    #[test]
+    fn the_release_table_holds_the_owners_active_and_standby_keys() {
+        assert_eq!(RELEASE_KEYS[0].role, KeyRole::Active);
+        assert_eq!(RELEASE_KEYS[0].key_id(), "5DDA49F105939297");
+        assert_eq!(RELEASE_KEYS[1].role, KeyRole::Standby);
+        assert_eq!(RELEASE_KEYS[1].key_id(), "EA33B324921AC1B3");
+        for key in RELEASE_KEYS {
+            assert!(!key.development, "{} is a development key", key.role);
+            assert!(PublicKey::from_base64(key.public_key).is_ok());
+        }
+        for development in super::development::KEYS {
+            assert!(
+                RELEASE_KEYS
+                    .iter()
+                    .all(|key| key.public_key != development.public_key),
+                "the development {} key is in the release table",
+                development.role
+            );
+        }
+    }
+
+    /// What a build without the test-only feature pins refuses a manifest
+    /// signed with either development key: no release key made the
+    /// signature, whatever its file is named.
+    #[test]
+    fn a_manifest_signed_with_a_development_key_is_refused_by_the_release_table() {
+        for role in [KeyRole::Active, KeyRole::Standby] {
+            assert_eq!(
+                verify_with(&RELEASE_KEYS, MANIFEST, &one(sign(role, MANIFEST))),
+                Err(SignatureError::Unsigned)
+            );
+            let (_, text) = sign(role, MANIFEST);
+            let posing = BTreeMap::from([(RELEASE_KEYS[0].key_id(), text)]);
+            assert!(matches!(
+                verify_with(&RELEASE_KEYS, MANIFEST, &posing),
+                Err(SignatureError::Invalid(_))
+            ));
+        }
     }
 
     #[test]

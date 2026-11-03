@@ -40,4 +40,8 @@ toml = { version = "1.1.6", default-features = false, features = ["parse", "serd
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
+# The pack release tests sign with the development keys, so a test build pins
+# those in place of the release keys. The build tool the release workflow runs
+# is built without this feature and verifies against the release keys.
+agentsweep-core = { workspace = true, features = ["apple", "daemon", "development-keys"] }
 tempfile = "3.27.0"

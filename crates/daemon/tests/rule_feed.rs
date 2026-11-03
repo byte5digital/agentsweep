@@ -6,8 +6,8 @@
 //! GitHub, the real home, the real data directory, the documented socket or
 //! the login Keychain. The packs the server offers are copies of this
 //! repository's own `rules/` and `iocs/` trees, changed where a test needs it
-//! and signed with the development keys the binary pins until the real key
-//! pairs exist.
+//! and signed with the development keys, which a test build pins in place of
+//! the release keys a shipped daemon pins.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};

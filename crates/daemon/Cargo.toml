@@ -71,7 +71,8 @@ security-framework-sys = "2.17.0"
 agentsweep-adapter-conformance = { version = "0.1.0", path = "../adapter-conformance" }
 agentsweep-adapter-workspace = { workspace = true, features = ["testing"] }
 # Signs the test Rule Packs a fixture Rule Feed serves, with the development
-# keys the binary pins until the real key pairs exist.
+# keys a test build pins in place of the release keys. A shipped daemon is
+# built without this feature and pins the release keys alone.
 agentsweep-core = { workspace = true, features = ["apple", "daemon", "development-keys"] }
 # The Rule Pack release workflow's own release writer and signing step, so a
 # test proves the client accepts what the workflow publishes.

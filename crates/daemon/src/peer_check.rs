@@ -18,19 +18,52 @@ use std::sync::Arc;
 use agentsweep_ipc::peer::{Nobody, Peer, PeerCheck, SameUser};
 use agentsweep_ipc::protocol::Refusal;
 
-/// byte5's Apple Developer Team ID, which the release milestone fills in.
+/// byte5's Apple Developer Team ID, written once, so the constant and the
+/// record the release bundle checker reads cannot drift apart.
+macro_rules! team_id {
+    () => {
+        "3SUCH58XL7"
+    };
+}
+
+/// byte5's Apple Developer Team ID, the organisational unit of the Developer
+/// ID certificate the app, the daemon and the CLI are signed with.
 ///
-/// It is empty until then, and a release build that finds it empty answers
-/// nobody rather than falling back to the user check: a build that cannot tell
-/// its own programs from anything else on the machine must not answer at all.
-pub const TEAM_ID: &str = "";
+/// A release build that found it empty would answer nobody rather than fall
+/// back to the user check: a build that cannot tell its own programs from
+/// anything else on the machine must not answer at all.
+pub const TEAM_ID: &str = team_id!();
+
+/// What the Team ID record starts with.
+pub const TEAM_ID_RECORD_PREFIX: &str = "agentsweep-team-id=";
+
+/// What the Team ID record ends with.
+pub const TEAM_ID_RECORD_SUFFIX: &str = ";";
+
+/// The Team ID behind a fixed prefix and before a fixed suffix, which is the
+/// form the release check reads it in. Because the check reads it at run
+/// time, the whole record stays in the daemon binary, and the release bundle
+/// checker finds it there without running the daemon: a bundle whose daemon
+/// carries no Team ID, or another one than the bundle is signed with, is
+/// refused before a release.
+const TEAM_ID_RECORD: &str = concat!("agentsweep-team-id=", team_id!(), ";");
+
+/// The Team ID this binary carries, read out of its record.
+pub fn compiled_team_id() -> &'static str {
+    // Through `black_box`, so the optimiser keeps the record whole rather
+    // than only the part between its ends.
+    std::hint::black_box(TEAM_ID_RECORD)
+        .strip_prefix(TEAM_ID_RECORD_PREFIX)
+        .and_then(|rest| rest.strip_suffix(TEAM_ID_RECORD_SUFFIX))
+        .unwrap_or_default()
+}
 
 /// The check this build makes.
 pub fn for_this_build() -> Arc<dyn PeerCheck> {
     if cfg!(debug_assertions) {
         return Arc::new(SameUser);
     }
-    release_check(TEAM_ID)
+    release_check(compiled_team_id())
 }
 
 /// The check a release build makes, given the Team ID compiled into it.
@@ -230,6 +263,50 @@ mod tests {
         assert_eq!(
             requirement,
             "anchor apple generic and certificate leaf[subject.OU] = \"ABCDE12345\""
+        );
+    }
+
+    /// The Team ID is byte5's, and the record the release check reads it from
+    /// carries exactly that between its fixed ends, which is what the release
+    /// bundle checker looks for in the daemon binary.
+    #[test]
+    fn the_compiled_team_id_is_byte5s() {
+        assert_eq!(TEAM_ID, "3SUCH58XL7");
+        assert_eq!(compiled_team_id(), TEAM_ID);
+        assert_eq!(
+            TEAM_ID_RECORD,
+            format!("{TEAM_ID_RECORD_PREFIX}{TEAM_ID}{TEAM_ID_RECORD_SUFFIX}")
+        );
+        assert!(
+            TEAM_ID.len() == 10
+                && TEAM_ID
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()),
+            "a Team ID is ten upper-case letters and digits"
+        );
+    }
+
+    /// The check a release build makes is the one for byte5's Team ID, and it
+    /// refuses a peer of this user signed under another Team ID: launchd,
+    /// process 1, is signed by Apple, whose certificate names Apple and not
+    /// byte5.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_release_check_refuses_a_peer_signed_under_another_team_id() {
+        let check = release_check(compiled_team_id());
+        assert_eq!(check.describe(), "signed by Team ID 3SUCH58XL7");
+        let apple = Peer::of_user(this_user()).with_pid(1);
+        // The peer is signed and readable, so the refusal below is about whose
+        // signature it is and nothing else.
+        assert!(signature::satisfies(&apple, "anchor apple").is_ok());
+        let refusal = check
+            .admits(&apple)
+            .expect_err("Apple's code is not byte5's");
+        assert_eq!(refusal.reason(), "unsigned-peer");
+        assert!(
+            refusal.message().contains("not AgentSweep's"),
+            "{}",
+            refusal.message()
         );
     }
 

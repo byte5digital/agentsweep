@@ -24,19 +24,43 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT INT TERM
 
 marker="$work/a-bundle-binary-ran"
+# CARRIES is text the binary holds among its bytes, the way a Rust binary
+# holds its string constants: a Team ID record or a development public key.
 cat >"$work/tripwire.c" <<EOF
 #include <stdio.h>
+#ifndef CARRIES
+#define CARRIES ""
+#endif
+static const char carries[] = CARRIES;
 int main(void) {
 	FILE *f = fopen("$marker", "a");
-	if (f) { fputs("ran\n", f); fclose(f); }
+	if (f) { fputs("ran\n", f); fputs(carries, f); fclose(f); }
 	return 1;
 }
 EOF
 universal="-arch arm64 -arch x86_64"
-# shellcheck disable=SC2086 # the architectures are words on purpose
-cc $universal -o "$work/plain" "$work/tripwire.c"
-# shellcheck disable=SC2086
-cc $universal -o "$work/daemon" "$work/tripwire.c" -Wl,-sectcreate,__TEXT,__info_plist,"$daemon_plist"
+plist="-Wl,-sectcreate,__TEXT,__info_plist,$daemon_plist"
+# The daemon a release build makes carries its Team ID record; the fixture
+# identity of the release mode cases names the same Team ID.
+team_record="agentsweep-team-id=ABCDE12345;"
+development_rule_pack_key="RWRNqibQ4kJKgnptbB11DaW4nFmh3O4rwaSlLf76s9ut12aQ3XX7o9KL"
+development_updater_key="dW50cnVzdGVkIGNvbW1lbnQ6IEFnZW50U3dlZXAgdXBkYXRlciBERVZFTE9QTUVOVCBwdWJsaWMga2V5ClJXVE5wUUsyM1R2VkJCSlBEdVB4Z3BZQXl4bnl6RGxhT1FmR2pJSit4OXd2QkJBWG9uT01hci9lCg=="
+# Builds a universal tripwire at $1 carrying $2, with further cc options after.
+tripwire() {
+	out="$1"
+	text="$2"
+	shift 2
+	# shellcheck disable=SC2086 # the architectures are words on purpose
+	cc $universal -DCARRIES="\"$text\"" -o "$out" "$work/tripwire.c" "$@"
+}
+tripwire "$work/plain" ""
+tripwire "$work/daemon" "$team_record" "$plist"
+tripwire "$work/daemon-no-team" "" "$plist"
+tripwire "$work/daemon-empty-team" "agentsweep-team-id=;" "$plist"
+tripwire "$work/daemon-other-team" "agentsweep-team-id=ZZZZZ99999;" "$plist"
+tripwire "$work/daemon-development-key" "$team_record $development_rule_pack_key" "$plist"
+tripwire "$work/cli-development-key" "$development_rule_pack_key"
+tripwire "$work/app-development-updater-key" "$development_updater_key"
 cc -arch "$(uname -m)" -o "$work/thin-binary" "$work/tripwire.c"
 
 cat >"$work/entitlements.plist" <<'EOF'
@@ -65,7 +89,12 @@ PATH="$work/bin:$PATH"
 export PATH
 
 # Builds a fixture AgentSweep.app at $1. The remaining arguments change it:
-# "bare-daemon" gives the daemon no Info.plist, "daemon-other-identifier" signs
+# "bare-daemon" gives the daemon no Info.plist, "daemon-no-team",
+# "daemon-empty-team" and "daemon-other-team" give it no Team ID record, an
+# empty one or another team's, "daemon-development-key" and
+# "cli-development-key" put a development Rule Pack public key in the daemon
+# or the CLI, "app-development-updater-key" puts the development updater
+# public key in the app executable, "daemon-other-identifier" signs
 # the daemon with another identifier, "cli-entitlements" signs the CLI with an
 # entitlement, "thin-cli" gives the CLI one architecture only,
 # "cli-resigned-without-runtime" re-signs the CLI without the hardened runtime
@@ -93,9 +122,19 @@ EOF
 	cp "$work/daemon" "$app/Contents/MacOS/agentsweepd"
 	case " $* " in
 	*" bare-daemon "*) cp "$work/plain" "$app/Contents/MacOS/agentsweepd" ;;
+	*" daemon-no-team "*) cp "$work/daemon-no-team" "$app/Contents/MacOS/agentsweepd" ;;
+	*" daemon-empty-team "*) cp "$work/daemon-empty-team" "$app/Contents/MacOS/agentsweepd" ;;
+	*" daemon-other-team "*) cp "$work/daemon-other-team" "$app/Contents/MacOS/agentsweepd" ;;
+	*" daemon-development-key "*) cp "$work/daemon-development-key" "$app/Contents/MacOS/agentsweepd" ;;
 	esac
 	case " $* " in
 	*" thin-cli "*) cp "$work/thin-binary" "$app/Contents/MacOS/agentsweep" ;;
+	*" cli-development-key "*) cp "$work/cli-development-key" "$app/Contents/MacOS/agentsweep" ;;
+	esac
+	case " $* " in
+	*" app-development-updater-key "*)
+		cp "$work/app-development-updater-key" "$app/Contents/MacOS/agentsweep-menubar"
+		;;
 	esac
 
 	daemon_identifier=""
@@ -161,9 +200,27 @@ also() {
 	fi
 }
 
-for fixture in good bare other-identifier entitled thin no-runtime several; do
+# Expects the text $2 nowhere in the output of the last expect call.
+lacks() {
+	if echo "$output" | grep -qF -- "$2"; then
+		echo "not ok: $1: output holds \"$2\"" >&2
+		echo "$output" | sed 's/^/    /' >&2
+		failures=$((failures + 1))
+	else
+		echo "ok: $1"
+	fi
+}
+
+for fixture in good bare other-identifier entitled thin no-runtime several \
+	no-team empty-team other-team daemon-key cli-key updater-key; do
 	mkdir "$work/$fixture"
 done
+make_app "$work/no-team/AgentSweep.app" daemon-no-team
+make_app "$work/empty-team/AgentSweep.app" daemon-empty-team
+make_app "$work/other-team/AgentSweep.app" daemon-other-team
+make_app "$work/daemon-key/AgentSweep.app" daemon-development-key
+make_app "$work/cli-key/AgentSweep.app" cli-development-key
+make_app "$work/updater-key/AgentSweep.app" app-development-updater-key
 make_app "$work/good/AgentSweep.app"
 make_app "$work/bare/AgentSweep.app" bare-daemon
 make_app "$work/other-identifier/AgentSweep.app" daemon-other-identifier
@@ -217,6 +274,25 @@ also "reports the thin sidecar among several misses" "$cli is not universal"
 also "reports the entitlement among several misses" "$cli ($arch) carries entitlements"
 also "reports the daemon's identifier among several misses" "$daemon ($arch) has the identifier"
 
+# What the binaries carry, read off their bytes in both modes.
+expect "names the Team ID the daemon was built with" 0 \
+	"$daemon (x86_64): built with Team ID ABCDE12345 in its peer check" - "$work/good/AgentSweep.app"
+also "reads the Team ID in each architecture" "$daemon (arm64): built with Team ID ABCDE12345"
+expect "refuses a daemon built without a Team ID" 1 \
+	"$daemon ($arch) carries no Team ID in its peer check" - "$work/no-team/AgentSweep.app"
+expect "refuses a daemon built with an empty Team ID" 1 \
+	"$daemon ($arch) was built with an empty Team ID" - "$work/empty-team/AgentSweep.app"
+expect "refuses a daemon carrying a development Rule Pack public key" 1 \
+	"$daemon ($arch) carries the development Rule Pack public key $development_rule_pack_key" \
+	- "$work/daemon-key/AgentSweep.app"
+expect "refuses a CLI carrying a development Rule Pack public key" 1 \
+	"$cli ($arch) carries the development Rule Pack public key $development_rule_pack_key" \
+	- "$work/cli-key/AgentSweep.app"
+expect "leaves the development updater key to release mode" 0 \
+	"Every check passed" - "$work/updater-key/AgentSweep.app"
+also "lists the development updater key among what ad hoc mode skips" \
+	"no development updater public key"
+
 if [ -e "$work/spctl-calls" ]; then
 	echo "not ok: ad hoc mode asked spctl: $(cat "$work/spctl-calls")" >&2
 	failures=$((failures + 1))
@@ -238,8 +314,20 @@ also "refuses ad hoc signatures in release mode" "is signed ad hoc"
 also "demands the identifier in the designated requirement" "designated requirement that does not name"
 also "asks Gatekeeper about the app" "spctl refuses the app"
 also "asks Gatekeeper about the DMG" "spctl refuses AgentSweep.dmg"
-also "reports the compiled Team ID as not yet checkable" "NOT YET CHECKABLE: $daemon"
-also "reports the development Rule Pack keys as not yet checkable" "development Rule Pack public key"
+lacks "takes the daemon's compiled Team ID when the identity names it" "in its peer check, not"
+lacks "finds no development Rule Pack public key in a build without one" "development Rule Pack public key"
+lacks "finds no development updater public key in a build without one" "development updater public key"
+lacks "reports nothing as not yet checkable" "NOT YET CHECKABLE"
+
+expect "refuses a daemon built for another Team ID in release mode" 1 \
+	"$daemon ($arch) was built with Team ID ZZZZZ99999 in its peer check, not ABCDE12345" \
+	"$identity" "$work/other-team/AgentSweep.app"
+expect "refuses the development updater public key in release mode" 1 \
+	"Contents/MacOS/agentsweep-menubar ($arch) carries the development updater public key" \
+	"$identity" "$work/updater-key/AgentSweep.app"
+expect "refuses a development Rule Pack public key in release mode too" 1 \
+	"$cli ($arch) carries the development Rule Pack public key" \
+	"$identity" "$work/cli-key/AgentSweep.app"
 if grep -q -- "^-a -vv -t exec .*/AgentSweep.app$" "$work/spctl-calls" 2>/dev/null; then
 	echo "ok: assesses the app as an executable"
 else

@@ -31,22 +31,44 @@
 #   its first authority is the identity given, a Team ID is set and is the same
 #   on every binary, and the daemon's designated requirement (`codesign -d
 #   -r-`) names its identifier (ad hoc code gets a cdhash requirement instead).
-# - Release mode only, not yet checkable: that the daemon was built with a
-#   filled Team ID and that neither the daemon nor the CLI pins a development
-#   Rule Pack public key. Ticket 98 says how both are read off the binary
-#   without running it; until then each is reported as a miss, never passed.
+#
+# Read off the bytes of every Mach-O, in every architecture, without running
+# it (release checklist items 14 and 17, spec section 9.8 item 2):
+#
+# - No development Rule Pack public key: a build with the core's test-only
+#   `development-keys` feature pins the development pairs, whose secret halves
+#   are in the repository, and carries their public keys.
+# - The daemon carries a filled Team ID in its peer check, the record
+#   `agentsweep-team-id=<Team ID>;` the check reads at run time. A daemon
+#   without one admits nobody. In release mode it must be the Team ID the
+#   identity names, so a daemon built for another team is refused too.
+# - Release mode only: no development updater public key. The app pins the
+#   updater key from `tauri.conf.json`, and only an ad hoc CI bundle merges
+#   in the development override, whose secret half is in the repository.
 #
 # Then `codesign --verify --deep --strict` accepts the app. Given a DMG, the
 # DMG itself must be signed. In release mode the DMG must also be stapled
 # (`xcrun stapler validate`), and `spctl -a -vv` must accept the app as an
 # executable and the DMG by its primary signature as a file to open.
 #
-# Ad hoc mode skips exactly the checks an ad hoc identity cannot pass, and
-# says so.
+# Ad hoc mode skips exactly the checks an ad hoc identity or the ad hoc CI
+# bundle cannot pass, and says so.
 
 set -eu
 
 daemon_identifier="de.byte5.agentsweep.daemon"
+
+# The development public keys, whose secret halves are committed for the tests:
+# the Rule Pack pairs of the core's `development::KEYS`, and the updater pair
+# of the override under `apps/menubar/development-keys/`, both as the
+# configuration value and as the bare key line. A test of the build tool
+# holds these lists to those sources.
+development_rule_pack_keys="RWTZoZrRXs0kE+haygvOOKaRDbtDUSc8L5YKr/o+X3VsI5peZv07AXaL RWRNqibQ4kJKgnptbB11DaW4nFmh3O4rwaSlLf76s9ut12aQ3XX7o9KL"
+development_updater_keys="dW50cnVzdGVkIGNvbW1lbnQ6IEFnZW50U3dlZXAgdXBkYXRlciBERVZFTE9QTUVOVCBwdWJsaWMga2V5ClJXVE5wUUsyM1R2VkJCSlBEdVB4Z3BZQXl4bnl6RGxhT1FmR2pJSit4OXd2QkJBWG9uT01hci9lCg== RWTNpQK23TvVBBJPDuPxgpYAyxnyzDlaOQfGjIJ+x9wvBBAXonOMar/e"
+
+# The record of the Team ID the daemon's peer check reads, around the Team ID.
+team_id_record_prefix="agentsweep-team-id="
+team_id_record_suffix=";"
 
 if [ "$#" -ne 2 ] || [ -z "$1" ] || [ -z "$2" ]; then
 	echo "usage: check-bundle-signature.sh <identity> <bundle>" >&2
@@ -60,6 +82,8 @@ if [ "$identity" = "-" ]; then
 else
 	mode="release"
 fi
+# The Team ID a Developer ID identity names at its end, "(<Team ID>)".
+identity_team="$(echo "$identity" | sed -n 's/.*(\([A-Z0-9]\{10\}\))$/\1/p')"
 
 if [ ! -e "$bundle" ]; then
 	echo "no such bundle: $bundle" >&2
@@ -79,10 +103,6 @@ trap cleanup EXIT INT TERM
 failures=0
 fail() {
 	echo "FAIL: $*" >&2
-	failures=$((failures + 1))
-}
-not_yet_checkable() {
-	echo "NOT YET CHECKABLE: $*" >&2
 	failures=$((failures + 1))
 }
 
@@ -141,6 +161,56 @@ fi
 echo "Checking $app ($mode mode, identity: $identity)"
 
 : >"$work/team-ids"
+: >"$work/compiled-team-ids"
+
+# Checks what one architecture of a Mach-O carries, read as bytes and never
+# run: no development public key, and for the daemon a filled Team ID.
+check_contents() {
+	contents_binary="$1"
+	contents_arch="$2"
+	contents_label="$3"
+	contents_relative="$4"
+	piece="$work/piece"
+	rm -f "$piece"
+	lipo "$contents_binary" -thin "$contents_arch" -output "$piece" 2>/dev/null ||
+		cp "$contents_binary" "$piece"
+	for key in $development_rule_pack_keys; do
+		if LC_ALL=C grep -a -q -F -- "$key" "$piece"; then
+			fail "$contents_label carries the development Rule Pack public key $key: it was built with the core's development-keys feature"
+		fi
+	done
+	if [ "$mode" = "release" ]; then
+		for key in $development_updater_keys; do
+			if LC_ALL=C grep -a -q -F -- "$key" "$piece"; then
+				fail "$contents_label carries the development updater public key: it was built with the development override"
+				break
+			fi
+		done
+	fi
+	if [ "$contents_relative" = "Contents/MacOS/agentsweepd" ]; then
+		records="$(LC_ALL=C grep -a -o -- "$team_id_record_prefix[A-Z0-9]*$team_id_record_suffix" "$piece" | LC_ALL=C sort -u)" || true
+		case "$(echo "$records" | grep -c .)" in
+		0)
+			fail "$contents_label carries no Team ID in its peer check, so it admits nobody"
+			;;
+		1)
+			compiled="${records#"$team_id_record_prefix"}"
+			compiled="${compiled%"$team_id_record_suffix"}"
+			if [ -z "$compiled" ]; then
+				fail "$contents_label was built with an empty Team ID in its peer check, so it admits nobody"
+			elif [ "${#compiled}" -ne 10 ]; then
+				fail "$contents_label was built with \"$compiled\" in its peer check, which is not a Team ID"
+			else
+				echo "$contents_label: built with Team ID $compiled in its peer check"
+				printf '%s\t%s\n' "$compiled" "$contents_label" >>"$work/compiled-team-ids"
+			fi
+			;;
+		*)
+			fail "$contents_label carries more than one Team ID record: $(echo "$records" | tr '\n' ' ')"
+			;;
+		esac
+	fi
+}
 
 # Checks one signed code object in one architecture.
 check_code() {
@@ -206,6 +276,7 @@ while IFS= read -r binary; do
 		fail "$relative does not verify: codesign --verify --strict refuses it"
 	for arch in $archs; do
 		check_code "$binary" "$arch" "$relative ($arch)"
+		check_contents "$binary" "$arch" "$relative ($arch)" "$relative"
 		if [ "$relative" = "Contents/MacOS/agentsweepd" ]; then
 			identifier="$(codesign -dvv --arch "$arch" "$binary" 2>&1 | sed -n 's/^Identifier=//p')"
 			if [ "$identifier" != "$daemon_identifier" ]; then
@@ -233,8 +304,18 @@ if [ "$mode" = "release" ]; then
 			fail "$label carries the Team ID $team, not $reference like the rest of the bundle"
 		fi
 	done <"$work/team-ids"
-	not_yet_checkable "Contents/MacOS/agentsweepd: whether it was built with a filled Team ID in its peer check (ticket 98 says how this is read off the binary)"
-	not_yet_checkable "Contents/MacOS/agentsweepd and Contents/MacOS/agentsweep: whether either pins a development Rule Pack public key (ticket 98 says how this is read off the binary)"
+	# The daemon's peer check must admit what the bundle is signed with: the
+	# Team ID the identity names, or failing that the bundle's own.
+	expected="${identity_team:-$reference}"
+	if [ -z "$expected" ]; then
+		fail "neither the identity nor the signatures name a Team ID to hold the daemon's peer check to"
+	else
+		while IFS="$(printf '\t')" read -r team label; do
+			if [ "$team" != "$expected" ]; then
+				fail "$label was built with Team ID $team in its peer check, not $expected, the Team ID it is signed with"
+			fi
+		done <"$work/compiled-team-ids"
+	fi
 fi
 
 codesign --verify --deep --strict "$app" 2>/dev/null || fail "codesign --verify --deep --strict refuses the app"
@@ -248,7 +329,8 @@ else
 	echo "  - the signing authority, and no ad hoc signature"
 	echo "  - a Team ID, the same on every binary"
 	echo "  - the daemon's identifier in its designated requirement"
-	echo "  - the daemon's compiled Team ID and no development Rule Pack public key"
+	echo "  - the daemon's compiled Team ID against the identity's (it is checked to be filled)"
+	echo "  - no development updater public key (the ad hoc CI bundle pins it through its override)"
 	echo "  - the DMG's staple (xcrun stapler validate)"
 	echo "  - Gatekeeper's assessment of the app and the DMG (spctl -a -vv)"
 fi

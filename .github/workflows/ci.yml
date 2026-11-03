@@ -118,8 +118,9 @@ jobs:
 
       # Release sidecars, so the bundle carries what a release ships: each one
       # built for both Apple triples through cargo auditable and joined with
-      # lipo. Nothing here runs the daemon, so the empty Team ID that makes a
-      # release daemon admit nobody does not matter.
+      # lipo. Nothing here runs the daemon, so that a release daemon admits
+      # only programs signed with byte5's Team ID, which nothing here is, does
+      # not matter.
       - name: Build the universal sidecars
         env:
           TARGET: universal-apple-darwin
@@ -166,8 +167,11 @@ jobs:
       # daemon carries its frozen signing identifier, because the Keychain key
       # is bound to it. The daemon embeds an Info.plist naming it, so Tauri's
       # own signing yields it in each architecture and nothing re-signs after
-      # Tauri. Ad hoc mode skips, and lists, the checks an ad hoc identity
-      # cannot pass; the release draft runs the same script in release mode.
+      # Tauri. Read off their bytes, no binary of this release-profile build
+      # carries a development Rule Pack public key, and the daemon carries a
+      # filled Team ID. Ad hoc mode skips, and lists, the checks an ad hoc
+      # identity or this bundle's development updater key cannot pass; the
+      # release draft runs the same script in release mode.
       - name: Test the release bundle checker
         run: .github/scripts/check-bundle-signature-test.sh
 

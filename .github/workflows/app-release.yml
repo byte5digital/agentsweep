@@ -164,6 +164,8 @@ jobs:
       # 3, 14, 15 and 16): on every Mach-O in every architecture `Timestamp=`,
       # the identity as first authority, one Team ID, the hardened runtime and
       # no entitlements, the daemon's frozen identifier, both architectures;
+      # read off the bytes, no development Rule Pack or updater public key and
+      # the identity's Team ID in the daemon's peer check;
       # on the DMG its signature, its staple and Gatekeeper. Every miss of all
       # three subjects is reported before the step fails.
       - name: Check the app, the DMG and the updater archive with the release bundle checker

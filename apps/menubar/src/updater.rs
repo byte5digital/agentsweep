@@ -10,9 +10,12 @@
 //! replaced bundle is in place, the daemon's bundle watch brings it back on
 //! the new version (spec section 9.5).
 //!
-//! The pinned key is a development key until the release prerequisites of
-//! spec section 9.8 produce the real one; its secret half is committed under
-//! `apps/menubar/development-keys/` for the tests and the CI bundle alone.
+//! The pinned key is byte5's updater key (spec section 9.8, key id
+//! `7539592E07DACF55`), whose secret half lives only in the `release`
+//! environment. A development pair under `apps/menubar/development-keys/`
+//! serves the tests and the CI bundle alone: its public half reaches a build
+//! only through the configuration override beside it, and the release bundle
+//! checker refuses a release whose app carries it.
 //!
 //! What decides is here and tested at its seams: [`toggle`] resolves the
 //! update toggle, [`Updates`] holds when a check is due, the update that is

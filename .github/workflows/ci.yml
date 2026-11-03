@@ -128,11 +128,14 @@ jobs:
       # The Tauri command line interface from npm, pinned to the exact version
       # of the tauri crate the workspace locks. What follows `--` goes to cargo.
       # `createUpdaterArtifacts` signs the updater archive; here with the
-      # development updater key, whose public half `tauri.conf.json` pins
-      # until the release prerequisites produce the real one. Its secret half
-      # is committed for this and the tests alone, encrypted with an empty
-      # password; the release signs with the updater key from the `release`
-      # environment.
+      # development updater key, whose secret half is committed for this and
+      # the tests alone, encrypted with an empty password. `tauri.conf.json`
+      # pins byte5's updater key, so this bundle alone takes the development
+      # public half from the override beside the secret, merged after the
+      # bundle configuration; the release builds without the override and
+      # signs with the updater key from the `release` environment, and the
+      # release bundle checker refuses a release that carries the development
+      # public half.
       - name: Build the universal bundle
         working-directory: apps/menubar
         env:
@@ -140,7 +143,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: |
           TAURI_SIGNING_PRIVATE_KEY="$(cat development-keys/updater-development.secret)" \
-            npx --yes @tauri-apps/cli@2.11.5 build --target universal-apple-darwin --config tauri.bundle.conf.json -- --locked
+            npx --yes @tauri-apps/cli@2.11.5 build --target universal-apple-darwin \
+              --config tauri.bundle.conf.json --config development-keys/tauri.development.conf.json -- --locked
 
       - name: Check what the bundle carries
         run: |

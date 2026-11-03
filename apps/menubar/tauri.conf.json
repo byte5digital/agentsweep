@@ -69,7 +69,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IEFnZW50U3dlZXAgdXBkYXRlciBERVZFTE9QTUVOVCBwdWJsaWMga2V5ClJXVE5wUUsyM1R2VkJCSlBEdVB4Z3BZQXl4bnl6RGxhT1FmR2pJSit4OXd2QkJBWG9uT01hci9lCg==",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc1Mzk1OTJFMDdEQUNGNTUKUldSVno5b0hMbGs1ZGN4aHYzWmxuY29tSzdGNVg5UTFSaWNzOElvK056NjIvS1diZmFkMjg0QU8K",
       "endpoints": [
         "https://github.com/byte5digital/agentsweep/releases/latest/download/latest.json"
       ]

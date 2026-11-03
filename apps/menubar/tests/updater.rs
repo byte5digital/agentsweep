@@ -1,11 +1,14 @@
 //! The app updater against a local fixture server (spec section 9.4).
 //!
 //! The real Tauri updater plugin runs on Tauri's mock runtime with the
-//! plugin configuration `tauri.conf.json` ships, except that its endpoint is
-//! a loopback fixture server, which serves a `latest.json` and an archive
-//! signed with the development updater key and counts every request. Nothing
-//! here reaches the network, and nothing is installed: the install at quit
-//! is tested at its seam in the `updater` module.
+//! plugin configuration `tauri.conf.json` ships, except for two things: its
+//! endpoint is a loopback fixture server, which serves a `latest.json` and an
+//! archive signed with the development updater key and counts every request,
+//! and its public key is the development one, from the configuration override
+//! beside that key's secret half. The shipped file pins byte5's updater key,
+//! whose secret half the repository never holds. Nothing here reaches the
+//! network, and nothing is installed: the install at quit is tested at its
+//! seam in the `updater` module.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -26,6 +29,36 @@ const SHIPPED: &str = include_str!("../tauri.conf.json");
 /// line interface reads: base64 of the minisign secret key, encrypted with
 /// an empty password.
 const DEVELOPMENT_SECRET: &str = include_str!("../development-keys/updater-development.secret");
+
+/// The configuration override that pins the development updater key's public
+/// half in place of byte5's, for the tests and the CI bundle alone.
+const DEVELOPMENT_OVERRIDE: &str = include_str!("../development-keys/tauri.development.conf.json");
+
+/// The key id of byte5's updater key, as the owner noted it when the pair was
+/// generated.
+const RELEASE_KEY_ID: &str = "7539592E07DACF55";
+
+/// The public half of the development updater key, as the override pins it:
+/// base64 of the whole minisign `.pub` file.
+fn development_pubkey() -> String {
+    let development: Value =
+        serde_json::from_str(DEVELOPMENT_OVERRIDE).expect("the override is JSON");
+    development["plugins"]["updater"]["pubkey"]
+        .as_str()
+        .expect("a key")
+        .to_string()
+}
+
+/// The key id minisign names a public key by: bytes 2 to 9 of the key line,
+/// read as a little-endian integer, in sixteen upper-case hex digits.
+fn key_id(pub_file: &str) -> String {
+    let line = pub_file.lines().nth(1).expect("a key line");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(line.trim())
+        .expect("base64");
+    let id: [u8; 8] = bytes[2..10].try_into().expect("eight bytes");
+    format!("{:016X}", u64::from_le_bytes(id))
+}
 
 /// The archive the fixture serves: a stand-in, never unpacked.
 const ARCHIVE: &[u8] = b"a stand-in for AgentSweep.app.tar.gz, never installed\n";
@@ -164,11 +197,21 @@ fn answer(stream: TcpStream, latest: &str, seen: &Mutex<Vec<Seen>>) {
     let _ = stream.flush();
 }
 
-/// The app as it ships, its updater asking `endpoint` instead.
+/// The app as it ships, its updater asking `endpoint` instead and trusting
+/// the development key the fixture signs with.
 fn app_against(endpoint: &str) -> tauri::App<MockRuntime> {
+    app_trusting(endpoint, Some(&development_pubkey()))
+}
+
+/// The app as it ships, its updater asking `endpoint` instead and trusting
+/// `pubkey`, or the key the shipped configuration pins when that is `None`.
+fn app_trusting(endpoint: &str, pubkey: Option<&str>) -> tauri::App<MockRuntime> {
     let shipped: Value = serde_json::from_str(SHIPPED).expect("tauri.conf.json is JSON");
     let mut updater = shipped["plugins"]["updater"].clone();
     updater["endpoints"] = json!([endpoint]);
+    if let Some(pubkey) = pubkey {
+        updater["pubkey"] = json!(pubkey);
+    }
     let mut context = mock_context(noop_assets());
     context
         .config_mut()
@@ -189,7 +232,7 @@ fn launch() -> SystemTime {
 }
 
 #[test]
-fn the_shipped_configuration_pins_the_fixed_endpoint_and_the_development_key() {
+fn the_shipped_configuration_pins_the_fixed_endpoint_and_byte5s_updater_key() {
     let shipped: Value = serde_json::from_str(SHIPPED).expect("tauri.conf.json is JSON");
     assert_eq!(shipped["bundle"]["createUpdaterArtifacts"], json!(true));
     assert_eq!(
@@ -198,20 +241,68 @@ fn the_shipped_configuration_pins_the_fixed_endpoint_and_the_development_key() {
         "one fixed endpoint, no variables"
     );
     assert!(!ENDPOINT.contains("{{"));
-    // The pinned key is the development key until the release prerequisites
-    // produce the real one (spec section 9.8): the secret half committed
-    // beside it signs what the pinned half verifies.
-    let pinned = unbase64(
-        shipped["plugins"]["updater"]["pubkey"]
-            .as_str()
-            .expect("a key"),
+    // The pinned key is byte5's (spec section 9.8), never the development
+    // key whose secret half is committed beside the tests: the development
+    // secret signs nothing the shipped key verifies.
+    let pubkey = shipped["plugins"]["updater"]["pubkey"]
+        .as_str()
+        .expect("a key");
+    assert_ne!(pubkey, development_pubkey());
+    let pinned = unbase64(pubkey);
+    assert!(!pinned.contains("DEVELOPMENT"), "{pinned}");
+    assert_eq!(key_id(&pinned), RELEASE_KEY_ID);
+    assert_ne!(key_id(&unbase64(&development_pubkey())), RELEASE_KEY_ID);
+    assert!(verifies(&pinned, &signed(ARCHIVE)).is_err());
+    // The webview may not call the plugin: the capability grants no
+    // updater permission.
+    assert!(!include_str!("../capabilities/default.json").contains("updater"));
+}
+
+/// The override changes the updater's public key and nothing else, and the
+/// development secret committed beside it signs what it pins.
+#[test]
+fn the_development_override_pins_the_development_key_and_nothing_else() {
+    let development: Value =
+        serde_json::from_str(DEVELOPMENT_OVERRIDE).expect("the override is JSON");
+    let mut keys: Vec<&str> = development
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .filter(|key| *key != "$schema")
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["plugins"]);
+    assert_eq!(
+        development["plugins"],
+        json!({"updater": {"pubkey": development_pubkey()}})
     );
+    let pinned = unbase64(&development_pubkey());
     assert!(pinned.contains("DEVELOPMENT"), "{pinned}");
-    let public = minisign::PublicKeyBox::from_string(&pinned)
-        .and_then(|public| public.into_public_key())
-        .expect("the pinned key reads");
-    let signature =
-        minisign::SignatureBox::from_string(&unbase64(&signed(ARCHIVE))).expect("a signature");
+    verifies(&pinned, &signed(ARCHIVE))
+        .expect("the development secret signs what the override pins");
+}
+
+/// The shipped key refuses an update signed with the development key: the
+/// committed secret half signs nothing an install accepts.
+#[test]
+fn an_update_signed_with_the_development_key_is_refused_by_the_shipped_key() {
+    let fixture = Fixture::serving("0.2.0", &signed(ARCHIVE));
+    let app = app_trusting(&fixture.endpoint(), None);
+    let updates: Updates<Ready> = Updates::new();
+    let look = updates.look(launch(), || true, &PluginSource(app.handle().clone()));
+    let Look::Failed(why) = look else {
+        panic!("an update signed with the development key was taken: {look:?}");
+    };
+    assert!(why.to_lowercase().contains("key"), "{why}");
+    assert_eq!(updates.line(), None);
+}
+
+/// Whether the minisign `.pub` file `pub_file` verifies the `signature`
+/// field of `latest.json` over the fixture archive.
+fn verifies(pub_file: &str, signature: &str) -> Result<(), minisign::PError> {
+    let public = minisign::PublicKeyBox::from_string(pub_file)?.into_public_key()?;
+    let signature = minisign::SignatureBox::from_string(&unbase64(signature))?;
     minisign::verify(
         &public,
         &signature,
@@ -220,10 +311,6 @@ fn the_shipped_configuration_pins_the_fixed_endpoint_and_the_development_key() {
         false,
         false,
     )
-    .expect("the development secret signs what the pinned key verifies");
-    // The webview may not call the plugin: the capability grants no
-    // updater permission.
-    assert!(!include_str!("../capabilities/default.json").contains("updater"));
 }
 
 #[test]

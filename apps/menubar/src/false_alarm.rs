@@ -547,6 +547,50 @@ mod tests {
         assert_eq!(names, ["title", "body"]);
     }
 
+    /// The repository's false alarm issue template, which SECURITY.md and
+    /// the README send a reporter to when the app is not at hand.
+    const TEMPLATE: &str = include_str!("../../../.github/ISSUE_TEMPLATE/false-alarm.md");
+
+    /// The labels of a report body or a template body, in order: the text
+    /// before the first colon of every line that is not a list entry.
+    fn labels(body: &str) -> Vec<String> {
+        body.lines()
+            .filter(|line| !line.starts_with("- ") && !line.starts_with("<!--"))
+            .filter_map(|line| line.split_once(':').map(|(label, _)| label.to_string()))
+            .collect()
+    }
+
+    /// The template asks for exactly what a prepared report carries, under
+    /// the same title shape and labels in the same order, and for no
+    /// contents, names or paths.
+    #[test]
+    fn the_issue_template_asks_for_what_a_report_carries() {
+        let (front, body) = TEMPLATE
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n"))
+            .expect("the template has front matter");
+        assert!(
+            front
+                .lines()
+                .any(|line| line == "title: \"False positive: Rule NNNN (Kind)\""),
+            "{front}"
+        );
+        for finding in every_tier() {
+            let report = report(&finding, &context()).expect("a report");
+            assert_eq!(labels(body), labels(&report.body), "{body}");
+        }
+        assert!(body.contains("- Rule NNNN, status"), "{body}");
+        assert!(body.contains("- Heuristic NNNN, weight"), "{body}");
+        assert!(
+            body.contains(
+                "Why this is a false alarm (please add no file contents, names or paths):"
+            ),
+            "{body}"
+        );
+        assert!(body.contains(REPORT_BUTTON), "{body}");
+        assert!(!TEMPLATE.contains('\u{2014}'));
+    }
+
     #[test]
     fn the_dialog_shows_exactly_the_text_the_address_carries() {
         for finding in every_tier() {

@@ -1300,10 +1300,7 @@ mod tests {
         frame.settings(&settings(Posture::Developer));
         let developer = frame.to_value();
         assert_eq!(developer["ambiguous"][0]["title"], "Skill · murky");
-        assert_eq!(
-            developer["ambiguous"][0]["score"],
-            "Score 3, Ambiguous Band"
-        );
+        assert_eq!(developer["ambiguous"][0]["score"], "Score 3");
         assert!(developer["ambiguous"][0].get("actions").is_none());
         assert!(
             developer["scan"]["line"]
@@ -1311,6 +1308,100 @@ mod tests {
                 .expect("the line")
                 .contains("1 in the Ambiguous Band")
         );
+    }
+
+    /// A busy Mac as the owner's hand check found it: 25 open Threat
+    /// Findings over projects and both Agents, and 90 Items in the Ambiguous
+    /// Band. The Simple list carries every title whole with the project or
+    /// Agent beside it and no Ambiguous Item; the Developer frame carries all
+    /// 90, each short enough for one line, after the 25 Findings.
+    #[test]
+    fn twenty_five_findings_and_ninety_ambiguous_items() {
+        let mut findings = Vec::new();
+        for n in 0..25 {
+            let (item, kind) = match n % 3 {
+                0 => (
+                    format!(
+                        "claude-code/project:/src/app-{n}/settings-entry/.claude/settings.json#enableAllProjectMcpServers"
+                    ),
+                    Kind::SettingsEntry,
+                ),
+                1 => (
+                    format!("claude-code/user/skill/~/.claude/skills/planted-{n}"),
+                    Kind::Skill,
+                ),
+                _ => (
+                    format!("codex/user/mcp-server/~/.codex/config.toml#server-{n}"),
+                    Kind::McpServer,
+                ),
+            };
+            let mut finding = recorded(
+                &item,
+                kind,
+                "rule 0003",
+                Category::Threat,
+                FindingState::Open,
+            );
+            if n % 3 == 0 {
+                finding.facts.scope = "project".to_string();
+                finding.facts.project_root = format!("/src/app-{n}");
+            }
+            findings.push(finding);
+        }
+        let mut status = status_of(findings);
+        status.overview = claude_code();
+        status.overview.ambiguous = (0..90)
+            .map(|n| AmbiguousItem {
+                item_id: ItemId::from_recorded(&format!(
+                    "claude-code/user/skill/~/.claude/skills/murky-{n}"
+                )),
+                kind: Kind::Skill,
+                score: 2,
+                heuristics: vec![HeuristicLine {
+                    id: 521,
+                    weight: 2,
+                    plain: "It asks the agent to keep a secret.".to_string(),
+                    excerpt: "keep this between us".to_string(),
+                }],
+            })
+            .collect();
+        let mut frame = Frame::new();
+        frame.load(&status);
+
+        let simple = frame.to_value();
+        let threats = simple["panes"]["threats"].as_array().expect("threats");
+        assert_eq!(threats.len(), 25);
+        for (n, card) in threats.iter().enumerate() {
+            let title = card["simple"]["title"].as_str().expect("a title");
+            assert!(!title.contains('\u{2026}'), "{title}");
+            let place = card["simple"]["place"].as_str().expect("a place");
+            assert!(
+                place == "Claude Code" || place == "Codex" || place.starts_with("Project app-"),
+                "{n}: {place}"
+            );
+        }
+        assert!(simple.get("ambiguous").is_none());
+
+        frame.settings(&settings(Posture::Developer));
+        let developer = frame.to_value();
+        assert_eq!(
+            developer["panes"]["threats"].as_array().map(Vec::len),
+            Some(25)
+        );
+        let ambiguous = developer["ambiguous"]
+            .as_array()
+            .expect("the Ambiguous Items");
+        assert_eq!(ambiguous.len(), 90);
+        for item in ambiguous {
+            assert_eq!(item["score"], "Score 2");
+            assert!(
+                item["title"]
+                    .as_str()
+                    .expect("a title")
+                    .starts_with("Skill · murky-")
+            );
+            assert_eq!(item["lines"].as_array().map(Vec::len), Some(1));
+        }
     }
 
     /// Reveal in Finder is offered on the quarantined skill in the Developer

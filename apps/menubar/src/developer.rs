@@ -146,12 +146,13 @@ pub fn ambiguous_technical(item: &AmbiguousItem) -> Vec<(String, String)> {
 }
 
 /// One Ambiguous Item as the Developer Posture lists it: its title, its
-/// Score line, its Heuristic lines and its technical table. No action.
+/// Score (the Band is in its section's name and its table), its Heuristic
+/// lines and its technical table. No action.
 pub fn ambiguous_card(item: &AmbiguousItem) -> Value {
     json!({
         "id": item.item_id.as_str(),
         "title": titled(item.kind, item.item_id.as_str()),
-        "score": format!("Score {}, Ambiguous Band", item.score),
+        "score": format!("Score {}", item.score),
         "lines": item
             .heuristics
             .iter()
@@ -324,7 +325,7 @@ mod tests {
         };
         let card = ambiguous_card(&item);
         assert_eq!(card["title"], "Skill · notes");
-        assert_eq!(card["score"], "Score 3, Ambiguous Band");
+        assert_eq!(card["score"], "Score 3");
         assert_eq!(
             card["lines"][0],
             "0521 · weight 3 · It asks the agent to keep a secret."

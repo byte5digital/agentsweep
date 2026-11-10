@@ -827,9 +827,17 @@ async fn uninstall_agentsweep(app: AppHandle, asked: Value) -> Result<Vec<String
     // The bundle is going: no update may be put in its place at the quit.
     app.state::<Shell>().updates.forget();
     if done.trashed.is_ok() {
+        // The daemon removed the web view's temporary folder already, but the
+        // web view may write to it until the app is gone, so after Delete
+        // everything the app removes it once more on its way out.
+        let temporary = (choice == agentsweep_ipc::protocol::UninstallChoice::DeleteEverything)
+            .then(|| std::env::temp_dir().join(agentsweep_core::BUNDLE_ID));
         let handle = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(4));
+            if let Some(temporary) = temporary {
+                let _ = std::fs::remove_dir_all(temporary);
+            }
             handle.exit(0);
         });
     }

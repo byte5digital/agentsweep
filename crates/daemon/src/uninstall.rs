@@ -18,27 +18,47 @@
 //!    says so. **Delete everything** removes everything AgentSweep made (the
 //!    owner's decision of 2026-10-14): the data directory with the
 //!    quarantined payloads, both Keychain items, the log directory, the
-//!    caches and the app's preferences.
+//!    caches, the app's preferences and the web view's temporary folder.
 //!
 //! Unregistering the daemon and the login item and moving the app to the
 //! Trash are the app's. The daemon stays up and idle until then, or until its
-//! bundle is gone, which stops it for good (spec section 9.5).
+//! bundle is gone, which stops it for good (spec section 9.5). Either way it
+//! unlinks its socket as it exits, and after Delete everything it removes the
+//! temporary folder once more, since the app's web view may write to it until
+//! the app has quit ([`Daemon::clean_up_at_exit`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use agentsweep_core::BUNDLE_ID;
 use agentsweep_core::quarantine::Conflict;
 use agentsweep_ipc::protocol::{UninstallChoice, UninstallReport};
+use agentsweep_ipc::socket::SOCKET_NAME;
 
 use crate::service::Daemon;
 
+/// The app's folder in the per-user temporary directory, where its web view
+/// keeps its temporary files: the folder named after the bundle identifier
+/// beside the documented socket, `$TMPDIR/de.byte5.agentsweep`. A daemon
+/// that listens on a socket of another name, which only a developer run or a
+/// test does, has none, so it never reaches into the real temporary
+/// directory.
+pub fn temporary_folder(socket: &Path) -> Option<PathBuf> {
+    (socket.file_name()? == SOCKET_NAME).then(|| socket.with_file_name(BUNDLE_ID))
+}
+
 /// What Delete everything removes, as (what it is called, where it is), for
-/// a data directory and a home. Each is AgentSweep's own and nothing else's:
-/// a directory or a file named after AgentSweep or its bundle identifier.
-pub fn what_delete_everything_removes(data: &Path, home: &Path) -> Vec<(&'static str, PathBuf)> {
+/// a data directory, a home and the app's temporary folder. Each is
+/// AgentSweep's own and nothing else's: a directory or a file named after
+/// AgentSweep or its bundle identifier.
+pub fn what_delete_everything_removes(
+    data: &Path,
+    home: &Path,
+    temporary: Option<&Path>,
+) -> Vec<(&'static str, PathBuf)> {
     let library = home.join("Library");
-    vec![
+    let mut places = vec![
         ("the data directory", data.to_path_buf()),
         ("the log directory", crate::log::log_directory(home)),
         ("the caches", library.join("Caches").join(BUNDLE_ID)),
@@ -62,7 +82,11 @@ pub fn what_delete_everything_removes(data: &Path, home: &Path) -> Vec<(&'static
                 .join("Saved Application State")
                 .join(format!("{BUNDLE_ID}.savedState")),
         ),
-    ]
+    ];
+    if let Some(temporary) = temporary {
+        places.push(("the temporary files", temporary.to_path_buf()));
+    }
+    places
 }
 
 /// Removes one file or tree. Nothing there is not an error; a symbolic link
@@ -177,9 +201,12 @@ impl Daemon {
     /// with it. Nothing outside [`what_delete_everything_removes`] is
     /// touched.
     fn delete_everything(&self, report: &mut UninstallReport) {
-        for (name, path) in
-            what_delete_everything_removes(self.directory.root(), self.machine.home())
-        {
+        self.deleted_everything.store(true, Ordering::SeqCst);
+        for (name, path) in what_delete_everything_removes(
+            self.directory.root(),
+            self.machine.home(),
+            self.temporary.as_deref(),
+        ) {
             match remove(&path) {
                 Ok(true) => report.deleted.push(name.to_string()),
                 Ok(false) => {}
@@ -213,6 +240,18 @@ impl Daemon {
             ),
         };
     }
+
+    /// What the daemon leaves tidy as it exits, stopped by launchd or gone
+    /// with its bundle: it unlinks its socket, and after Delete everything it
+    /// removes the app's temporary folder once more.
+    pub fn clean_up_at_exit(&self, socket: &Path) {
+        let _ = std::fs::remove_file(socket);
+        if self.deleted_everything.load(Ordering::SeqCst)
+            && let Some(temporary) = &self.temporary
+        {
+            let _ = remove(temporary);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -225,9 +264,10 @@ mod tests {
     fn delete_everything_removes_only_agentsweeps_own_places() {
         let data = Path::new("/sandbox/data");
         let home = Path::new("/sandbox/home");
-        for (_, path) in what_delete_everything_removes(data, home) {
+        let temporary = Path::new("/sandbox/tmp/de.byte5.agentsweep");
+        for (_, path) in what_delete_everything_removes(data, home, Some(temporary)) {
             assert!(
-                path == data || path.starts_with(home.join("Library")),
+                path == data || path == temporary || path.starts_with(home.join("Library")),
                 "{}",
                 path.display()
             );
@@ -240,6 +280,21 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// The temporary folder sits beside the documented socket and nowhere
+    /// else: a socket of another name has none.
+    #[test]
+    fn the_temporary_folder_is_beside_the_documented_socket_only() {
+        assert_eq!(
+            temporary_folder(Path::new("/var/folders/x/T/de.byte5.agentsweep.sock")),
+            Some(PathBuf::from("/var/folders/x/T/de.byte5.agentsweep"))
+        );
+        assert_eq!(
+            temporary_folder(Path::new("/var/folders/x/T/asu-1-2.sock")),
+            None
+        );
+        assert_eq!(temporary_folder(Path::new("/")), None);
     }
 
     /// A symbolic link is removed itself, and what it points at stays.

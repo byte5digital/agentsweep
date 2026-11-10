@@ -350,6 +350,12 @@ pub struct Daemon {
     /// `uninstall` from then on, until it is unregistered or its bundle is
     /// gone (spec section 9.6).
     uninstalled: AtomicBool,
+    /// Set by Uninstall with Delete everything, so the exit removes the app's
+    /// temporary folder once more.
+    pub(crate) deleted_everything: AtomicBool,
+    /// The app's folder in the per-user temporary directory, beside the
+    /// documented socket; absent for a socket of another name.
+    pub(crate) temporary: Option<PathBuf>,
     /// True while a "Check now" makes its reads into the protected location
     /// classes, so two clicks never make them twice at once.
     pub(crate) checking: AtomicBool,
@@ -577,6 +583,8 @@ impl Daemon {
             told: Mutex::new(None),
             leaving: AtomicBool::new(false),
             uninstalled: AtomicBool::new(false),
+            deleted_everything: AtomicBool::new(false),
+            temporary: crate::uninstall::temporary_folder(&options.socket),
             checking: AtomicBool::new(false),
         });
         // The Activity starts as the Event Log stands, every line marked as
@@ -2412,7 +2420,7 @@ fn leave(daemon: &Daemon, change: Change, bundle: &std::path::Path, socket: &std
     let Some(code) = last.exit_status() else {
         return;
     };
-    let _ = std::fs::remove_file(socket);
+    daemon.clean_up_at_exit(socket);
     say!("exiting with status {code}");
     std::process::exit(code);
 }
@@ -2423,9 +2431,83 @@ fn leave(daemon: &Daemon, change: Change, bundle: &std::path::Path, socket: &std
 /// daemon whose bundle is gone makes, because success is what keeps the
 /// launch agent down. A socket that stopped answering is a failure, and
 /// `KeepAlive` starts the daemon again.
+///
+/// A stop by launchd, which is how unregistering the daemon ends it, is a
+/// `SIGTERM`: the daemon unlinks its socket first and then ends by that same
+/// signal, so launchd sees the stop it asked for.
 pub fn run(options: &Options) -> Result<(), Box<dyn Error>> {
-    start(options)?.serve_forever();
+    let stop = terminate::block();
+    let running = start(options)?;
+    terminate::clean_up_when_stopped(
+        stop,
+        Arc::clone(running.daemon()),
+        running.socket().to_path_buf(),
+    );
+    running.serve_forever();
     Err("the socket stopped answering".into())
+}
+
+/// The stop launchd sends, `SIGTERM`, as the shipped daemon takes it.
+///
+/// The signal is blocked before any thread starts, so every thread inherits
+/// the block and one thread of its own waits for it with `sigwait`. That
+/// thread unlinks the socket (and after Delete everything the app's temporary
+/// folder) and then lets the signal take its default course, so the exit
+/// status is the same as it was without this: a stop by signal, which
+/// `KeepAlive` treats as it always did. A test never installs it: it runs
+/// only through [`run`], which only the binary calls.
+mod terminate {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use super::Daemon;
+
+    /// The blocked signal set, handed from [`block`] to the waiting thread.
+    pub struct Blocked(libc::sigset_t);
+
+    /// Blocks `SIGTERM` in the calling thread and every thread it starts
+    /// from now on.
+    pub fn block() -> Blocked {
+        // SAFETY: `sigemptyset` and `sigaddset` initialise the set on the
+        // stack, and `pthread_sigmask` only reads it; no pointer outlives
+        // the call.
+        unsafe {
+            let mut set = std::mem::zeroed::<libc::sigset_t>();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, libc::SIGTERM);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+            Blocked(set)
+        }
+    }
+
+    /// Waits for `SIGTERM` on a thread of its own, then cleans up and ends
+    /// the process by that signal.
+    pub fn clean_up_when_stopped(blocked: Blocked, daemon: Arc<Daemon>, socket: PathBuf) {
+        let spawned = std::thread::Builder::new()
+            .name("agentsweep-stop".to_string())
+            .spawn(move || {
+                let mut signal = 0;
+                // SAFETY: the set was initialised by `block`, and `signal`
+                // is a valid place for `sigwait` to write the signal to.
+                let waited = unsafe { libc::sigwait(&blocked.0, &mut signal) };
+                if waited != 0 {
+                    return;
+                }
+                say!("asked to stop: unlinking the socket, then exiting");
+                daemon.clean_up_at_exit(&socket);
+                // SAFETY: the default disposition is restored and the
+                // signal unblocked in this thread, so raising it here ends
+                // the process the way an unhandled `SIGTERM` does.
+                unsafe {
+                    libc::signal(libc::SIGTERM, libc::SIG_DFL);
+                    libc::pthread_sigmask(libc::SIG_UNBLOCK, &blocked.0, std::ptr::null_mut());
+                    libc::raise(libc::SIGTERM);
+                }
+            });
+        if let Err(error) = spawned {
+            say!("the stop signal cannot be waited for: {error}");
+        }
+    }
 }
 
 #[cfg(test)]

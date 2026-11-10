@@ -24,8 +24,9 @@
 //! on-device in the in-bundle build, and the Claude engine only through the
 //! daemon, which is the one thing the in-bundle `scan <dir>` reaches it for.
 //! `uninstall` asks the daemon to take the Gate away and keep, restore or
-//! delete what is in quarantine, then tells the user to move the app to the
-//! Trash.
+//! delete what is in quarantine, has the app's own executable quit the app
+//! and unregister the daemon and the login item, then tells the user to move
+//! the app to the Trash.
 
 #[cfg(feature = "bundle")]
 mod actions;
@@ -83,7 +84,8 @@ Usage:
                           and decide what happens to what is in quarantine:
                           keep it (the default, so installing AgentSweep again
                           picks it up), put it all back, or delete everything
-                          AgentSweep made. Then move AgentSweep to the Trash.
+                          AgentSweep made. AgentSweep then quits and stops;
+                          you drag it to the Trash.
   agentsweep --version    Print the version.
   agentsweep --help       Print this message.
 

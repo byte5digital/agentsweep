@@ -59,14 +59,18 @@ tauri-plugin-updater = { version = "=2.12.0", default-features = false, features
 # was launched with tells a launch by the login item, which opens no window,
 # from one by the user, which does (spec section 8.1).
 objc2 = "0.6.4"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError", "NSNotification", "NSOperation", "block2", "NSFileManager", "NSURL", "NSUserDefaults", "NSAppleEventManager", "NSAppleEventDescriptor"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError", "NSNotification", "NSOperation", "block2", "NSFileManager", "NSURL", "NSUserDefaults", "NSAppleEventManager", "NSAppleEventDescriptor", "NSArray"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 # The native folder picker behind "Scan a folder" (AppKit's NSOpenPanel). MIT.
 # Called from Rust, so the webview gets no dialog or file system permission.
 rfd = { version = "0.17.2", default-features = false }
 # The general pasteboard behind "Copy a message for your admin" (spec section
 # 8.4). Already in the tree through Tauri; only the pasteboard is asked for.
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSWorkspace", "NSApplication"] }
+# The running copies of the app, which `--finish-uninstall` asks to quit.
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSWorkspace", "NSApplication", "NSRunningApplication", "libc"] }
+# Whether a copy of the app asked to quit is gone: a `kill` with signal zero,
+# which sends nothing. Already in the lock file through the daemon.
+libc = "0.2.180"
 # A click on a notification activates the app; the app observes that through
 # NSNotificationCenter with a block (spec section 6.1: no click callbacks).
 # Already in the tree through Tauri.

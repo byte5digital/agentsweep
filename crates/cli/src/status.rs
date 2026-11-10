@@ -621,12 +621,13 @@ mod tests {
     }
 
     /// A daemon that has just started and has not finished its first Full Scan
-    /// says so rather than showing nothing.
+    /// says so rather than showing nothing. On a first start it says nothing
+    /// about the cached state.
     #[test]
     fn a_daemon_with_no_finished_scan_says_so() {
         let mut health = Health::running();
         health.scanning = true;
-        health.state_file = StateFileHealth::Missing;
+        health.state_file = StateFileHealth::New;
         let status = Status {
             health,
             scan: None,
@@ -637,7 +638,7 @@ mod tests {
         let rendered = render(&status);
         assert!(rendered.starts_with("Checking now."), "{rendered}");
         assert!(rendered.contains("No Scan has finished yet."), "{rendered}");
-        assert!(rendered.contains("rebuilt"), "{rendered}");
+        assert!(!rendered.contains("rebuilt"), "{rendered}");
     }
 
     /// Protection off wins over everything, so nothing under it invites the

@@ -26,6 +26,7 @@ use agentsweep_core::spend::{
 };
 use agentsweep_ipc::engine::CloudUse;
 
+use crate::log::counted;
 use crate::service::Daemon;
 use crate::stores::open_the_event_log;
 
@@ -174,9 +175,9 @@ impl Daemon {
         }
         if let Some(notice) = notice {
             say!(
-                "the AI check reached its {} cap: {} Items will be looked at next time",
+                "the AI check reached its {} cap: {} will be looked at next time",
                 notice.cap,
-                notice.waiting
+                counted(notice.waiting, "Item", "Items")
             );
         }
         self.tell_health();

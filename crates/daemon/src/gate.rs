@@ -34,6 +34,7 @@ use agentsweep_core::item::Kind;
 use agentsweep_core::keychain::KeySource;
 use agentsweep_core::paths::DataDirectory;
 
+use crate::log::counted;
 use crate::machine::{Machine, agents};
 use crate::stores::open_the_event_log;
 
@@ -80,17 +81,17 @@ pub fn register(
     record(adapter.descriptor().agent, &write, directory, keys)?;
     if !write.written.is_empty() {
         say!(
-            "the Gate was registered with {}: {} entries in {}",
+            "the Gate was registered with {}: {} in {}",
             adapter.descriptor().agent,
-            write.written.len(),
+            counted(write.written.len(), "entry", "entries"),
             shown(&write.written)
         );
     }
     if !write.removed.is_empty() {
         say!(
-            "the Gate's entries under another path were replaced in {}: {} entries in {}",
+            "the Gate's entries under another path were replaced in {}: {} in {}",
             adapter.descriptor().agent,
-            write.removed.len(),
+            counted(write.removed.len(), "entry", "entries"),
             shown(&write.removed)
         );
     }
@@ -112,9 +113,9 @@ pub fn remove(
     record(adapter.descriptor().agent, &write, directory, keys)?;
     if !write.removed.is_empty() {
         say!(
-            "the Gate was removed from {}: {} entries in {}",
+            "the Gate was removed from {}: {} in {}",
             adapter.descriptor().agent,
-            write.removed.len(),
+            counted(write.removed.len(), "entry", "entries"),
             shown(&write.removed)
         );
     }

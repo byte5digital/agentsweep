@@ -84,7 +84,11 @@ pub enum StateFileHealth {
     /// The file was read and its whole-file MAC verified.
     #[default]
     Loaded,
-    /// There was no file, which is every first start.
+    /// There was no file and no earlier Scan left a record in the Baseline:
+    /// the first start, which has nothing to say.
+    New,
+    /// There was no file, though an earlier Scan left records: the file was
+    /// lost.
     Missing,
     /// The file was there and did not verify, or could not be read back.
     Rebuilt,
@@ -95,6 +99,7 @@ impl StateFileHealth {
     pub fn as_str(self) -> &'static str {
         match self {
             StateFileHealth::Loaded => "loaded",
+            StateFileHealth::New => "new",
             StateFileHealth::Missing => "missing",
             StateFileHealth::Rebuilt => "rebuilt",
         }
@@ -104,6 +109,7 @@ impl StateFileHealth {
     pub fn parse(text: &str) -> Option<StateFileHealth> {
         match text {
             "loaded" => Some(StateFileHealth::Loaded),
+            "new" => Some(StateFileHealth::New),
             "missing" => Some(StateFileHealth::Missing),
             "rebuilt" => Some(StateFileHealth::Rebuilt),
             _ => None,
@@ -113,7 +119,7 @@ impl StateFileHealth {
     /// The note this state adds under the headline, empty when there is none.
     pub fn note(self) -> &'static str {
         match self {
-            StateFileHealth::Loaded => "",
+            StateFileHealth::Loaded | StateFileHealth::New => "",
             StateFileHealth::Missing => "The cached state was not there and was rebuilt.",
             StateFileHealth::Rebuilt => "The cached state did not verify and was rebuilt.",
         }
@@ -900,10 +906,28 @@ mod tests {
     fn the_state_file_health_reads_back_the_spelling_it_writes() {
         for state in [
             StateFileHealth::Loaded,
+            StateFileHealth::New,
             StateFileHealth::Missing,
             StateFileHealth::Rebuilt,
         ] {
             assert_eq!(StateFileHealth::parse(state.as_str()), Some(state));
+        }
+    }
+
+    /// A first start has nothing to say about the state file; a lost one and
+    /// one that did not verify each say it was rebuilt.
+    #[test]
+    fn only_a_lost_or_unverified_state_file_is_a_note() {
+        let mut health = Health::running();
+        health.state_file = StateFileHealth::New;
+        assert!(health.notes().is_empty(), "{:?}", health.notes());
+        for lost in [StateFileHealth::Missing, StateFileHealth::Rebuilt] {
+            health.state_file = lost;
+            assert!(
+                health.notes().iter().any(|note| note.contains("rebuilt")),
+                "{:?}",
+                health.notes()
+            );
         }
     }
 

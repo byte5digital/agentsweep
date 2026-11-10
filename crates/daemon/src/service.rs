@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use agentsweep_core::adapter::WatchRoots;
 use agentsweep_core::apple_engine::AppleHelper;
@@ -58,10 +59,11 @@ use crate::cloud_caps::{Calendar, CloudLedger, SystemCalendar};
 use crate::due::{self, Occasion, PowerState, Schedule, SystemPower};
 use crate::full_scan::{FullScan, Progress, ScanRun};
 use crate::judgement_queue::{Awaiting, Engines, JudgementQueue, NoEngines, SystemEngines};
+use crate::log::{OncePer, counted};
 use crate::machine::Machine;
 use crate::notifications::Launch;
 use crate::options::{KeySourceChoice, Options};
-use crate::permission::{Access, Disk, Folders, proven_readable_classes};
+use crate::permission::{Access, Disk, Folders, LocationClass, proven_readable_classes};
 use crate::rule_feed::{self, Endpoints, FeedClient, FeedTuning, Fetched, Validators};
 use crate::stores::{open_both_chains, open_the_event_log};
 use crate::watcher::{self, Batch, Decision, Timings, Watch};
@@ -169,6 +171,25 @@ impl std::fmt::Debug for Tuning {
     }
 }
 
+/// What a state file that could not be read is, by why it could not: on a
+/// first start, where no earlier Scan left a record, it was never written
+/// and there is nothing to say; otherwise it was lost or did not verify, and
+/// the status says it was rebuilt.
+fn lost_state_file(
+    error: &agentsweep_core::state::StateError,
+    scanned_before: bool,
+) -> StateFileHealth {
+    match error {
+        agentsweep_core::state::StateError::Missing if !scanned_before => StateFileHealth::New,
+        agentsweep_core::state::StateError::Missing => StateFileHealth::Missing,
+        _ => StateFileHealth::Rebuilt,
+    }
+}
+
+/// How often one peer's refusal at the handshake is said in the log: an app
+/// left running from before an update asks once a second until it is quit.
+const REFUSALS_SAID_EVERY: Duration = Duration::from_secs(60);
+
 /// What has been asked for and what is running, with the rules of spec section
 /// 6.4 about two Scans meeting each other in one place.
 #[derive(Debug, Default)]
@@ -183,6 +204,12 @@ struct Queue {
     /// requests arriving before it has taken the first would otherwise start
     /// two threads, and two Scans would run at once.
     draining: bool,
+    /// The protected classes "Check now" proved readable that the waiting
+    /// Full Scan was asked for.
+    checked: BTreeSet<LocationClass>,
+    /// The same for the running Full Scan, which reads them: it took the
+    /// classes the state file remembers after "Check now" wrote them there.
+    reading: BTreeSet<LocationClass>,
 }
 
 impl Queue {
@@ -195,10 +222,12 @@ impl Queue {
 
     /// The next piece of work, marking it as the one running.
     fn next(&mut self) -> Option<Work> {
+        self.reading = BTreeSet::new();
         if let Some(trigger) = self.full.take() {
             // A pending Full Scan absorbs every Change batch waiting with it.
             self.batch = Batch::default();
             self.running = Some(ScanKind::Full);
+            self.reading = std::mem::take(&mut self.checked);
             return Some(Work::Full(trigger));
         }
         if !self.batch.is_empty() {
@@ -214,6 +243,26 @@ impl Queue {
     /// queue, and only then. Answers with true when the caller must start it.
     fn claim_the_thread(&mut self) -> bool {
         !std::mem::replace(&mut self.draining, true)
+    }
+
+    /// "Check now" proved these classes readable and wrote them to the state
+    /// file. Asks for the Full Scan that reads their projects unless one
+    /// already will: a Full Scan still waiting takes the remembered classes
+    /// when it starts, and a running one asked for by an earlier "Check now"
+    /// of the same classes reads them already. Answers with true when a Full
+    /// Scan was asked for, so one click is one Full Scan however often it
+    /// arrives.
+    fn after_check_now(&mut self, classes: &BTreeSet<LocationClass>) -> bool {
+        if self.full.is_some() {
+            self.checked.extend(classes.iter().copied());
+            return false;
+        }
+        if self.running == Some(ScanKind::Full) && classes.is_subset(&self.reading) {
+            return false;
+        }
+        self.full = Some(Trigger::ScanNow);
+        self.checked = classes.clone();
+        true
     }
 }
 
@@ -283,6 +332,9 @@ pub struct Daemon {
     pub(crate) raised: Mutex<Vec<Finding>>,
     /// What has been asked for, and what is running.
     queue: Mutex<Queue>,
+    /// The refusals at the handshake said lately, so a peer that keeps
+    /// asking is said once a minute rather than once per refusal.
+    refusals: OncePer,
     /// The Rule Pack in force, compiled once. Compiling it costs far more than
     /// a Change Scan is allowed to take, so no Scan compiles its own. A Scan
     /// takes the pack in force when it starts and keeps it to the end; an
@@ -410,6 +462,13 @@ impl Daemon {
         let directory = options.data_dir.clone();
         directory.create()?;
 
+        // A Baseline with records was written by an earlier Scan, which wrote
+        // a state file too: without one, the state file is lost rather than
+        // never written. Looked at before the chains are opened, which may
+        // write.
+        let scanned_before =
+            std::fs::metadata(directory.baseline()).is_ok_and(|metadata| metadata.len() > 0);
+
         // Opening both chains is what turns a key that went missing into one
         // chain restart rather than into a restart per write, and it is what
         // says whether the records were tampered with.
@@ -429,14 +488,12 @@ impl Daemon {
         let (mut state, state_file) = match file.read(&*keys) {
             Ok(state) => (state, StateFileHealth::Loaded),
             Err(error) if error.rebuilds() => {
-                say!("the cached state is being rebuilt: {error}");
-                (
-                    State::empty(),
-                    match error {
-                        agentsweep_core::state::StateError::Missing => StateFileHealth::Missing,
-                        _ => StateFileHealth::Rebuilt,
-                    },
-                )
+                let health = lost_state_file(&error, scanned_before);
+                match health {
+                    StateFileHealth::New => say!("no cached state yet: a first start"),
+                    _ => say!("the cached state is being rebuilt: {error}"),
+                }
+                (State::empty(), health)
             }
             Err(error) => return Err(Box::new(error)),
         };
@@ -562,6 +619,7 @@ impl Daemon {
             writing: Mutex::new(()),
             raised: Mutex::new(Vec::new()),
             queue: Mutex::new(Queue::default()),
+            refusals: OncePer::new(REFUSALS_SAID_EVERY),
             pack: RwLock::new(pack),
             bundled,
             feed,
@@ -1041,13 +1099,13 @@ impl Daemon {
         *self.roots.lock().expect("the roots are not poisoned") = run.roots.clone();
 
         say!(
-            "{} Scan ({}): {} Items, {} Findings, {} ms, {} project roots",
+            "{} Scan ({}): {}, {}, {} ms, {}",
             run.summary.kind,
             run.summary.trigger,
-            run.summary.items,
-            run.summary.findings(),
+            counted(run.summary.items, "Item", "Items"),
+            counted(run.summary.findings(), "Finding", "Findings"),
             run.summary.duration_ms,
-            run.roots.len()
+            counted(run.roots.len(), "project root", "project roots")
         );
         if run.events != ChainState::Intact || run.baseline != ChainState::Intact {
             say!(
@@ -1107,9 +1165,9 @@ impl Daemon {
         match started {
             Ok(watch) => {
                 say!(
-                    "watching {} of {} declared roots",
+                    "watching {} of {}",
                     watch.following(),
-                    roots.all().count()
+                    counted(roots.all().count(), "declared root", "declared roots")
                 );
                 *held = Some(watch);
             }
@@ -1129,7 +1187,7 @@ impl Daemon {
         match decision {
             Decision::Nothing => {}
             Decision::Change(batch) => {
-                say!("{} paths changed", batch.len());
+                say!("{} changed", counted(batch.len(), "path", "paths"));
                 self.change(batch);
             }
             Decision::Full(why) => {
@@ -1174,9 +1232,9 @@ impl Daemon {
         }
         match baseline::compact(&self.directory, &*self.keys, &retention, at) {
             Ok(done) => say!(
-                "the Baseline was compacted: {} records dropped, {} stretches of coverage dropped",
-                done.plan.dropped.len(),
-                done.plan.uncovered.len()
+                "the Baseline was compacted: {} dropped, {} of coverage dropped",
+                counted(done.plan.dropped.len(), "record", "records"),
+                counted(done.plan.uncovered.len(), "stretch", "stretches")
             ),
             Err(error) => say!("the Baseline could not be compacted: {error}"),
         }
@@ -1227,8 +1285,8 @@ impl Daemon {
         let installed = installed_models(&judgement, &ollama);
         match verdicts::compact(&self.directory, &*self.keys, &installed) {
             Ok(Some(done)) => say!(
-                "the Verdict cache was compacted: {} records before, {} after",
-                done.before,
+                "the Verdict cache was compacted: {} before, {} after",
+                counted(done.before, "record", "records"),
                 done.after
             ),
             Ok(None) => {}
@@ -1372,7 +1430,13 @@ impl Daemon {
                 hello.role
             }
             Err(refusal) => {
-                say!("refused {peer}: {}", refusal.detail());
+                let detail = refusal.detail();
+                if self
+                    .refusals
+                    .lets_through(&format!("{peer}: {detail}"), Instant::now())
+                {
+                    say!("refused {peer}: {detail}");
+                }
                 let _ = connection.send(&Message::Refused(refusal));
                 return;
             }
@@ -2171,6 +2235,25 @@ impl Daemon {
         self.scan_behind(Trigger::RulePack);
     }
 
+    /// Asks for the Full Scan behind a "Check now" that proved `classes`
+    /// readable, unless one already reads them ([`Queue::after_check_now`]).
+    /// Answers with true when it asked for one.
+    pub(crate) fn scan_after_check_now(
+        self: &Arc<Daemon>,
+        classes: &BTreeSet<LocationClass>,
+    ) -> bool {
+        let mut queue = self.queue.lock().expect("the queue is not poisoned");
+        if !queue.after_check_now(classes) {
+            return false;
+        }
+        let start = queue.claim_the_thread();
+        drop(queue);
+        if start {
+            self.work();
+        }
+        true
+    }
+
     /// Asks for a Full Scan that starts after anything that is running now:
     /// one that is waiting is joined, one that is running started before
     /// whatever asks for this one, so another is put behind it.
@@ -2578,6 +2661,73 @@ mod tests {
         assert!(matches!(queue.next(), Some(Work::Full(Trigger::Watcher))));
         assert!(queue.batch.is_empty());
         assert!(queue.next().is_none());
+    }
+
+    /// A state file missing on a first start is new and says nothing; one
+    /// missing after a Scan wrote records was lost, and one that does not
+    /// verify was rebuilt.
+    #[test]
+    fn a_missing_state_file_is_new_only_on_a_first_start() {
+        use agentsweep_core::state::StateError;
+        assert_eq!(
+            lost_state_file(&StateError::Missing, false),
+            StateFileHealth::New
+        );
+        assert_eq!(
+            lost_state_file(&StateError::Missing, true),
+            StateFileHealth::Missing
+        );
+        for scanned_before in [false, true] {
+            assert_eq!(
+                lost_state_file(&StateError::MacFailed, scanned_before),
+                StateFileHealth::Rebuilt
+            );
+        }
+    }
+
+    /// One "Check now" asks for one Full Scan however often it arrives: a
+    /// repeat while that Full Scan waits or runs asks for nothing more. A
+    /// class the running Full Scan was not asked to read, and a "Check now"
+    /// with no Full Scan of its own in hand, each ask for one.
+    #[test]
+    fn a_repeated_check_now_asks_for_one_full_scan() {
+        let documents = BTreeSet::from([LocationClass::Documents]);
+        let downloads = BTreeSet::from([LocationClass::Downloads]);
+        let mut queue = Queue::default();
+
+        assert!(queue.after_check_now(&documents));
+        assert!(!queue.after_check_now(&documents), "one is waiting");
+        assert!(matches!(queue.next(), Some(Work::Full(Trigger::ScanNow))));
+        assert!(
+            !queue.after_check_now(&documents),
+            "the running one reads it"
+        );
+        assert!(
+            queue.after_check_now(&downloads),
+            "the running one does not"
+        );
+        assert!(matches!(queue.next(), Some(Work::Full(Trigger::ScanNow))));
+        assert!(queue.next().is_none());
+
+        // A grant taken back and given again: nothing reads it any more.
+        assert!(queue.after_check_now(&documents));
+    }
+
+    /// A Full Scan nobody asked "Check now" for may have read the class
+    /// before the grant, so a "Check now" puts one behind it.
+    #[test]
+    fn a_check_now_during_another_full_scan_asks_for_one_behind_it() {
+        let documents = BTreeSet::from([LocationClass::Documents]);
+        let mut queue = Queue {
+            full: Some(Trigger::DaemonStart),
+            ..Queue::default()
+        };
+        assert!(matches!(
+            queue.next(),
+            Some(Work::Full(Trigger::DaemonStart))
+        ));
+        assert!(queue.after_check_now(&documents));
+        assert!(matches!(queue.next(), Some(Work::Full(Trigger::ScanNow))));
     }
 
     /// An older state file's toggle is taken over into the settings file

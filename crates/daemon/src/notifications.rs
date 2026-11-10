@@ -45,6 +45,7 @@ use agentsweep_core::overview::{Overview, ProjectCheck};
 use agentsweep_core::state::{RecordedFinding, State};
 use agentsweep_ipc::notifications::{NotificationClass, Unnotified, WINDOWLESS, item_name};
 
+use crate::log::counted;
 use crate::service::Daemon;
 
 /// Starts an application. The seam the suite hands a fake through, so no
@@ -316,8 +317,8 @@ impl Daemon {
             *launched = ids.clone();
         }
         say!(
-            "launching the app windowless for {} un-notified changes",
-            ids.len()
+            "launching the app windowless for {}",
+            counted(ids.len(), "un-notified change", "un-notified changes")
         );
         launch.launcher.launch(&launch.app, &[WINDOWLESS]);
     }

@@ -53,6 +53,7 @@ use agentsweep_ipc::protocol::{
 
 use crate::activity::{name_of, named};
 use crate::full_scan::{Covering, survey};
+use crate::log::counted;
 use crate::machine::{Machine, adapters};
 use crate::service::Daemon;
 use crate::sessions;
@@ -332,9 +333,13 @@ fn reappeared<'k>(
             .map(|finding| (finding.severity, finding.status))
             .unwrap_or((Severity::Critical, RuleStatus::Stable));
         say!(
-            "{} keeps coming back: {} reappearances within the hour, no longer taken out",
+            "{} keeps coming back: {} within the hour, no longer taken out",
             item.id,
-            entry.re_enforced_within_the_hour(at) + 1
+            counted(
+                entry.re_enforced_within_the_hour(at) + 1,
+                "reappearance",
+                "reappearances"
+            )
         );
         acted.keeps_coming_back.push(Finding::keeps_coming_back(
             &item.id,
@@ -365,9 +370,9 @@ fn reappeared<'k>(
     }) {
         Ok(done) => {
             say!(
-                "{} came back and was taken out again ({} times, {})",
+                "{} came back and was taken out again ({}, {})",
                 item.id,
-                done.times,
+                counted(done.times, "time", "times"),
                 done.receipt_id
             );
             acted.re_enforced.push((item.id.clone(), done.receipt_id));

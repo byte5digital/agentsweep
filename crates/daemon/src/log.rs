@@ -10,10 +10,12 @@
 //! the standard error stream instead, so a hand run reads its own output and
 //! never adds to the log of the installed AgentSweep.
 
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// How many files the log keeps: the one being written and four before it.
 pub const LOG_FILES: usize = 5;
@@ -158,6 +160,50 @@ impl Write for RotatingFile {
     }
 }
 
+/// A count and its noun as a log line says it, in the singular for one:
+/// "1 path", "2 paths", "0 paths".
+pub fn counted<N>(count: N, one: &str, many: &str) -> String
+where
+    N: std::fmt::Display + PartialEq + From<u8>,
+{
+    let noun = match count == N::from(1) {
+        true => one,
+        false => many,
+    };
+    format!("{count} {noun}")
+}
+
+/// Lets a line that may repeat often through once per key in each span of
+/// time, so a peer refused once a second is said once a minute.
+#[derive(Debug)]
+pub struct OncePer {
+    span: Duration,
+    said: Mutex<HashMap<String, Instant>>,
+}
+
+impl OncePer {
+    /// Once per key in each `span`.
+    pub fn new(span: Duration) -> OncePer {
+        OncePer {
+            span,
+            said: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// True when the line for `key` is to be said at `now`: it was not said
+    /// within the span before. Keys said longer ago are forgotten, so the
+    /// table holds no more than one span's worth.
+    pub fn lets_through(&self, key: &str, now: Instant) -> bool {
+        let mut said = self.said.lock().expect("the table is not poisoned");
+        said.retain(|_, at| now.saturating_duration_since(*at) < self.span);
+        if said.contains_key(key) {
+            return false;
+        }
+        said.insert(key.to_string(), now);
+        true
+    }
+}
+
 /// Starts the log for this process: the rotated file in `directory`, or the
 /// standard error stream when `directory` is absent. Called once, by the
 /// binary; a test never starts it, so the suite writes no log at all.
@@ -192,6 +238,38 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn a_count_of_one_takes_the_singular() {
+        assert_eq!(counted(1usize, "path", "paths"), "1 path");
+        assert_eq!(counted(2usize, "path", "paths"), "2 paths");
+        assert_eq!(counted(0u64, "Item", "Items"), "0 Items");
+        assert_eq!(counted(1u32, "entry", "entries"), "1 entry");
+        assert_eq!(
+            counted(1usize, "un-notified change", "un-notified changes"),
+            "1 un-notified change"
+        );
+    }
+
+    #[test]
+    fn a_repeated_line_is_said_once_per_key_in_each_span() {
+        let once = OncePer::new(Duration::from_secs(60));
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        assert!(once.lets_through("uid 501 pid 7: 0.1.0", at(0)));
+        assert!(!once.lets_through("uid 501 pid 7: 0.1.0", at(1)));
+        assert!(!once.lets_through("uid 501 pid 7: 0.1.0", at(59)));
+        assert!(
+            once.lets_through("uid 501 pid 8: 0.1.0", at(30)),
+            "another peer is said at once"
+        );
+        assert!(once.lets_through("uid 501 pid 7: 0.1.0", at(60)));
+        assert!(!once.lets_through("uid 501 pid 7: 0.1.0", at(61)));
+        assert!(
+            once.said.lock().expect("not poisoned").len() <= 2,
+            "what was said long ago is forgotten"
+        );
     }
 
     #[test]

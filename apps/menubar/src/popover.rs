@@ -1,9 +1,10 @@
 //! What the popover shows (spec section 8.1): the status orb, one Health
 //! sentence by precedence, the last check time, and for the integrity and
 //! Protection states the coloured banner that replaces the sentence
-//! ([`crate::banner`]). Nothing else: no Finding list, no Finding action and
-//! no progress count in either Posture; while a Scan runs the sentence is
-//! "Checking now." and nothing more.
+//! ([`crate::banner`]); an integrity banner is one line pointing to the
+//! window, whose buttons are only there. Nothing else: no Finding list, no
+//! Finding action and no progress count in either Posture; while a Scan runs
+//! the sentence is "Checking now." and nothing more.
 //!
 //! The sentence is [`Health::headline_in`] the Posture, so the app and the
 //! command line interface say the same thing about the same machine; only
@@ -218,9 +219,13 @@ impl View {
     }
 
     /// The value the frontend receives in a Posture. A banner replaces the
-    /// sentence and the line under it, so neither is sent beside one.
+    /// sentence and the line under it, so neither is sent beside one; an
+    /// integrity banner is the one line that points to the window.
     pub fn to_value(&self, posture: Posture) -> Value {
-        let banner = self.banner.as_ref().map(|banner| banner.shown(posture));
+        let banner = self
+            .banner
+            .as_ref()
+            .map(|banner| banner.in_popover(posture));
         let replaced = banner.is_some();
         json!({
             "orb": self.orb.as_str(),
@@ -353,6 +358,49 @@ mod tests {
         assert!(View::of(&Health::unreachable("gone")).protection_off);
     }
 
+    /// The popover shows an integrity state as one line pointing to the
+    /// window, with no integrity action, in either Posture; Open AgentSweep
+    /// stays offered beside it.
+    #[test]
+    fn the_popover_shows_no_integrity_actions() {
+        let tampered = Health {
+            events: ChainState::Broken {
+                sequence: 3,
+                reason: BreakReason::MacFailed,
+            },
+            ..Health::running()
+        };
+        let reset = Health {
+            events: ChainState::KeyMissing,
+            ..Health::running()
+        };
+        let commands = [
+            "start_fresh_record",
+            "look_at_records",
+            "show_what_changed",
+            "scan_again_trusting_nothing",
+        ];
+        for health in [tampered, reset] {
+            let view = View::of(&health);
+            assert!(view.banner.as_ref().is_some_and(Banner::is_integrity));
+            for posture in [Posture::Simple, Posture::Developer] {
+                let value = view.to_value(posture);
+                assert_eq!(
+                    value["banner"]["title"],
+                    "Something needs a look. Open AgentSweep."
+                );
+                assert_eq!(value["banner"]["buttons"], json!([]), "{value}");
+                assert_eq!(value["banner"]["body"], "", "{value}");
+                assert!(value["banner"]["developer"].is_null(), "{value}");
+                assert_eq!(value["protectionOff"], false, "Open AgentSweep stays");
+                let text = value.to_string();
+                for command in commands {
+                    assert!(!text.contains(command), "{command} in {text}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_version_mismatch_is_updating_rather_than_off() {
         let view = View::updating();
@@ -394,9 +442,9 @@ mod tests {
             ),
             (
                 View::of(&tampered),
-                "AgentSweep's records were changed by something else.",
+                "Something needs a look. Open AgentSweep.",
             ),
-            (View::of(&reset), "AgentSweep cannot check its own records."),
+            (View::of(&reset), "Something needs a look. Open AgentSweep."),
         ];
         for (view, title) in views {
             for posture in [Posture::Simple, Posture::Developer] {

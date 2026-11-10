@@ -1553,15 +1553,23 @@ fn the_key_missing_banner_answers_through_the_daemon_and_opens_activity_at_the_r
         "{:?}",
         status.health.rung()
     );
+    // The popover points to the window in one line; the two buttons are
+    // the Overview's alone.
     let popover = View::of(&status.health).to_value(Posture::Simple);
     assert!(popover["sentence"].is_null(), "{popover}");
     assert_eq!(
-        popover["banner"]["buttons"][0]["label"],
-        "Start a fresh record"
+        popover["banner"]["title"],
+        "Something needs a look. Open AgentSweep."
     );
+    assert_eq!(popover["banner"]["buttons"], serde_json::json!([]));
 
     let mut frame = Frame::new();
     frame.load(&status);
+    let overview = frame.overview().banner.expect("the Overview's banner");
+    assert_eq!(
+        overview.buttons,
+        vec![Button::StartFreshRecord, Button::LookAtRecords]
+    );
     let restart = integrity::restart_record(frame.activity()).expect("the restart record");
 
     let looked = integrity::press(

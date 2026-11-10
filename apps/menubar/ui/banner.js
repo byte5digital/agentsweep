@@ -1,6 +1,7 @@
 // The integrity and Protection banners (spec section 8.6), as the popover
 // and the Overview render them. The app hands over the banner already
-// worded for the Posture, with each button's command; this decides nothing.
+// worded for the Posture and the place, with each button's command; this
+// decides nothing.
 
 import { keep } from "./keep.js";
 import { nextPress } from "./press.js";
@@ -23,6 +24,8 @@ export function renderBanner(root, banner) {
   root.dataset.tone = banner.tone;
   part("banner-title").textContent = banner.title;
   part("banner-body").textContent = banner.body;
+  // The popover's integrity line is the title alone (spec section 8.1).
+  part("banner-body").hidden = banner.body === "";
   part("banner-developer").textContent = banner.developer ?? "";
   part("banner-developer").hidden = banner.developer === null;
   const line = part("banner-line");

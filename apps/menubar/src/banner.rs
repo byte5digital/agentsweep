@@ -23,6 +23,10 @@
 //! to "Not watching right now", and that a reset cannot rule out tampering
 //! to the key missing banner (ADR 0003). The Protection off banner carries
 //! the reason in the Developer Posture.
+//!
+//! The popover shows the two integrity banners as one line pointing to the
+//! window, [`Banner::in_popover`]; their buttons are only in the window
+//! (spec section 8.1).
 
 use agentsweep_core::DAEMON_LABEL;
 use agentsweep_core::health::{Health, Rung};
@@ -192,6 +196,10 @@ pub const KEY_MISSING: &str = "AgentSweep cannot check its own records.";
 /// The title of the chain broken banner.
 pub const CHAIN_BROKEN: &str = "AgentSweep's records were changed by something else.";
 
+/// The one line the popover shows in place of an integrity banner, whose
+/// buttons are only in the window (spec section 8.1).
+pub const NEEDS_A_LOOK: &str = "Something needs a look. Open AgentSweep.";
+
 /// What the Developer Posture adds to the key missing banner (ADR 0003).
 pub const RESET_CANNOT_RULE_OUT_TAMPERING: &str = "A reset cannot rule out tampering: no key in \
      hand can check the records written before it.";
@@ -214,6 +222,28 @@ pub fn choose(health: &Health, daemon: &Daemon) -> Option<Banner> {
 }
 
 impl Banner {
+    /// True for the two integrity banners, whose buttons are only in the
+    /// window.
+    pub fn is_integrity(&self) -> bool {
+        matches!(self, Banner::KeyMissing | Banner::ChainBroken)
+    }
+
+    /// The banner as the popover shows it in a Posture: an integrity banner
+    /// is one red line pointing to the window, with no button; every other
+    /// banner is shown as in the window (spec section 8.1).
+    pub fn in_popover(&self, posture: Posture) -> Shown {
+        match self.is_integrity() {
+            true => Shown {
+                tone: Tone::Red,
+                title: NEEDS_A_LOOK,
+                body: "",
+                developer: None,
+                buttons: Vec::new(),
+            },
+            false => self.shown(posture),
+        }
+    }
+
     /// The banner's words and buttons in a Posture.
     pub fn shown(&self, posture: Posture) -> Shown {
         let developer = posture == Posture::Developer;
@@ -412,6 +442,31 @@ mod tests {
         );
     }
 
+    /// The popover shows an integrity banner as one line pointing to the
+    /// window, with no button and no Developer line; the window keeps the
+    /// banner with its two buttons.
+    #[test]
+    fn the_popover_shows_an_integrity_banner_as_one_line() {
+        for banner in [Banner::KeyMissing, Banner::ChainBroken] {
+            for posture in [Posture::Simple, Posture::Developer] {
+                let shown = banner.in_popover(posture);
+                assert_eq!(shown.title, NEEDS_A_LOOK);
+                assert_eq!(shown.tone, Tone::Red);
+                assert_eq!(shown.body, "");
+                assert_eq!(shown.developer, None);
+                assert!(shown.buttons.is_empty(), "{banner:?}");
+                assert_eq!(banner.shown(posture).buttons.len(), 2, "{banner:?}");
+            }
+        }
+        for banner in [Banner::NotWatching, Banner::KeyMissing] {
+            assert_eq!(banner.is_integrity(), banner == Banner::KeyMissing);
+        }
+        assert_eq!(
+            Banner::NotWatching.in_popover(Posture::Developer),
+            Banner::NotWatching.shown(Posture::Developer)
+        );
+    }
+
     #[test]
     fn the_integrity_buttons_open_the_activity_pane_and_the_others_do_not() {
         assert!(!Button::OpenLoginItems.opens_activity());
@@ -437,8 +492,10 @@ mod tests {
             Banner::ChainBroken,
         ] {
             for posture in [Posture::Simple, Posture::Developer] {
-                let value = banner.shown(posture).to_value().to_string();
-                assert!(!value.contains('\u{2014}'), "{value}");
+                for shown in [banner.shown(posture), banner.in_popover(posture)] {
+                    let value = shown.to_value().to_string();
+                    assert!(!value.contains('\u{2014}'), "{value}");
+                }
             }
         }
     }

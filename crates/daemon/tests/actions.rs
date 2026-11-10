@@ -428,6 +428,73 @@ fn quarantine_restore_and_trust_change_the_finding_record_it_and_show_in_status(
     assert_eq!(shown.open().count(), 0);
 }
 
+/// The code and the sentence of a refusal.
+fn refusal_of(error: agentsweep_ipc::ClientError) -> (String, String) {
+    match error {
+        agentsweep_ipc::ClientError::Request(refusal) => (refusal.code, refusal.message),
+        other => panic!("a refusal, not {other}"),
+    }
+}
+
+/// An action asked again on a Finding it was already taken on says so, by
+/// the Finding's id and by the Item's, and never names the reason another
+/// kind of Finding would have; nothing is done or recorded the second time.
+#[test]
+fn a_repeated_action_says_it_was_already_done() {
+    let sandbox = Sandbox::with_a_planted_skill("already");
+    let _daemon = sandbox.start();
+    let planted = finding_on(&sandbox.status(), "skills/setup").clone();
+
+    sandbox
+        .client()
+        .quarantine(planted.id.as_str())
+        .expect("a Quarantine");
+    let records = sandbox.events().events.len();
+    for target in [planted.id.as_str(), planted.item_id.as_str()] {
+        let (code, message) = refusal_of(
+            sandbox
+                .client()
+                .quarantine(target)
+                .expect_err("already in quarantine"),
+        );
+        assert_eq!(code, "already");
+        assert_eq!(message, "it is already in quarantine");
+        let (code, message) = refusal_of(sandbox.client().trust(target).expect_err("not open"));
+        assert_eq!(
+            (code.as_str(), message.as_str()),
+            ("already", "it is already in quarantine")
+        );
+    }
+    assert_eq!(sandbox.events().events.len(), records, "nothing recorded");
+
+    let report = sandbox
+        .client()
+        .restore(planted.item_id.as_str(), Conflict::Refuse)
+        .expect("a Restore");
+    assert_eq!(report.state, "open");
+    sandbox
+        .client()
+        .trust(planted.id.as_str())
+        .expect("a Trust");
+    let (code, message) = refusal_of(
+        sandbox
+            .client()
+            .trust(planted.id.as_str())
+            .expect_err("already trusted"),
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("already", "it is already trusted")
+    );
+    let (_, message) = refusal_of(
+        sandbox
+            .client()
+            .quarantine(planted.id.as_str())
+            .expect_err("trusted"),
+    );
+    assert!(!message.contains("Exposure"), "{message}");
+}
+
 /// A registry holding one plain MCP server.
 const A_PLAIN_REGISTRY: &str = r#"{
   "projects": {},

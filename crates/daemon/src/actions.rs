@@ -421,6 +421,19 @@ fn priority(finding: &RecordedFinding) -> u8 {
     }
 }
 
+/// Why an action is refused on a Finding that is no longer open: what was
+/// already done about it. A repeat of an action that was carried out is
+/// told so, never given the reason another kind of Finding would have.
+fn settled(finding: &RecordedFinding) -> Option<RequestError> {
+    match finding.state {
+        FindingState::Open => None,
+        FindingState::Stopped => Some(refused("already", "it is already in quarantine")),
+        FindingState::Trusted => Some(refused("already", "it is already trusted")),
+        FindingState::Acknowledged => Some(refused("already", "it is already marked as yours")),
+        FindingState::Gone => Some(refused("gone", "it is no longer there")),
+    }
+}
+
 /// The line a manual Quarantine of a project's Item adds (spec section 8.4).
 const PROJECT_LINE: &str =
     "This file belongs to a project, so git will show the change. Restore undoes it.";
@@ -469,7 +482,9 @@ impl Daemon {
     ///
     /// A Finding id names itself. An Item id names the Findings on that Item,
     /// and the one the action fits best is taken. Anything else is not
-    /// something this daemon knows.
+    /// something this daemon knows. When none fits, the refusal says why:
+    /// what was already done about a Finding that is no longer open
+    /// ([`settled`]), or `refusal` for an open one the action does not fit.
     fn finding_for(
         &self,
         target: &str,
@@ -477,31 +492,36 @@ impl Daemon {
         refusal: &str,
     ) -> Result<RecordedFinding, RequestError> {
         let state = self.state.lock().expect("the state is not poisoned");
-        if target.contains('|') {
-            let found = state
+        let named: Vec<&RecordedFinding> = match target.contains('|') {
+            true => state
                 .findings
                 .iter()
-                .find(|finding| finding.id.as_str() == target)
-                .ok_or_else(|| unknown(target))?;
-            return match fits(found) {
-                true => Ok(found.clone()),
-                false => Err(refused("not-allowed", refusal)),
-            };
-        }
-        let on_item: Vec<&RecordedFinding> = state
-            .findings
-            .iter()
-            .filter(|finding| finding.item_id.as_str() == target)
-            .collect();
-        if on_item.is_empty() {
+                .filter(|finding| finding.id.as_str() == target)
+                .collect(),
+            false => state
+                .findings
+                .iter()
+                .filter(|finding| finding.item_id.as_str() == target)
+                .collect(),
+        };
+        if named.is_empty() {
             return Err(unknown(target));
         }
-        on_item
-            .into_iter()
+        if let Some(found) = named
+            .iter()
             .filter(|finding| fits(finding))
             .min_by_key(|finding| priority(finding))
-            .cloned()
-            .ok_or_else(|| refused("not-allowed", refusal))
+        {
+            return Ok((*found).clone());
+        }
+        if named.iter().any(|finding| finding.is_open()) {
+            return Err(refused("not-allowed", refusal));
+        }
+        Err(named
+            .into_iter()
+            .min_by_key(|finding| priority(finding))
+            .and_then(settled)
+            .unwrap_or_else(|| refused("not-allowed", refusal)))
     }
 
     /// The Receipt a target names: a Receipt id, or a Finding or an Item one
@@ -618,8 +638,7 @@ impl Daemon {
         let finding = self.finding_for(
             target,
             |finding| finding.is_open() && finding.category == Category::Threat,
-            "only an open Threat Finding is quarantined; an Exposure is fixed or kept, never \
-             moved",
+            "an Exposure is fixed or kept, never moved",
         )?;
         let roots = self.roots_for(&finding.item_id);
         let item = self.locate(&roots, &finding.item_id, &finding.content_hash)?;

@@ -654,6 +654,13 @@ fn strip_links(text: &str) -> String {
     out.replace(['[', ']'], "")
 }
 
+/// Whether onboarding may suggest Apple on-device. Off until the eval of spec
+/// section 4.4 clears it: in a hand check Apple's on-device model called
+/// every real Item it judged malicious. Apple stays offered and selectable
+/// everywhere; only the suggestion waits. This is the one place to turn it
+/// back on.
+pub const APPLE_SUGGESTED: bool = false;
+
 /// The Judgement Engine onboarding suggests (spec section 4.4): local first.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EngineSuggestion {
@@ -663,16 +670,19 @@ pub enum EngineSuggestion {
         /// The model to name in the one confirmation.
         model: String,
     },
-    /// Apple on-device, available on this Mac.
+    /// Apple on-device, available on this Mac. Suggested only while
+    /// [`APPLE_SUGGESTED`] is true.
     Apple,
-    /// Nothing to suggest. The Claude API is never suggested, only offered.
+    /// Nothing to suggest: AI Judgement stays off. The Claude API is never
+    /// suggested, only offered.
     Nothing,
 }
 
 /// The onboarding suggestion: Ollama when it runs and holds a model of four
-/// billion parameters or more (the first such model it lists), else Apple
-/// on-device when it is available, else nothing. A smaller model counts as
-/// absent, AgentSweep never pulls one, and the Claude API is never suggested.
+/// billion parameters or more (the first such model it lists), else nothing,
+/// so the engine stays off. A smaller model counts as absent, AgentSweep
+/// never pulls one, and the Claude API is never suggested. Apple on-device
+/// is suggested only once [`APPLE_SUGGESTED`] says the eval cleared it.
 pub fn suggested_engine(
     ollama: &crate::ollama::OllamaPresence,
     apple: &crate::apple::AppleAvailability,
@@ -684,7 +694,7 @@ pub fn suggested_engine(
             model: model.name.clone(),
         };
     }
-    if apple.is_available() {
+    if APPLE_SUGGESTED && apple.is_available() {
         return EngineSuggestion::Apple;
     }
     EngineSuggestion::Nothing
@@ -730,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn the_suggestion_is_local_first_and_never_claude() {
+    fn the_suggestion_is_ollama_with_a_large_model_else_nothing() {
         use crate::apple::AppleAvailability;
         use crate::ollama::OllamaPresence;
 
@@ -764,11 +774,12 @@ mod tests {
             }
         );
 
-        // Only a 1.7B model, which counts as absent: Apple when available.
+        // Only a 1.7B model, which counts as absent: nothing, even with
+        // Apple available, until the eval clears it.
         let small = running(vec![pulled("qwen3:1.7b", "1.7B")]);
         assert_eq!(
             suggested_engine(&small, &available),
-            EngineSuggestion::Apple
+            EngineSuggestion::Nothing
         );
 
         // Neither: nothing, never the Claude API.
@@ -782,7 +793,7 @@ mod tests {
         );
         assert_eq!(
             suggested_engine(&OllamaPresence::Absent, &available),
-            EngineSuggestion::Apple
+            EngineSuggestion::Nothing
         );
     }
 }

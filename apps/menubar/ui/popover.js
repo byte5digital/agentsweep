@@ -5,6 +5,7 @@
 // more is shown here.
 
 import { renderBanner } from "./banner.js";
+import { nextPress } from "./press.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -63,7 +64,7 @@ quit.addEventListener("click", () => invoke("quit"));
 openWindow.addEventListener("click", () => invoke("open_window"));
 scanNow.addEventListener("click", async () => {
   try {
-    say(await invoke("scan_now"));
+    say(await invoke("scan_now", { press: nextPress() }));
   } catch (why) {
     say(String(why));
   }

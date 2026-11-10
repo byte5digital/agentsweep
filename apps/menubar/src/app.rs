@@ -11,7 +11,8 @@
 //!   loaded.
 //! - `open_login_items`: System Settings at Login Items.
 //! - `start_daemon`: **Start it** on "Not watching right now", which asks
-//!   launchd to start the registered daemon job ([`supervision::start_daemon`]).
+//!   launchd to start the registered daemon job and is answered once the
+//!   daemon answers ([`supervision::start_and_wait`]).
 //! - `start_fresh_record`, `look_at_records`, `show_what_changed`,
 //!   `scan_again_trusting_nothing`: the integrity banners' buttons, each the
 //!   daemon's matching request; the window then opens on Activity at the
@@ -26,8 +27,9 @@
 //! - `folder`: the Scan a folder dialog's view, for a window that just
 //!   loaded.
 //! - `quarantine`, `restore`, `trust`, `acknowledge`, `fix`, `re_enable`,
-//!   `purge`, `untrust`: the action requests, each answered with the daemon's sentence, the lines
-//!   under it (after a Quarantine, its confirmation) and, for a Restore that
+//!   `purge`, `untrust`: the action requests, each answered with what
+//!   happened in plain words ([`crate::asking::plainly`], the daemon's
+//!   sentence otherwise), the lines under it (after a Quarantine, its confirmation) and, for a Restore that
 //!   met something else at the original place, the two conflict choices. A
 //!   Quarantine of a never-auto kind is the switch that neutralises its line
 //!   in place, and its Restore switches the line back on.
@@ -73,6 +75,11 @@
 //!   `onboarding_look_there`: the onboarding wizard's view and its moves
 //!   ([`crate::onboarding`]); Next on screen 5 registers the daemon and the
 //!   login item, and on screen 6 closes the wizard.
+//!
+//! Every command that asks the daemon to do something (the actions, Scan
+//! now, Check now, Start it, the integrity buttons and "I agree, turn it
+//! on") takes the `press` the window named it with, and is carried out once
+//! per press however often the webview delivers it ([`crate::presses`]).
 //!
 //! Events the frontend may listen to:
 //! - `agentsweep://view`: the popover's view, whenever it changes.
@@ -138,6 +145,7 @@ use crate::onboarding::{self, Handover, Step, Wizard};
 use crate::permission;
 use crate::placement;
 use crate::popover::View;
+use crate::presses::Presses;
 use crate::reveal::{self, SystemFinder};
 use crate::settings_pane::{
     self, FULL_DISK_ACCESS_PANES, FULL_DISK_ACCESS_UNOPENED, NOT_PROTECTED_LINK,
@@ -269,9 +277,15 @@ struct Shell {
     onboarding: Mutex<Option<Wizard>>,
     /// The answers held for the daemon since onboarding.
     handover: Mutex<Handover>,
-    /// The last press of "I agree, turn it on", so one press hands the
+    /// The last presses of "I agree, turn it on", so one press hands the
     /// Claude API key over once.
     presses: Arc<ai_check::Presses>,
+    /// The last presses of the action buttons, each carried out once.
+    actions: Arc<Presses<Result<Value, String>>>,
+    /// The last presses of Scan now, Start it and the integrity buttons.
+    lines: Arc<Presses<Result<String, String>>>,
+    /// The last presses of Check now.
+    checks: Arc<Presses<Result<bool, String>>>,
     /// The app updater: when the next check is due and the update that is
     /// ready to install at quit.
     updates: Arc<Updates<Ready>>,
@@ -305,59 +319,68 @@ fn open_login_items(shell: tauri::State<'_, Shell>) {
     shell.services.open_login_items();
 }
 
-/// **Start it**: asks launchd to start the registered daemon job. The link
-/// sees the daemon once it answers.
+/// **Start it**: asks launchd to start the registered daemon job, and
+/// answers once the daemon answers, so the banner says it is starting until
+/// then. The link sees the daemon on its own.
 #[tauri::command]
-async fn start_daemon(app: AppHandle) -> Result<String, String> {
-    let services = Arc::clone(&app.state::<Shell>().services);
-    tauri::async_runtime::spawn_blocking(move || supervision::start_daemon(&*services))
-        .await
-        .map_err(|error| format!("AgentSweep could not be started: {error}"))?
-        .map(|()| "Starting AgentSweep.".to_string())
-        .map_err(|why| format!("AgentSweep could not be started: {why}"))
+async fn start_daemon(app: AppHandle, press: String) -> Result<String, String> {
+    let shell = app.state::<Shell>();
+    let services = Arc::clone(&shell.services);
+    let asking = Arc::clone(&shell.asking);
+    let lines = Arc::clone(&shell.lines);
+    off_main(move || {
+        lines.once(&press, || {
+            let answers = || asking.status().is_ok();
+            supervision::start_and_wait(&*services, answers, crate::link::REGISTERED_AGAIN)
+                .map(|answered| supervision::started_line(answered).to_string())
+                .map_err(|why| format!("AgentSweep could not be started: {why}"))
+        })
+    })
+    .await
 }
 
 /// One integrity button: its request, then the window on Activity at the
-/// record it concerns.
-async fn answer_records(app: AppHandle, button: Button) -> Result<String, String> {
-    let (health, activity) = {
-        let shell = app.state::<Shell>();
-        let frame = shell.frame.lock().expect("the frame is not poisoned");
-        (frame.health().clone(), frame.activity().clone())
-    };
-    let asking = Arc::clone(&app.state::<Shell>().asking);
-    let pressed = tauri::async_runtime::spawn_blocking(move || {
-        integrity::press(button, &health, &activity, &*asking)
+/// record it concerns, once per press.
+async fn answer_records(app: AppHandle, button: Button, press: String) -> Result<String, String> {
+    let lines = Arc::clone(&app.state::<Shell>().lines);
+    off_main(move || {
+        lines.once(&press, || {
+            let shell = app.state::<Shell>();
+            let (health, activity) = {
+                let frame = shell.frame.lock().expect("the frame is not poisoned");
+                (frame.health().clone(), frame.activity().clone())
+            };
+            let pressed = integrity::press(button, &health, &activity, &*shell.asking)?;
+            show_window(&app);
+            let _ = app.emit(ACTIVITY_AT_EVENT, pressed.focus);
+            Ok(pressed.line)
+        })
     })
     .await
-    .map_err(|error| format!("AgentSweep could not be asked: {error}"))??;
-    show_window(&app);
-    let _ = app.emit(ACTIVITY_AT_EVENT, pressed.focus);
-    Ok(pressed.line)
 }
 
 /// "Start a fresh record".
 #[tauri::command]
-async fn start_fresh_record(app: AppHandle) -> Result<String, String> {
-    answer_records(app, Button::StartFreshRecord).await
+async fn start_fresh_record(app: AppHandle, press: String) -> Result<String, String> {
+    answer_records(app, Button::StartFreshRecord, press).await
 }
 
 /// "Look at the records".
 #[tauri::command]
-async fn look_at_records(app: AppHandle) -> Result<String, String> {
-    answer_records(app, Button::LookAtRecords).await
+async fn look_at_records(app: AppHandle, press: String) -> Result<String, String> {
+    answer_records(app, Button::LookAtRecords, press).await
 }
 
 /// "Show what changed".
 #[tauri::command]
-async fn show_what_changed(app: AppHandle) -> Result<String, String> {
-    answer_records(app, Button::ShowWhatChanged).await
+async fn show_what_changed(app: AppHandle, press: String) -> Result<String, String> {
+    answer_records(app, Button::ShowWhatChanged, press).await
 }
 
 /// "Scan again, trusting nothing".
 #[tauri::command]
-async fn scan_again_trusting_nothing(app: AppHandle) -> Result<String, String> {
-    answer_records(app, Button::ScanAgainTrustingNothing).await
+async fn scan_again_trusting_nothing(app: AppHandle, press: String) -> Result<String, String> {
+    answer_records(app, Button::ScanAgainTrustingNothing, press).await
 }
 
 /// Quits the app and nothing else.
@@ -411,22 +434,29 @@ async fn blocking<T: Send + 'static>(
     }
 }
 
-/// Carries out one action request and answers with its view, with the
-/// one-time false-alarm card after a Restore or a Trust. The report is
-/// prepared before the action, while the Finding is still listed as it was.
-async fn act(app: AppHandle, request: Option<ActionRequest>) -> Result<Value, String> {
+/// Carries out one action request once per press and answers with its
+/// view; the same press delivered again gets the same answer.
+async fn act(
+    app: AppHandle,
+    request: Option<ActionRequest>,
+    press: String,
+) -> Result<Value, String> {
+    let actions = Arc::clone(&app.state::<Shell>().actions);
+    off_main(move || actions.once(&press, || carry_out(&app, request))).await
+}
+
+/// One action request and its view, with the one-time false-alarm card
+/// after a Restore or a Trust. The report is prepared before the action,
+/// while the Finding is still listed as it was.
+fn carry_out(app: &AppHandle, request: Option<ActionRequest>) -> Result<Value, String> {
     let request = request.ok_or_else(|| "That is not an action AgentSweep knows.".to_string())?;
     let report = match request {
         ActionRequest::Restore(..) | ActionRequest::Trust(..) => {
-            prepare_report(&app, request.target())
+            prepare_report(app, request.target())
         }
         _ => None,
     };
-    let asking = Arc::clone(&app.state::<Shell>().asking);
-    let asked = request.clone();
-    let answer = tauri::async_runtime::spawn_blocking(move || asking.act(&asked))
-        .await
-        .map_err(|error| format!("AgentSweep could not be asked: {error}"))?;
+    let answer = app.state::<Shell>().asking.act(&request);
     Ok(false_alarm::after_action(&request, answer, report.as_ref()))
 }
 
@@ -471,8 +501,8 @@ async fn open_false_alarm_report(app: AppHandle, target: String) -> Result<Strin
 
 /// A manual Quarantine, or switching a never-auto kind's line off.
 #[tauri::command]
-async fn quarantine(app: AppHandle, target: String) -> Result<Value, String> {
-    act(app, ActionRequest::of("quarantine", &target, None)).await
+async fn quarantine(app: AppHandle, target: String, press: String) -> Result<Value, String> {
+    act(app, ActionRequest::of("quarantine", &target, None), press).await
 }
 
 /// A Restore: `refuse` first, `replace` or `beside` once the user chose.
@@ -481,48 +511,50 @@ async fn restore(
     app: AppHandle,
     target: String,
     conflict: Option<String>,
+    press: String,
 ) -> Result<Value, String> {
     act(
         app,
         ActionRequest::of("restore", &target, conflict.as_deref()),
+        press,
     )
     .await
 }
 
 /// Trust this version, or keep an Exposure as it is.
 #[tauri::command]
-async fn trust(app: AppHandle, target: String) -> Result<Value, String> {
-    act(app, ActionRequest::of("trust", &target, None)).await
+async fn trust(app: AppHandle, target: String, press: String) -> Result<Value, String> {
+    act(app, ActionRequest::of("trust", &target, None), press).await
 }
 
 /// "Yes, that was me" on a Drift question.
 #[tauri::command]
-async fn acknowledge(app: AppHandle, target: String) -> Result<Value, String> {
-    act(app, ActionRequest::of("acknowledge", &target, None)).await
+async fn acknowledge(app: AppHandle, target: String, press: String) -> Result<Value, String> {
+    act(app, ActionRequest::of("acknowledge", &target, None), press).await
 }
 
 /// The one-click fix of Exposures 0018 and 0019.
 #[tauri::command]
-async fn fix(app: AppHandle, target: String) -> Result<Value, String> {
-    act(app, ActionRequest::of("fix", &target, None)).await
+async fn fix(app: AppHandle, target: String, press: String) -> Result<Value, String> {
+    act(app, ActionRequest::of("fix", &target, None), press).await
 }
 
 /// A stopped plugin back on for its newer, clean version.
 #[tauri::command]
-async fn re_enable(app: AppHandle, target: String) -> Result<Value, String> {
-    act(app, ActionRequest::of("re_enable", &target, None)).await
+async fn re_enable(app: AppHandle, target: String, press: String) -> Result<Value, String> {
+    act(app, ActionRequest::of("re_enable", &target, None), press).await
 }
 
 /// Delete permanently, asked only after the window's confirmation.
 #[tauri::command]
-async fn purge(app: AppHandle, target: String) -> Result<Value, String> {
-    act(app, ActionRequest::of("purge", &target, None)).await
+async fn purge(app: AppHandle, target: String, press: String) -> Result<Value, String> {
+    act(app, ActionRequest::of("purge", &target, None), press).await
 }
 
 /// Stop trusting this, from the Trusted section of the Quarantine pane.
 #[tauri::command]
-async fn untrust(app: AppHandle, target: String) -> Result<Value, String> {
-    act(app, ActionRequest::of("untrust", &target, None)).await
+async fn untrust(app: AppHandle, target: String, press: String) -> Result<Value, String> {
+    act(app, ActionRequest::of("untrust", &target, None), press).await
 }
 
 /// **Copy a message for your admin** on a Managed Finding: the message names
@@ -706,12 +738,26 @@ async fn ai_check_look(app: AppHandle) -> Result<(), String> {
 }
 
 /// Moves one choice of the AI check: an engine card, the Ollama address or
-/// the Claude model id.
+/// the Claude model id. An engine card pressed shows as selected at once;
+/// the daemon's answer settles it.
 #[tauri::command]
 async fn change_engine(app: AppHandle, change: Value) -> Result<String, String> {
+    let chosen = ai_check::change_of(&change)
+        .ok()
+        .and_then(|asked| asked.engine);
+    if chosen.is_some() {
+        choosing(&app, chosen);
+    }
     let asking = Arc::clone(&app.state::<Shell>().asking);
-    let state = off_main(move || ai_check::change(&asking, &change)).await?;
-    Ok(take_engine(&app, &state))
+    match off_main(move || ai_check::change(&asking, &change)).await {
+        Ok(state) => Ok(take_engine(&app, &state)),
+        Err(refused) => {
+            if chosen.is_some() {
+                choosing(&app, None);
+            }
+            Err(refused)
+        }
+    }
 }
 
 /// "I agree, turn it on": the typed key, if any, goes to the daemon once and
@@ -1129,19 +1175,20 @@ fn open_full_disk_access() -> Result<(), String> {
     }
 }
 
-/// **Check now** on the Overview: sends check-now once, so the operating
-/// system's prompt appears right after the click, with the button disabled
-/// until the daemon answers ([`permission::check_now`]).
+/// **Check now** on the Overview: sends check-now once per press, so the
+/// operating system's prompt appears right after the click, with the button
+/// saying it is checking until the daemon answers ([`permission::check_now`]).
 #[tauri::command]
-async fn check_now(app: AppHandle) -> Result<bool, String> {
-    let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let shell = handle.state::<Shell>();
-        permission::check_now(&shell.frame, &shell.asking, || render(&handle))
+async fn check_now(app: AppHandle, press: String) -> Result<bool, String> {
+    let checks = Arc::clone(&app.state::<Shell>().checks);
+    off_main(move || {
+        checks.once(&press, || {
+            let shell = app.state::<Shell>();
+            permission::check_now(&shell.frame, &shell.asking, || render(&app))
+                .map_err(|error| refusal(&error))
+        })
     })
     .await
-    .map_err(|error| format!("AgentSweep could not be asked: {error}"))?
-    .map_err(|error| refusal(&error))
 }
 
 /// System Settings at Files and Folders: each address of
@@ -1197,13 +1244,22 @@ fn open<S: AsRef<std::ffi::OsStr>>(arguments: &[S]) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// Asks the daemon for a Full Scan. Its progress arrives on the stream.
+/// Asks the daemon for a Full Scan, once per press. Its progress arrives on
+/// the stream.
 #[tauri::command]
-async fn scan_now(app: AppHandle) -> Result<String, String> {
-    let asking = Arc::clone(&app.state::<Shell>().asking);
-    blocking(move || asking.scan_now())
-        .await
-        .map(|started| scan_now_line(started).to_string())
+async fn scan_now(app: AppHandle, press: String) -> Result<String, String> {
+    let shell = app.state::<Shell>();
+    let asking = Arc::clone(&shell.asking);
+    let lines = Arc::clone(&shell.lines);
+    off_main(move || {
+        lines.once(&press, || {
+            asking
+                .scan_now()
+                .map(|started| scan_now_line(started).to_string())
+                .map_err(|error| refusal(&error))
+        })
+    })
+    .await
 }
 
 /// **Scan a folder**, from the popover and from the Overview alike: shows
@@ -1593,6 +1649,9 @@ pub fn run(start: Start) {
         onboarding: Mutex::new(None),
         handover: Mutex::new(Handover::default()),
         presses: Arc::new(ai_check::Presses::default()),
+        actions: Arc::new(Presses::default()),
+        lines: Arc::new(Presses::default()),
+        checks: Arc::new(Presses::default()),
         updates: Arc::new(Updates::new()),
     };
 

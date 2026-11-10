@@ -20,6 +20,8 @@
 //! - [`asking`]: the requests the window and the popover send, on a
 //!   connection of their own, and their answers in the command line
 //!   interface's words.
+//! - [`presses`]: one press, one request, however often the webview
+//!   delivers it.
 //! - [`popover`]: the view the popover renders.
 //! - [`banner`]: the integrity and Protection banners that replace the
 //!   status sentence, and their buttons.
@@ -98,6 +100,7 @@ pub mod overview;
 pub mod permission;
 pub mod placement;
 pub mod popover;
+pub mod presses;
 pub mod quarantine;
 pub mod reveal;
 pub mod settings_pane;

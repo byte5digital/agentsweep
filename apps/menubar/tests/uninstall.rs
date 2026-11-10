@@ -27,7 +27,7 @@ use agentsweep_ipc::protocol::{Role, UninstallChoice};
 use agentsweep_menubar::asking::Asking;
 use agentsweep_menubar::link::Socket;
 use agentsweep_menubar::supervision::{ServiceState, Services};
-use agentsweep_menubar::uninstall::{Trash, carry_out, choice_of};
+use agentsweep_menubar::uninstall::{Running, Trash, carry_out, choice_of, finish};
 use serde_json::json;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -360,4 +360,89 @@ fn without_a_daemon_nothing_is_unregistered_or_trashed() {
     assert!(services.calls().is_empty());
     assert!(trash.0.lock().expect("the record").is_empty());
     assert!(sandbox.data().root().exists());
+}
+
+/// A stand-in for the running copies of the app: it records the request to
+/// quit beside the registrations' calls and answers how many stay open.
+struct Open<'a> {
+    recorded: &'a Recorded,
+    staying: usize,
+}
+
+impl Running for Open<'_> {
+    fn quit(&self, _wait: Duration) -> usize {
+        self.recorded.call("quit the app");
+        self.staying
+    }
+}
+
+/// `--finish-uninstall`, which `agentsweep uninstall` runs: the running app
+/// is asked to quit first, then the daemon and the login item go, and
+/// nothing is left to say.
+#[test]
+fn the_command_line_finish_quits_the_app_then_unregisters_both() {
+    let recorded = Recorded::new(PathBuf::from("/nowhere/settings.json"));
+    let left = finish(
+        &Open {
+            recorded: &recorded,
+            staying: 0,
+        },
+        &recorded,
+    );
+    assert!(left.is_empty(), "{left:?}");
+    assert_eq!(
+        recorded.calls(),
+        vec!["quit the app", "unregister agent", "unregister login item"]
+    );
+}
+
+/// An app that does not quit is said, and the registrations still go.
+#[test]
+fn the_command_line_finish_says_when_the_app_did_not_quit() {
+    let recorded = Recorded::new(PathBuf::from("/nowhere/settings.json"));
+    let left = finish(
+        &Open {
+            recorded: &recorded,
+            staying: 1,
+        },
+        &recorded,
+    );
+    assert_eq!(left, vec!["AgentSweep did not quit".to_string()]);
+    assert_eq!(
+        recorded.calls(),
+        vec!["quit the app", "unregister agent", "unregister login item"]
+    );
+}
+
+/// A Trash that refuses, as macOS does for an app that is open.
+struct RefusingTrash;
+
+impl Trash for RefusingTrash {
+    fn move_to_trash(&self, _bundle: &Path) -> Result<(), String> {
+        Err("it is open".to_string())
+    }
+}
+
+/// When the Trash refuses, the line names the bundle's real folder and
+/// says to quit first.
+#[test]
+fn a_refused_trash_names_the_folder_and_says_to_quit_first() {
+    let sandbox = Sandbox::new("trash-refused");
+    let _daemon = sandbox.start_with_two_quarantined();
+    let services = Recorded::new(sandbox.settings());
+    let done = carry_out(
+        &sandbox.asking(),
+        &services,
+        &RefusingTrash,
+        Some(Path::new(
+            "/Users/someone/agentsweep-hand-check/AgentSweep.app",
+        )),
+        UninstallChoice::Keep,
+    )
+    .expect("an Uninstall");
+    assert_eq!(
+        done.lines().last().expect("a line"),
+        "AgentSweep could not be moved to the Trash (it is open). Quit it, then drag it from \
+         /Users/someone/agentsweep-hand-check to the Trash."
+    );
 }

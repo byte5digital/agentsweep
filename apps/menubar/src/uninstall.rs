@@ -17,14 +17,93 @@
 //! stand-ins in the suite, so no test touches launchd, Login Items or the real
 //! Trash; [`SystemTrash`] is the thin part that asks the operating system and
 //! is checked by hand (`docs/hand-checks.md`).
+//!
+//! `agentsweep uninstall` asks the daemon the same way and then runs this
+//! app's executable with `--finish-uninstall`, since the registrations are
+//! the app's and only its own executable takes them off. That run is
+//! [`finish`]: it quits a running AgentSweep through [`Running`], then
+//! unregisters both. The command line cannot move the bundle it runs from,
+//! so it asks the user to.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use agentsweep_ipc::protocol::{UninstallChoice, UninstallReport};
 use serde_json::{Value, json};
 
 use crate::asking::{Asking, refusal};
 use crate::supervision::{self, Services};
+
+/// How long a running AgentSweep is given to quit.
+pub const QUIT_WAIT: Duration = Duration::from_secs(10);
+
+/// The copies of the app that run now, other than this process.
+pub trait Running {
+    /// Asks each to quit, as the Quit of its menu does, and waits at most
+    /// `wait` for them to be gone. Answers how many still run.
+    fn quit(&self, wait: Duration) -> usize;
+}
+
+/// The running applications, as the operating system lists them by the
+/// bundle identifier.
+#[derive(Debug, Default)]
+pub struct SystemRunning;
+
+#[cfg(target_os = "macos")]
+impl Running for SystemRunning {
+    fn quit(&self, wait: Duration) -> usize {
+        use std::time::Instant;
+
+        use objc2_app_kit::NSRunningApplication;
+        use objc2_foundation::NSString;
+
+        let own = libc::pid_t::try_from(std::process::id()).unwrap_or(-1);
+        let bundle = NSString::from_str(agentsweep_core::BUNDLE_ID);
+        let mut quitting: Vec<libc::pid_t> = Vec::new();
+        for app in NSRunningApplication::runningApplicationsWithBundleIdentifier(&bundle) {
+            let pid = app.processIdentifier();
+            if pid > 0 && pid != own {
+                app.terminate();
+                quitting.push(pid);
+            }
+        }
+        // The properties of a running application follow only on a main run
+        // loop, which this process does not run, so whether it is gone is
+        // asked of the kernel: a signal zero, which sends nothing.
+        let deadline = Instant::now() + wait;
+        loop {
+            // SAFETY: `kill` with signal zero only checks that the process
+            // exists; it sends nothing.
+            quitting.retain(|pid| unsafe { libc::kill(*pid, 0) } == 0);
+            if quitting.is_empty() || Instant::now() >= deadline {
+                return quitting.len();
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+/// Off macOS nothing of the app runs as a registered application yet (spec
+/// section 6.1).
+#[cfg(not(target_os = "macos"))]
+impl Running for SystemRunning {
+    fn quit(&self, _wait: Duration) -> usize {
+        0
+    }
+}
+
+/// `--finish-uninstall`, which `agentsweep uninstall` runs once the daemon
+/// has applied the choice: quits a running AgentSweep, so nothing of it is
+/// left open, then unregisters the daemon and the login item, which stops
+/// the daemon. Answers what could not be done, one line each.
+pub fn finish(running: &dyn Running, services: &dyn Services) -> Vec<String> {
+    let mut left = Vec::new();
+    if running.quit(QUIT_WAIT) > 0 {
+        left.push("AgentSweep did not quit".to_string());
+    }
+    left.extend(supervision::unregister_everything(services));
+    left
+}
 
 /// Where the app is moved to the Trash.
 pub trait Trash: Send + Sync {
@@ -151,6 +230,8 @@ pub struct Uninstalled {
     pub unregistered: Vec<String>,
     /// Whether the app went to the Trash, or why not.
     pub trashed: Result<(), String>,
+    /// The bundle the app runs out of, absent outside one.
+    pub bundle: Option<PathBuf>,
 }
 
 impl Uninstalled {
@@ -170,8 +251,12 @@ impl Uninstalled {
         lines.push(match &self.trashed {
             Ok(()) => "AgentSweep is in the Trash and quits now.".to_string(),
             Err(why) => format!(
-                "AgentSweep could not be moved to the Trash ({why}). Drag it from Applications \
-                 to the Trash yourself."
+                "AgentSweep could not be moved to the Trash ({why}). Quit it, then drag it {}to \
+                 the Trash.",
+                match self.bundle.as_deref().and_then(Path::parent) {
+                    Some(folder) => format!("from {} ", folder.display()),
+                    None => String::new(),
+                }
             ),
         });
         lines
@@ -204,6 +289,7 @@ pub fn carry_out(
         report,
         unregistered,
         trashed,
+        bundle: bundle.map(Path::to_path_buf),
     })
 }
 

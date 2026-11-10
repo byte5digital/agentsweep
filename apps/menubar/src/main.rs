@@ -2,7 +2,11 @@
 //!
 //! The app takes one argument, `--windowless`, with which the daemon starts
 //! it into the menu bar with no window when it has something to tell (spec
-//! section 6.7). Beside it are two developer flags:
+//! section 6.7), and `--finish-uninstall`, which `agentsweep uninstall` runs
+//! once the daemon has applied the user's choice: it quits a running
+//! AgentSweep and unregisters the daemon and the login item, says on stderr
+//! what it could not do, and exits (spec section 9.6). Beside them are two
+//! developer flags:
 //! `--developer-status` prints where the daemon's and the login item's
 //! registrations stand, and `--developer-unregister` unregisters both for the
 //! bundle it is run from. Each exits without opening anything. It is how
@@ -12,9 +16,23 @@
 use std::process::ExitCode;
 
 use agentsweep_menubar::supervision::{self, SystemServices};
+use agentsweep_menubar::uninstall::{self, SystemRunning};
 use agentsweep_menubar::window::Start;
 
 fn main() -> ExitCode {
+    if std::env::args()
+        .skip(1)
+        .any(|argument| argument == "--finish-uninstall")
+    {
+        let left = uninstall::finish(&SystemRunning, &SystemServices);
+        for line in &left {
+            eprintln!("{line}");
+        }
+        return match left.is_empty() {
+            true => ExitCode::SUCCESS,
+            false => ExitCode::FAILURE,
+        };
+    }
     if std::env::args()
         .skip(1)
         .any(|argument| argument == "--developer-status")

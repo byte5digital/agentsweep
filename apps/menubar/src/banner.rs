@@ -117,6 +117,14 @@ impl Button {
         }
     }
 
+    /// What its banner says from the click until the app answers.
+    pub fn working(self) -> &'static str {
+        match self {
+            Button::StartIt => STARTING,
+            _ => crate::findings::WORKING,
+        }
+    }
+
     /// True for the four buttons of the integrity states, which open the
     /// Activity pane after their request.
     pub fn opens_activity(self) -> bool {
@@ -156,7 +164,13 @@ impl Shown {
             "buttons": self
                 .buttons
                 .iter()
-                .map(|button| json!({ "label": button.label(), "command": button.command() }))
+                .map(|button| {
+                    json!({
+                        "label": button.label(),
+                        "command": button.command(),
+                        "working": button.working(),
+                    })
+                })
                 .collect::<Vec<_>>(),
         })
     }
@@ -167,6 +181,10 @@ pub const PROTECTION_OFF: &str = "Protection is off";
 
 /// The title of the banner of a registered daemon that is not running.
 pub const NOT_WATCHING: &str = "Not watching right now";
+
+/// What "Not watching right now" says from a click on **Start it** until
+/// the daemon it started answers.
+pub const STARTING: &str = "Starting AgentSweep…";
 
 /// The title of the key missing banner.
 pub const KEY_MISSING: &str = "AgentSweep cannot check its own records.";
@@ -251,6 +269,18 @@ mod tests {
         ChainState::Broken {
             sequence: 7,
             reason: BreakReason::MacFailed,
+        }
+    }
+
+    /// Every button says at once that it is working, and Start it that
+    /// AgentSweep is starting.
+    #[test]
+    fn every_button_carries_its_working_line() {
+        let shown = Banner::NotWatching.shown(Posture::Simple).to_value();
+        assert_eq!(shown["buttons"][0]["working"], STARTING);
+        let shown = Banner::KeyMissing.shown(Posture::Simple).to_value();
+        for button in shown["buttons"].as_array().expect("buttons") {
+            assert_eq!(button["working"], crate::findings::WORKING);
         }
     }
 

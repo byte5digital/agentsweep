@@ -38,6 +38,9 @@ use crate::frame::Frame;
 /// The button that sends `check-now`.
 pub const CHECK_NOW: &str = "Check now";
 
+/// What the button says while a Check now waits for the daemon's answer.
+pub const CHECKING: &str = "Checking…";
+
 /// The sentence beside the link to System Settings.
 pub const PRIVACY_SENTENCE: &str = "If macOS did not allow it, switch on AgentSweep under \
      Files and Folders in Privacy & Security.";
@@ -92,7 +95,7 @@ pub struct PermissionView {
     /// The projects concerned: their paths in the Developer Posture, their
     /// folder names in the Simple Posture.
     pub projects: Vec<String>,
-    /// The button's label.
+    /// The button's label, which says it is checking while it waits.
     pub button: String,
     /// False while a Check now waits for the daemon's answer.
     pub enabled: bool,
@@ -135,7 +138,11 @@ pub fn view(overview: &Overview, posture: Posture, check_now: CheckNow) -> Optio
             count(projects.len(), "project", "projects")
         ),
         projects,
-        button: CHECK_NOW.to_string(),
+        button: match check_now {
+            CheckNow::Sending => CHECKING,
+            CheckNow::Idle | CheckNow::Answered => CHECK_NOW,
+        }
+        .to_string(),
         enabled: check_now != CheckNow::Sending,
         privacy: (check_now == CheckNow::Answered).then(|| PrivacyLink {
             sentence: PRIVACY_SENTENCE.to_string(),

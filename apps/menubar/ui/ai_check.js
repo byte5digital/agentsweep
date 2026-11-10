@@ -10,6 +10,9 @@
 // is pressed: the field is emptied at once and the key goes to the app,
 // which hands it to the daemon and keeps no copy. Nothing here stores it.
 
+import { keep } from "./keep.js";
+import { nextPress } from "./press.js";
+
 const { invoke } = window.__TAURI__.core;
 
 const $ = (id) => document.getElementById(id);
@@ -102,20 +105,15 @@ function openConsent() {
   dialog.showModal();
 }
 
-// Names every press of "I agree, turn it on", unique across reloads of the
-// window, so the app hands the key over once per press even when the
-// webview delivers the press twice.
-const loaded = crypto.getRandomValues(new Uint32Array(2)).join("-");
-let presses = 0;
-
+// Every press of "I agree, turn it on" is named, so the app hands the key
+// over once per press even when the webview delivers the press twice.
 async function agreeToClaude() {
   const field = $("ai-consent-key");
   const typed = field.value.trim();
   // Emptied before anything else: the window keeps no copy of the key.
   field.value = "";
   $("ai-consent").close();
-  presses += 1;
-  const press = `${loaded}-${presses}`;
+  const press = nextPress();
   await ask("turn_on_claude", { key: typed === "" ? null : typed, press });
 }
 
@@ -192,7 +190,9 @@ export function renderAiCheck(view) {
   place.querySelector("h3").textContent = view.title;
   $("settings-tab-ai").textContent = view.title;
   place.querySelector(".intro").textContent = view.intro;
-  place.querySelector(".cards").replaceChildren(...view.cards.map(renderCard));
+  // The cards keep their nodes while they show the same, so a render cannot
+  // swallow a click on one.
+  keep(place.querySelector(".cards"), JSON.stringify(view.cards), () => view.cards.map(renderCard));
   place.querySelector(".lines").replaceChildren(...view.lines.map((line) => el("p", "muted", line)));
   const key = place.querySelector(".key");
   key.hidden = !view.key.set;
@@ -203,11 +203,13 @@ export function renderAiCheck(view) {
     remove.textContent = view.key.remove;
     remove.disabled = !view.available;
   }
-  const fields = [field(view.advanced.ollamaAddress, "ollama_address")];
-  if (view.advanced.claudeModel !== null) {
-    fields.push(field(view.advanced.claudeModel, "claude_model"));
-  }
-  advanced.replaceChildren(...fields);
+  keep(advanced, JSON.stringify([view.advanced, view.available]), () => {
+    const fields = [field(view.advanced.ollamaAddress, "ollama_address")];
+    if (view.advanced.claudeModel !== null) {
+      fields.push(field(view.advanced.claudeModel, "claude_model"));
+    }
+    return fields;
+  });
 }
 
 $("settings-ai-check")

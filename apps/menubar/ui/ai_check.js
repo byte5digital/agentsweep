@@ -182,6 +182,7 @@ export function renderAiCheck(view) {
     return;
   }
   place.querySelector("h3").textContent = view.title;
+  $("settings-tab-ai").textContent = view.title;
   place.querySelector(".intro").textContent = view.intro;
   place.querySelector(".cards").replaceChildren(...view.cards.map(renderCard));
   place.querySelector(".lines").replaceChildren(...view.lines.map((line) => el("p", "muted", line)));

@@ -131,74 +131,94 @@
             </p>
             <p class="muted" id="settings-answer" role="status"></p>
 
-            <div class="setting" id="settings-detail">
-              <h3></h3>
-              <div class="choices" role="radiogroup"></div>
+            <!-- Settings is split into tabs (spec section 8.10). Which tab is
+                 in sight is the window's own; window.js switches them. -->
+            <div class="tabs" id="settings-tabs" role="tablist">
+              <button type="button" role="tab" aria-controls="settings-panel-general">General</button>
+              <button type="button" role="tab" aria-controls="settings-panel-ai" id="settings-tab-ai">AI check</button>
+              <button type="button" role="tab" aria-controls="settings-panel-background">Background</button>
+              <button type="button" role="tab" aria-controls="settings-panel-advanced">Advanced</button>
+              <button type="button" role="tab" aria-controls="settings-panel-uninstall">Uninstall</button>
             </div>
 
-            <!-- The AI check (spec section 8.10), rendered by ai_check.js. -->
-            <div class="setting" id="settings-ai-check" hidden>
-              <h3></h3>
-              <p class="muted intro"></p>
-              <div class="cards" role="radiogroup"></div>
-              <div class="key" hidden>
-                <p class="key-set"></p>
-                <p class="muted remove-line"></p>
-                <button type="button" class="remove"></button>
+            <div class="tab" id="settings-panel-general" role="tabpanel">
+              <div class="setting" id="settings-detail">
+                <h3></h3>
+                <div class="choices" role="radiogroup"></div>
               </div>
-              <div class="lines"></div>
-              <p class="muted" id="ai-check-answer" role="status"></p>
-            </div>
 
-            <div class="setting" id="settings-background">
-              <h3></h3>
-              <p class="muted disclosure"></p>
-              <div class="toggles"></div>
-              <!-- Stop the AI from using flagged items, the Gate switch
-                   (spec section 8.10), rendered by window.js. -->
-              <div id="settings-gate" hidden></div>
-            </div>
-
-            <div class="setting" id="settings-cli">
-              <h3></h3>
-              <p class="muted line"></p>
-              <button type="button" class="install"></button>
-              <div class="cli-answer" role="status"></div>
-            </div>
-
-            <div class="setting" id="settings-advanced">
-              <h3></h3>
-              <p class="muted dirs-line"></p>
-              <div class="dirs"></div>
-              <!-- The Ollama address and, in the Developer Posture, the
-                   Claude model id (spec section 8.10). -->
-              <div class="dirs" id="settings-advanced-ai" hidden></div>
-              <div class="sub" id="settings-everything">
-                <h4></h4>
-                <div class="lines"></div>
-                <button type="button" class="open"></button>
-              </div>
-              <div class="sub" id="settings-rules">
-                <h4></h4>
+              <div class="setting" id="settings-cli">
+                <h3></h3>
                 <p class="muted line"></p>
-                <p class="id path"></p>
-                <button type="button" class="show"></button>
+                <button type="button" class="install"></button>
+                <div class="cli-answer" role="status"></div>
+              </div>
+
+              <div class="setting" id="settings-not-protected">
+                <h3></h3>
+                <p class="paragraph"></p>
+                <button type="button" class="link"></button>
               </div>
             </div>
 
-            <div class="setting" id="settings-not-protected">
-              <h3></h3>
-              <p class="paragraph"></p>
-              <button type="button" class="link"></button>
+            <div class="tab" id="settings-panel-ai" role="tabpanel" hidden>
+              <!-- The AI check (spec section 8.10), rendered by ai_check.js. -->
+              <div class="setting" id="settings-ai-check" hidden>
+                <h3></h3>
+                <p class="muted intro"></p>
+                <div class="cards" role="radiogroup"></div>
+                <div class="key" hidden>
+                  <p class="key-set"></p>
+                  <p class="muted remove-line"></p>
+                  <button type="button" class="remove"></button>
+                </div>
+                <div class="lines"></div>
+                <p class="muted" id="ai-check-answer" role="status"></p>
+              </div>
+            </div>
+
+            <div class="tab" id="settings-panel-background" role="tabpanel" hidden>
+              <div class="setting" id="settings-background">
+                <h3></h3>
+                <p class="muted disclosure"></p>
+                <div class="toggles"></div>
+                <!-- Stop the AI from using flagged items, the Gate switch
+                     (spec section 8.10), rendered by window.js. -->
+                <div id="settings-gate" hidden></div>
+              </div>
+            </div>
+
+            <div class="tab" id="settings-panel-advanced" role="tabpanel" hidden>
+              <div class="setting" id="settings-advanced">
+                <h3></h3>
+                <p class="muted dirs-line"></p>
+                <div class="dirs"></div>
+                <!-- The Ollama address and, in the Developer Posture, the
+                     Claude model id (spec section 8.10), at the pane's width. -->
+                <div class="dirs" id="settings-advanced-ai" hidden></div>
+                <div class="sub" id="settings-everything">
+                  <h4></h4>
+                  <div class="lines"></div>
+                  <button type="button" class="open"></button>
+                </div>
+                <div class="sub" id="settings-rules">
+                  <h4></h4>
+                  <p class="muted line"></p>
+                  <p class="id path"></p>
+                  <button type="button" class="show"></button>
+                </div>
+              </div>
             </div>
 
             <!-- Uninstall AgentSweep (spec section 9.6): the dialog asks
                  what happens to what is in quarantine, Keep selected. -->
-            <div class="setting" id="settings-uninstall">
-              <h3></h3>
-              <p class="muted line"></p>
-              <button type="button" class="uninstall"></button>
-              <div class="uninstall-answer" role="status"></div>
+            <div class="tab" id="settings-panel-uninstall" role="tabpanel" hidden>
+              <div class="setting" id="settings-uninstall">
+                <h3></h3>
+                <p class="muted line"></p>
+                <button type="button" class="uninstall"></button>
+                <div class="uninstall-answer" role="status"></div>
+              </div>
             </div>
           </section>
         </main>

@@ -106,20 +106,30 @@ main {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
-  padding: 4px 20px 16px;
 }
 
+/* Every pane scrolls inside the window, so it reaches its last line at the
+   smallest window size. */
 .pane {
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
+  overflow-y: auto;
+  padding: 4px 20px 16px;
+}
+
+/* What sits in a pane keeps its height and the pane scrolls; only a list
+   beside its detail gives up room, and never below its own minimum. */
+.pane > :not(.split) {
+  flex-shrink: 0;
 }
 
 .split {
   display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 1 1 0;
+  min-height: 240px;
   gap: 12px;
 }
 
@@ -473,7 +483,31 @@ dialog {
   margin-left: 6px;
 }
 
-/* The Settings pane (spec section 8.10): one block per setting. */
+/* The Settings pane (spec section 8.10): tabs, one block per setting. The
+   tabs stay in sight while a tab scrolls, over the pane's top padding. */
+
+.tabs {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 8px 0 14px;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.tabs [role="tab"] {
+  border-color: transparent;
+  background: transparent;
+}
+
+.tabs [role="tab"][aria-selected="true"] {
+  background: var(--selected);
+  font-weight: 600;
+}
 
 .setting {
   max-width: 620px;
@@ -514,6 +548,28 @@ dialog {
 .setting .dir input {
   flex: 1;
   min-width: 0;
+}
+
+/* Advanced takes the pane's width, and the Ollama address and the Claude
+   model id each take all of it: label above, field beneath, in either
+   Posture. */
+#settings-advanced {
+  max-width: none;
+}
+
+#settings-advanced-ai .dir {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  margin: 8px 0;
+}
+
+#settings-advanced-ai .dir .label {
+  flex: none;
+}
+
+#settings-advanced-ai .dir input {
+  width: 100%;
 }
 
 /* The AI check's four cards and the consent screen. */

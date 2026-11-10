@@ -7,6 +7,10 @@
 //! home, the real data directory, the documented socket, the login Keychain,
 //! launchd or Login Items: unregistering and the Trash are the app's, and its
 //! own suite covers them with stand-ins.
+//!
+//! Where a test needs the app's temporary folder, the socket carries the
+//! documented name inside a temporary folder of the test's own, so the folder
+//! beside it is the test's too and never the real one.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -59,10 +63,43 @@ impl KeySource for SharedKey {
 struct Sandbox {
     root: PathBuf,
     socket: PathBuf,
+    /// The test's own stand-in for the per-user temporary directory, when
+    /// the socket carries the documented name.
+    temporary: Option<PathBuf>,
     keys: SharedKey,
 }
 
 impl Sandbox {
+    /// The same, with the socket under its documented name in a temporary
+    /// folder of the test's own, so the daemon has an app temporary folder
+    /// beside it. The folder name is short: a socket path fits in 104 bytes.
+    fn with_documented_socket(purpose: &str) -> Sandbox {
+        let mut sandbox = Sandbox::new(purpose);
+        let temporary = std::env::temp_dir().join(format!(
+            "ast-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&temporary);
+        std::fs::create_dir_all(&temporary).expect("a temporary folder");
+        sandbox.socket = temporary.join("de.byte5.agentsweep.sock");
+        sandbox.temporary = Some(temporary);
+        sandbox
+    }
+
+    /// The app's folder in the test's temporary folder, with a file in it
+    /// the way the web view leaves one.
+    fn plant_web_view_files(&self, name: &str) -> PathBuf {
+        let folder = self
+            .temporary
+            .as_ref()
+            .expect("a documented socket")
+            .join("de.byte5.agentsweep");
+        std::fs::create_dir_all(folder.join("WebKit")).expect("the web view's folder");
+        std::fs::write(folder.join("WebKit").join(name), b"x").expect("a file");
+        folder
+    }
+
     fn new(purpose: &str) -> Sandbox {
         let root = std::env::temp_dir().join(format!(
             "agentsweep-uninstall-{purpose}-{}-{}",
@@ -112,6 +149,7 @@ impl Sandbox {
         Sandbox {
             root,
             socket,
+            temporary: None,
             keys: SharedKey(Arc::new(MemoryKeySource::empty())),
         }
     }
@@ -206,6 +244,9 @@ impl Drop for Sandbox {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
+        if let Some(temporary) = &self.temporary {
+            let _ = std::fs::remove_dir_all(temporary);
+        }
     }
 }
 
@@ -356,9 +397,12 @@ fn restore_all_refuses_where_something_else_stands_now() {
 /// the data directory.
 #[test]
 fn delete_everything_removes_what_agentsweep_made_and_nothing_else() {
-    let sandbox = Sandbox::new("delete");
-    let _daemon = sandbox.with_two_quarantined();
+    let sandbox = Sandbox::with_documented_socket("delete");
+    let daemon = sandbox.with_two_quarantined();
     let library = sandbox.home().join("Library");
+    let web_view = sandbox.plant_web_view_files("left");
+    let temporary = sandbox.temporary.clone().expect("a temporary folder");
+    std::fs::write(temporary.join("beside.txt"), b"not AgentSweep's").expect("a file beside");
 
     let report = sandbox
         .client()
@@ -373,6 +417,7 @@ fn delete_everything_removes_what_agentsweep_made_and_nothing_else() {
         "the caches",
         "the web view's storage",
         "the app's preferences",
+        "the temporary files",
         "the Event Log key",
         "the Claude API key",
     ] {
@@ -408,10 +453,123 @@ fn delete_everything_removes_what_agentsweep_made_and_nothing_else() {
         sandbox.claude_settings().is_file(),
         "the Agent's own file stays"
     );
+    assert!(
+        !web_view.exists(),
+        "the web view's temporary folder is gone"
+    );
+    assert!(temporary.join("beside.txt").is_file());
     assert_it_takes_no_more_work(&sandbox);
     // Nothing the daemon does afterwards brings the data directory back.
     std::thread::sleep(Duration::from_millis(700));
     assert!(!sandbox.data().root().exists());
+
+    // What the web view writes until the app has quit goes at the exit, with
+    // the socket, and only what is AgentSweep's leaves the temporary folder.
+    // The listener stops first, as it does when the process ends.
+    sandbox.plant_web_view_files("late");
+    let stopped = Arc::clone(daemon.daemon());
+    drop(daemon);
+    stopped.clean_up_at_exit(&sandbox.socket);
+    assert_eq!(listing(&temporary), vec![PathBuf::from("beside.txt")]);
+}
+
+/// Keep leaves the web view's temporary folder alone, and the exit unlinks
+/// the socket and nothing else: only Delete everything removes the folder.
+#[test]
+fn the_exit_unlinks_the_socket_and_keeps_the_temporary_folder_unless_everything_was_deleted() {
+    let sandbox = Sandbox::with_documented_socket("keep-exit");
+    let daemon = sandbox.start();
+    let web_view = sandbox.plant_web_view_files("left");
+
+    sandbox
+        .client()
+        .uninstall(UninstallChoice::Keep)
+        .expect("an Uninstall");
+    assert!(web_view.join("WebKit/left").is_file());
+    assert!(sandbox.socket.exists());
+
+    let stopped = Arc::clone(daemon.daemon());
+    drop(daemon);
+    stopped.clean_up_at_exit(&sandbox.socket);
+    assert!(!sandbox.socket.exists(), "the socket is unlinked");
+    assert!(web_view.join("WebKit/left").is_file());
+}
+
+/// The daemon binary itself, killed when the test is over whatever happened.
+struct Process(std::process::Child);
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The shipped binary, stopped the way unregistering stops it, with launchd's
+/// `SIGTERM`, after Delete everything: it unlinks its socket and removes what
+/// the web view wrote since, so nothing of AgentSweep is left in the
+/// temporary folder, and it still ends by that signal, as launchd expects.
+#[test]
+fn the_daemon_stopped_after_delete_everything_leaves_nothing_in_the_temporary_folder() {
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::{Command, Stdio};
+
+    let sandbox = Sandbox::with_documented_socket("stopped");
+    let temporary = sandbox.temporary.clone().expect("a temporary folder");
+    let mut daemon = Process(
+        Command::new(env!("CARGO_BIN_EXE_agentsweepd"))
+            .arg("--data-dir")
+            .arg(sandbox.data().root())
+            .arg("--socket")
+            .arg(&sandbox.socket)
+            .arg("--home")
+            .arg(sandbox.home())
+            .args(["--key-source", "memory", "--log", "stderr"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the daemon starts"),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(300);
+    loop {
+        if let Ok(mut client) = Client::connect_at(&sandbox.socket, Role::Cli)
+            && client.status().is_ok_and(|status| status.scan.is_some())
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the daemon never finished its first Full Scan"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    sandbox.plant_web_view_files("left");
+
+    let report = sandbox
+        .client()
+        .uninstall(UninstallChoice::DeleteEverything)
+        .expect("an Uninstall");
+    assert!(
+        report
+            .deleted
+            .iter()
+            .any(|deleted| deleted == "the temporary files"),
+        "{report:?}"
+    );
+    sandbox.plant_web_view_files("late");
+
+    let pid = libc::pid_t::try_from(daemon.0.id()).expect("a pid");
+    // SAFETY: a signal to the child this test started, by its pid.
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+    let status = daemon.0.wait().expect("the daemon exits");
+    assert_eq!(status.signal(), Some(libc::SIGTERM), "{status:?}");
+    let left: Vec<_> = std::fs::read_dir(&temporary)
+        .expect("the temporary folder")
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
 }
 
 /// Every file under a directory, relative to it, sorted.

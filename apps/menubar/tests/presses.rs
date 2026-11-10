@@ -415,3 +415,84 @@ fn a_start_it_delivered_twice_starts_the_daemon_once() {
     assert_eq!(answers[0], Ok("AgentSweep is running."));
     assert!(answers.iter().all(|answer| answer == &answers[0]));
 }
+
+/// launchd and Login Items as the test plays them: nothing is registered
+/// until the app registers it, and registering the daemon starts the
+/// sandbox's daemon, as SMAppService loads and starts the job.
+struct Unregistered<'s> {
+    sandbox: &'s Sandbox,
+    registered: AtomicUsize,
+    login_items: AtomicUsize,
+    running: Mutex<Option<Background>>,
+}
+
+impl Services for Unregistered<'_> {
+    fn supervises(&self) -> bool {
+        true
+    }
+    fn agent(&self) -> ServiceState {
+        match self.registered.load(Ordering::SeqCst) {
+            0 => ServiceState::NotRegistered,
+            _ => ServiceState::Enabled,
+        }
+    }
+    fn register_agent(&self) -> Result<(), String> {
+        self.registered.fetch_add(1, Ordering::SeqCst);
+        *self.running.lock().expect("the daemon") = Some(self.sandbox.start());
+        Ok(())
+    }
+    fn unregister_agent(&self) -> Result<(), String> {
+        Err("not asked".to_string())
+    }
+    fn start_agent(&self) -> Result<(), String> {
+        Err("not asked".to_string())
+    }
+    fn login_item(&self) -> ServiceState {
+        match self.login_items.load(Ordering::SeqCst) {
+            0 => ServiceState::NotRegistered,
+            _ => ServiceState::Enabled,
+        }
+    }
+    fn register_login_item(&self) -> Result<(), String> {
+        self.login_items.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    fn unregister_login_item(&self) -> Result<(), String> {
+        Err("not asked".to_string())
+    }
+    fn open_login_items(&self) {}
+}
+
+/// Turn on protection registers the daemon and the login item once per
+/// press, and is answered once the daemon it registered answers.
+#[test]
+fn a_turn_on_protection_delivered_twice_registers_once_and_the_daemon_answers() {
+    let sandbox = Sandbox::new("turn-on");
+    let asking = sandbox.asking();
+    assert!(asking.status().is_err(), "no daemon before the press");
+    let services = Unregistered {
+        sandbox: &sandbox,
+        registered: AtomicUsize::new(0),
+        login_items: AtomicUsize::new(0),
+        running: Mutex::new(None),
+    };
+    let presses = Presses::default();
+
+    let answers = delivered_twice(&presses, || {
+        supervision::turn_on_and_wait(
+            &services,
+            || asking.status().is_ok(),
+            Duration::from_secs(60),
+        )
+        .map(supervision::started_line)
+    });
+    assert_eq!(
+        services.registered.load(Ordering::SeqCst),
+        1,
+        "registered once"
+    );
+    assert_eq!(services.login_items.load(Ordering::SeqCst), 1);
+    assert_eq!(answers[0], Ok("AgentSweep is running."));
+    assert!(answers.iter().all(|answer| answer == &answers[0]));
+    assert!(asking.status().is_ok(), "the daemon answers");
+}

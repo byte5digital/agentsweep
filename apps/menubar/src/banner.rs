@@ -9,7 +9,8 @@
 //!
 //! - Protection off: the registration waits for approval, is not there, or
 //!   no daemon answers where nothing is registered to start one. The way
-//!   back is always Login Items; no pause switch exists (spec section 10).
+//!   back is Login Items, or **Turn on protection** when nothing is
+//!   registered at all; no pause switch exists (spec section 10).
 //! - Not watching right now: the daemon's registration is enabled and no
 //!   daemon answers. Amber, with **Start it**.
 //! - Records tampered: a chain broke while the key was in hand. The two
@@ -23,6 +24,10 @@
 //! to "Not watching right now", and that a reset cannot rule out tampering
 //! to the key missing banner (ADR 0003). The Protection off banner carries
 //! the reason in the Developer Posture.
+//!
+//! The popover shows the two integrity banners as one line pointing to the
+//! window, [`Banner::in_popover`]; their buttons are only in the window
+//! (spec section 8.1).
 
 use agentsweep_core::DAEMON_LABEL;
 use agentsweep_core::health::{Health, Rung};
@@ -38,6 +43,8 @@ pub enum Daemon {
     NotRunning,
     /// Protection is off for a reason the registration or the socket gives.
     Off,
+    /// Nothing is registered at all: no daemon, and no job to start.
+    Unregistered,
 }
 
 /// The banner that stands, when one does.
@@ -47,6 +54,9 @@ pub enum Banner {
     ProtectionOff {
         /// Why, as far as the app can tell.
         reason: String,
+        /// True when nothing is registered at all, so the way back is
+        /// **Turn on protection** rather than Login Items.
+        unregistered: bool,
     },
     /// "Not watching right now".
     NotWatching,
@@ -80,6 +90,9 @@ impl Tone {
 pub enum Button {
     /// Opens System Settings at Login Items.
     OpenLoginItems,
+    /// "Turn on protection": registers the daemon and the login item again,
+    /// as onboarding screen 5 does.
+    TurnOnProtection,
     /// Asks launchd to start the registered daemon job.
     StartIt,
     /// "Start a fresh record": the acknowledge-key-missing request.
@@ -97,6 +110,7 @@ impl Button {
     pub fn label(self) -> &'static str {
         match self {
             Button::OpenLoginItems => "Open Login Items",
+            Button::TurnOnProtection => "Turn on protection",
             Button::StartIt => "Start it",
             Button::StartFreshRecord => "Start a fresh record",
             Button::LookAtRecords => "Look at the records",
@@ -109,6 +123,7 @@ impl Button {
     pub fn command(self) -> &'static str {
         match self {
             Button::OpenLoginItems => "open_login_items",
+            Button::TurnOnProtection => "turn_on_protection",
             Button::StartIt => "start_daemon",
             Button::StartFreshRecord => "start_fresh_record",
             Button::LookAtRecords => "look_at_records",
@@ -120,7 +135,7 @@ impl Button {
     /// What its banner says from the click until the app answers.
     pub fn working(self) -> &'static str {
         match self {
-            Button::StartIt => STARTING,
+            Button::StartIt | Button::TurnOnProtection => STARTING,
             _ => crate::findings::WORKING,
         }
     }
@@ -182,8 +197,9 @@ pub const PROTECTION_OFF: &str = "Protection is off";
 /// The title of the banner of a registered daemon that is not running.
 pub const NOT_WATCHING: &str = "Not watching right now";
 
-/// What "Not watching right now" says from a click on **Start it** until
-/// the daemon it started answers.
+/// What "Not watching right now" says from a click on **Start it**, and
+/// Protection off from a click on **Turn on protection**, until the daemon
+/// answers.
 pub const STARTING: &str = "Starting AgentSweep…";
 
 /// The title of the key missing banner.
@@ -192,20 +208,26 @@ pub const KEY_MISSING: &str = "AgentSweep cannot check its own records.";
 /// The title of the chain broken banner.
 pub const CHAIN_BROKEN: &str = "AgentSweep's records were changed by something else.";
 
+/// The one line the popover shows in place of an integrity banner, whose
+/// buttons are only in the window (spec section 8.1).
+pub const NEEDS_A_LOOK: &str = "Something needs a look. Open AgentSweep.";
+
 /// What the Developer Posture adds to the key missing banner (ADR 0003).
 pub const RESET_CANNOT_RULE_OUT_TAMPERING: &str = "A reset cannot rule out tampering: no key in \
      hand can check the records written before it.";
 
 /// Which banner stands for this Health and this daemon, if any.
 pub fn choose(health: &Health, daemon: &Daemon) -> Option<Banner> {
-    let off = || Banner::ProtectionOff {
+    let off = |unregistered| Banner::ProtectionOff {
         reason: health.protection.reason().to_string(),
+        unregistered,
     };
     match daemon {
         Daemon::NotRunning => Some(Banner::NotWatching),
-        Daemon::Off => Some(off()),
+        Daemon::Off => Some(off(false)),
+        Daemon::Unregistered => Some(off(true)),
         Daemon::Answering => match health.rung() {
-            Rung::ProtectionOff => Some(off()),
+            Rung::ProtectionOff => Some(off(false)),
             Rung::RecordsTampered => Some(Banner::ChainBroken),
             Rung::StateReset => Some(Banner::KeyMissing),
             _ => None,
@@ -214,12 +236,47 @@ pub fn choose(health: &Health, daemon: &Daemon) -> Option<Banner> {
 }
 
 impl Banner {
+    /// True for the two integrity banners, whose buttons are only in the
+    /// window.
+    pub fn is_integrity(&self) -> bool {
+        matches!(self, Banner::KeyMissing | Banner::ChainBroken)
+    }
+
+    /// The banner as the popover shows it in a Posture: an integrity banner
+    /// is one red line pointing to the window, with no button; every other
+    /// banner is shown as in the window (spec section 8.1).
+    pub fn in_popover(&self, posture: Posture) -> Shown {
+        match self.is_integrity() {
+            true => Shown {
+                tone: Tone::Red,
+                title: NEEDS_A_LOOK,
+                body: "",
+                developer: None,
+                buttons: Vec::new(),
+            },
+            false => self.shown(posture),
+        }
+    }
+
     /// The banner's words and buttons in a Posture.
     pub fn shown(&self, posture: Posture) -> Shown {
         let developer = posture == Posture::Developer;
         let only = |line: String| (developer && !line.is_empty()).then_some(line);
         match self {
-            Banner::ProtectionOff { reason } => Shown {
+            Banner::ProtectionOff {
+                reason,
+                unregistered: true,
+            } => Shown {
+                tone: Tone::Red,
+                title: PROTECTION_OFF,
+                body: "Nothing is checking your agents' setup right now.",
+                developer: only(reason.clone()),
+                buttons: vec![Button::TurnOnProtection],
+            },
+            Banner::ProtectionOff {
+                reason,
+                unregistered: false,
+            } => Shown {
                 tone: Tone::Red,
                 title: PROTECTION_OFF,
                 body: "Nothing is checking your agents' setup right now. Allow AgentSweep in \
@@ -381,6 +438,7 @@ mod tests {
         let banners = [
             Banner::ProtectionOff {
                 reason: "no daemon answered".to_string(),
+                unregistered: false,
             },
             Banner::NotWatching,
             Banner::KeyMissing,
@@ -412,9 +470,60 @@ mod tests {
         );
     }
 
+    /// With nothing registered at all, Protection off offers Turn on
+    /// protection and no Login Items, and says it is starting until the
+    /// daemon answers; any other Protection off keeps Login Items.
+    #[test]
+    fn nothing_registered_offers_turn_on_protection() {
+        let health = Health::unreachable("the background item is not registered");
+        let banner = choose(&health, &Daemon::Unregistered).expect("a banner");
+        let shown = banner.shown(Posture::Simple);
+        assert_eq!(shown.title, PROTECTION_OFF);
+        assert_eq!(shown.tone, Tone::Red);
+        assert_eq!(shown.buttons, vec![Button::TurnOnProtection]);
+        assert!(!shown.body.contains("Login Items"), "{}", shown.body);
+        let value = shown.to_value();
+        assert_eq!(value["buttons"][0]["label"], "Turn on protection");
+        assert_eq!(value["buttons"][0]["command"], "turn_on_protection");
+        assert_eq!(value["buttons"][0]["working"], STARTING);
+        assert_eq!(banner.in_popover(Posture::Simple), shown);
+
+        let off = choose(&health, &Daemon::Off).expect("a banner");
+        assert_eq!(
+            off.shown(Posture::Simple).buttons,
+            vec![Button::OpenLoginItems]
+        );
+    }
+
+    /// The popover shows an integrity banner as one line pointing to the
+    /// window, with no button and no Developer line; the window keeps the
+    /// banner with its two buttons.
+    #[test]
+    fn the_popover_shows_an_integrity_banner_as_one_line() {
+        for banner in [Banner::KeyMissing, Banner::ChainBroken] {
+            for posture in [Posture::Simple, Posture::Developer] {
+                let shown = banner.in_popover(posture);
+                assert_eq!(shown.title, NEEDS_A_LOOK);
+                assert_eq!(shown.tone, Tone::Red);
+                assert_eq!(shown.body, "");
+                assert_eq!(shown.developer, None);
+                assert!(shown.buttons.is_empty(), "{banner:?}");
+                assert_eq!(banner.shown(posture).buttons.len(), 2, "{banner:?}");
+            }
+        }
+        for banner in [Banner::NotWatching, Banner::KeyMissing] {
+            assert_eq!(banner.is_integrity(), banner == Banner::KeyMissing);
+        }
+        assert_eq!(
+            Banner::NotWatching.in_popover(Posture::Developer),
+            Banner::NotWatching.shown(Posture::Developer)
+        );
+    }
+
     #[test]
     fn the_integrity_buttons_open_the_activity_pane_and_the_others_do_not() {
         assert!(!Button::OpenLoginItems.opens_activity());
+        assert!(!Button::TurnOnProtection.opens_activity());
         assert!(!Button::StartIt.opens_activity());
         for button in [
             Button::StartFreshRecord,
@@ -431,14 +540,21 @@ mod tests {
         for banner in [
             Banner::ProtectionOff {
                 reason: String::new(),
+                unregistered: false,
+            },
+            Banner::ProtectionOff {
+                reason: String::new(),
+                unregistered: true,
             },
             Banner::NotWatching,
             Banner::KeyMissing,
             Banner::ChainBroken,
         ] {
             for posture in [Posture::Simple, Posture::Developer] {
-                let value = banner.shown(posture).to_value().to_string();
-                assert!(!value.contains('\u{2014}'), "{value}");
+                for shown in [banner.shown(posture), banner.in_popover(posture)] {
+                    let value = shown.to_value().to_string();
+                    assert!(!value.contains('\u{2014}'), "{value}");
+                }
             }
         }
     }

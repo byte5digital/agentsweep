@@ -9,6 +9,11 @@
 //! record's action, Item id, content hash, Rule id and Receipt id beside it.
 //! A line whose record an earlier key generation wrote carries the
 //! unverified mark in both Postures (spec section 5.5).
+//!
+//! The pane shows the newest 500 lines, and **Show older** the next 500
+//! each time. The app keeps every line; only the ones shown are sent to the
+//! window, so a long-lived install with a long Event Log renders as fast as
+//! a new one.
 
 use agentsweep_core::settings::Posture;
 use agentsweep_ipc::protocol::{ActivityLine, StateEvent, Status};
@@ -24,10 +29,17 @@ pub const UNVERIFIED: &str = "Unverified";
 pub const UNVERIFIED_NOTE: &str = "Records marked unverified were written before the protection \
      state was reset. No key in hand can check them, so they cannot rule out tampering.";
 
+/// How many lines the pane shows at first, and how many more each
+/// **Show older** adds.
+pub const PAGE: usize = 500;
+
 /// The Activity as the app keeps it, oldest first, as the daemon sends it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Activity {
     lines: Vec<ActivityLine>,
+    /// How many pages **Show older** opened beyond the first. A status
+    /// loaded again keeps them.
+    older: usize,
 }
 
 impl Activity {
@@ -66,16 +78,48 @@ impl Activity {
         &self.lines
     }
 
-    /// The pane in a Posture: newest first, each line with its moment and,
-    /// in the Developer Posture only, its technical columns.
-    pub fn view(&self, posture: Posture) -> Value {
-        let developer = posture == Posture::Developer;
+    /// **Show older**: the pane shows the next 500 lines too.
+    pub fn show_older(&mut self) {
+        self.older += 1;
+    }
+
+    /// Opens as many pages as it takes to show the record with this
+    /// sequence, or the first one after it, which the integrity flows open
+    /// the pane at.
+    pub fn show_record(&mut self, sequence: u64) {
+        let at = self
+            .newest()
+            .iter()
+            .rposition(|line| line.sequence.is_some_and(|it| it >= sequence));
+        if let Some(at) = at {
+            self.older = self.older.max(at / PAGE);
+        }
+    }
+
+    /// How many lines the pane shows.
+    fn shown(&self) -> usize {
+        PAGE.saturating_mul(self.older.saturating_add(1))
+    }
+
+    /// Every line held, newest first.
+    fn newest(&self) -> Vec<&ActivityLine> {
         let mut newest: Vec<&ActivityLine> = self.lines.iter().collect();
         newest.sort_by_key(|line| (line.recorded_at, line.sequence.unwrap_or(u64::MAX)));
         newest.reverse();
+        newest
+    }
+
+    /// The pane in a Posture: the newest lines, as many as are shown, each
+    /// with its moment and, in the Developer Posture only, its technical
+    /// columns; and whether older lines wait behind **Show older**.
+    pub fn view(&self, posture: Posture) -> Value {
+        let developer = posture == Posture::Developer;
+        let newest = self.newest();
+        let shown = self.shown();
         let unverified = self.lines.iter().any(|line| !line.verified);
         json!({
-            "lines": newest.into_iter().map(|line| row(line, developer)).collect::<Vec<_>>(),
+            "lines": newest.iter().take(shown).map(|line| row(line, developer)).collect::<Vec<_>>(),
+            "older": newest.len() > shown,
             "empty": self.lines.is_empty(),
             "note": match developer && unverified {
                 true => Value::from(UNVERIFIED_NOTE),
@@ -245,5 +289,78 @@ mod tests {
             entry: None,
         };
         assert_eq!(activity.apply(&bare), Follow::Refresh);
+    }
+
+    /// 2,000 records, one a minute, the newest last.
+    fn two_thousand() -> Activity {
+        let start = Timestamp::parse("2026-10-01T08:00:00.000Z").expect("a moment");
+        let mut activity = Activity::default();
+        activity.load(&status_with(
+            (1..=2000)
+                .map(|n| ActivityLine {
+                    recorded_at: Timestamp::from_unix_ms(
+                        start.as_unix_ms() + i64::try_from(n).expect("small") * 60_000,
+                    ),
+                    ..line(n, "2026-10-01T08:00:00.000Z", &format!("record {n}"))
+                })
+                .collect(),
+        ));
+        activity
+    }
+
+    #[test]
+    fn the_pane_shows_the_newest_500_and_show_older_the_next_500() {
+        let mut activity = two_thousand();
+        let view = activity.view(Posture::Simple);
+        let shown = said(&view);
+        assert_eq!(shown.len(), PAGE);
+        assert_eq!(shown[0], "record 2000");
+        assert_eq!(shown[PAGE - 1], "record 1501");
+        assert_eq!(view["older"], true);
+
+        activity.show_older();
+        let view = activity.view(Posture::Simple);
+        assert_eq!(said(&view).len(), 2 * PAGE);
+        assert_eq!(said(&view)[2 * PAGE - 1], "record 1001");
+        assert_eq!(view["older"], true);
+
+        activity.show_older();
+        activity.show_older();
+        let view = activity.view(Posture::Simple);
+        assert_eq!(said(&view).len(), 2000);
+        assert_eq!(said(&view)[1999], "record 1");
+        assert_eq!(view["older"], false, "nothing older is left");
+        assert_eq!(activity.lines().len(), 2000, "the app keeps every line");
+    }
+
+    #[test]
+    fn a_status_or_a_new_line_keeps_what_show_older_opened() {
+        let mut activity = two_thousand();
+        activity.show_older();
+        activity.load(&status_with(two_thousand().lines().to_vec()));
+        assert_eq!(said(&activity.view(Posture::Simple)).len(), 2 * PAGE);
+        activity.clear();
+        assert_eq!(activity.view(Posture::Simple)["older"], false);
+        assert_eq!(activity.view(Posture::Simple)["empty"], true);
+    }
+
+    #[test]
+    fn a_record_asked_for_is_shown_even_when_it_is_older_than_the_newest_500() {
+        let mut activity = two_thousand();
+        activity.show_record(1200);
+        let view = activity.view(Posture::Simple);
+        assert_eq!(
+            said(&view).len(),
+            2 * PAGE,
+            "record 1200 is in the second page"
+        );
+        activity.show_record(1990);
+        assert_eq!(
+            said(&activity.view(Posture::Simple)).len(),
+            2 * PAGE,
+            "a newer record never closes a page"
+        );
+        activity.show_record(1);
+        assert_eq!(said(&activity.view(Posture::Simple)).len(), 2000);
     }
 }

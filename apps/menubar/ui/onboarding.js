@@ -56,7 +56,8 @@ function renderAgents(inventory) {
 }
 
 // The Ollama confirmation: the model the engine answer names, loopback only.
-function confirmOllama() {
+// `confirmed` runs once it is given.
+function confirmOllama(confirmed) {
   const asked = current.ai.ollama;
   if (asked === null) {
     return;
@@ -69,7 +70,7 @@ function confirmOllama() {
     "close",
     () => {
       if (dialog.returnValue === "ok") {
-        ask("onboarding_engine", { engine: "ollama", confirmed: true });
+        confirmed();
       }
     },
     { once: true },
@@ -131,7 +132,7 @@ async function showPreview() {
 
 function choose(card) {
   if (card.engine === "ollama") {
-    confirmOllama();
+    confirmOllama(() => ask("onboarding_engine", { engine: "ollama", confirmed: true }));
   } else if (card.engine === "claude") {
     openConsent();
   } else {
@@ -163,12 +164,12 @@ function renderCard(card) {
 
 function renderAi(ai) {
   text("ai-title", ai.title);
+  text("ai-line", ai.line);
   $("ai-choices").replaceChildren(...ai.choices.map(renderCard));
   const others = $("ai-others-line");
   others.hidden = ai.othersLine === null;
   others.textContent = ai.othersLine ?? "";
   $("ai-others").replaceChildren(...ai.others.map(renderCard));
-  text("ai-later", ai.later);
 }
 
 function renderBackground(background) {
@@ -226,8 +227,9 @@ function render(view) {
     section.hidden = section.dataset.screen !== view.screen;
   }
   steps.textContent = `Step ${view.step} of ${view.steps}`;
-  text("welcome-what", view.welcome[0]);
-  text("welcome-promise", view.welcome[1]);
+  text("welcome-title", view.welcome.title);
+  $("welcome-lines").replaceChildren(...view.welcome.lines.map((line) => el("p", "", line)));
+  text("welcome-promise", view.welcome.promise);
   renderAgents(view.inventory);
   text("detail-question", view.detail.question);
   text("simple", view.detail.simple);
@@ -261,9 +263,10 @@ async function ask(command, args) {
 
 back.addEventListener("click", () => ask("onboarding_back"));
 next.addEventListener("click", () => {
-  // Ollama preselected needs its one confirmation before the wizard moves on.
+  // Ollama chosen but not yet confirmed needs its one confirmation; once
+  // given, the wizard moves on without a second Continue.
   if (current && current.screen === "ai" && current.ai.needsConfirmation) {
-    confirmOllama();
+    confirmOllama(() => ask("onboarding_next", { ollamaConfirmed: true }));
     return;
   }
   ask("onboarding_next");

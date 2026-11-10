@@ -14,11 +14,11 @@
 //! the [`Services`] seam), asking for notification permission, sending
 //! check-now, and asking the daemon for the status screen 6 reports.
 //!
-//! - Screen 4, the AI check, preselects the local-first suggestion of spec
-//!   section 4.4 from the engine answer: Ollama with a model of 4B or more,
-//!   else Apple on-device when it is available, else Off. Claude is never
-//!   preselected, only offered, and only in the Developer Posture, beside a
-//!   way to choose Ollama. Ollama needs one confirmation naming the model;
+//! - Screen 4, the AI check, says in one line what the AI checks and
+//!   preselects Off. Apple on-device is offered; Ollama is offered when a
+//!   model of 4B or more is present, and in the Developer Posture beside
+//!   Claude, which is never preselected. Ollama needs one confirmation
+//!   naming the model, and confirming it when Next asked for it moves on;
 //!   Claude needs the consent screen of the Settings pane, whose key is held
 //!   in the hand-over and goes to the daemon once.
 //! - Screen 5, Keep watching in the background, holds the Rule Feed and app
@@ -50,13 +50,13 @@ use serde_json::{Value, json};
 use crate::ai_check::{self, Bar};
 use crate::asking::Asking;
 use crate::inventory::Inventory;
-use crate::settings_pane::BACKGROUND_DISCLOSURE;
 use crate::supervision::{self, Launched, Services};
 
 /// One screen of the wizard, in order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Screen {
-    /// Screen 1: What AgentSweep does, and that nothing leaves this Mac.
+    /// Screen 1: the setup: what AgentSweep checks, that its rules update,
+    /// and that nothing leaves this Mac.
     Welcome,
     /// Screen 2: What was found: the Inventory.
     Found,
@@ -120,12 +120,15 @@ pub enum Step {
     Done,
 }
 
+/// Screen 1's heading: the setup.
+pub const WELCOME_TITLE: &str = "Set up AgentSweep";
 /// Screen 1's sentences.
 pub const WELCOME: [&str; 2] = [
-    "AgentSweep checks the skills, plugins, hooks and settings of Claude Code and Codex on this \
-     Mac, and stops what is proven harmful before an agent can use it.",
-    "Nothing leaves this Mac.",
+    "AgentSweep checks Claude Code and Codex and stops what is proven harmful.",
+    "Its detection rules update regularly.",
 ];
+/// Screen 1's last line.
+pub const WELCOME_PROMISE: &str = "Nothing leaves this Mac.";
 
 /// Screen 3's question, its two answers and the line under them.
 pub const DETAIL_QUESTION: &str = "How much detail would you like?";
@@ -140,6 +143,10 @@ pub const CHANGEABLE_LATER: &str = "You can change this later in Settings.";
 pub const AI_CHECK_TITLE: &str = "AI check";
 /// Screen 4's heading in the Developer Posture.
 pub const AI_JUDGEMENT_TITLE: &str = "AI Judgement";
+/// What the AI checks, under screen 4's heading in the Simple Posture.
+pub const AI_CHECK_LINE: &str = "The AI takes a second look at items no rule decides.";
+/// What the AI checks, under screen 4's heading in the Developer Posture.
+pub const AI_JUDGEMENT_LINE: &str = "One engine looks at the Items no Rule decides.";
 /// What the Apple on-device choice says on screen 4 (spec section 8.3).
 pub const APPLE_LINE: &str =
     "Double-check unclear items with your Mac's built-in AI. Nothing leaves your Mac.";
@@ -148,24 +155,22 @@ pub const OTHER_ENGINES: &str = "Or choose another engine:";
 /// What "Preview a request" says before the daemon runs.
 pub const PREVIEW_LATER: &str = "A request can be previewed once AgentSweep runs: in Settings, \
      under AI check.";
-/// What screen 4 says under the choices.
-pub const AI_CHECK_LATER: &str = "You can change this later in Settings.";
-
 /// Screen 5's sentences, in order.
 pub const BACKGROUND_LINES: [&str; 3] = [
-    "macOS will announce that AgentSweep added a background item, and ask whether AgentSweep may \
-     send you notifications.",
+    "macOS will announce a background item and ask about notifications.",
     "Protection continues after you quit AgentSweep.",
     "AgentSweep also adds a check to Claude Code and Codex so flagged items cannot be used until \
      you decide.",
 ];
+/// Screen 5's one line disclosing the Rule Feed and the app update check.
+pub const ONBOARDING_DISCLOSURE: &str =
+    "New rules and app updates come from GitHub. Nothing about you is sent.";
 /// The button that registers.
 pub const TURN_ON: &str = "Turn on protection";
-/// The button that sends check-now.
-pub const LOOK_THERE: &str = "Let macOS ask now";
+/// The button that sends check-now, so macOS asks for the permission.
+pub const LOOK_THERE: &str = "Give permission";
 /// What screen 5 says once that button was pressed.
-pub const LOOK_THERE_SENT: &str = "AgentSweep looks there as soon as it runs. Answer macOS when \
-     it asks.";
+pub const LOOK_THERE_SENT: &str = "When macOS asks, click Allow.";
 
 /// Screen 6's heading.
 pub const FIRST_CHECK_TITLE: &str = "First check finished";
@@ -238,27 +243,24 @@ impl Pick {
     }
 }
 
-/// The choice screen 4 preselects from the engine answer: the local-first
-/// suggestion of spec section 4.4, Ollama awaiting its confirmation, and
-/// Off when nothing can be suggested or nothing answered yet. Never Claude.
-pub fn preselected(look: Option<&EngineState>) -> Pick {
+/// True when the engine answer makes Ollama the local-first suggestion of
+/// spec section 4.4 (a model of 4B or more is present), so screen 4 offers
+/// it among the choices in the Simple Posture too. Screen 4 preselects Off
+/// all the same.
+pub fn offers_ollama(look: Option<&EngineState>) -> bool {
     let Some(look) = look else {
-        return Pick::Off;
+        return false;
     };
     let unknown = AppleAvailability::Unavailable {
         reason: "unknown".to_string(),
     };
-    match suggested_engine(
-        look.ollama.as_ref().unwrap_or(&OllamaPresence::Absent),
-        look.apple.as_ref().unwrap_or(&unknown),
-    ) {
-        EngineSuggestion::Ollama { model } => Pick::Ollama {
-            model,
-            confirmed: false,
-        },
-        EngineSuggestion::Apple => Pick::Apple,
-        EngineSuggestion::Nothing => Pick::Off,
-    }
+    matches!(
+        suggested_engine(
+            look.ollama.as_ref().unwrap_or(&OllamaPresence::Absent),
+            look.apple.as_ref().unwrap_or(&unknown),
+        ),
+        EngineSuggestion::Ollama { .. }
+    )
 }
 
 /// The engine state before any daemon answered: every choice at its
@@ -375,6 +377,13 @@ impl Wizard {
         }
     }
 
+    /// Next once the Ollama confirmation that Next asked for was given: one
+    /// Continue and one confirmation move the wizard on.
+    pub fn forward_confirmed(&mut self) -> Step {
+        self.confirm_ollama();
+        self.forward()
+    }
+
     /// Back: the screen before, and nothing on the first or the last. An
     /// answer given stays.
     pub fn back(&mut self) {
@@ -391,17 +400,15 @@ impl Wizard {
         self.posture = posture;
     }
 
-    /// Takes the engine answer screen 4 preselects from.
+    /// Takes the engine answer screen 4 offers its choices from.
     pub fn look(&mut self, look: EngineState) {
         self.look = Some(look);
     }
 
-    /// The engine chosen on screen 4: the user's choice, else the
-    /// preselection.
+    /// The engine chosen on screen 4: the user's choice, else Off, which
+    /// screen 4 preselects.
     pub fn pick(&self) -> Pick {
-        self.pick
-            .clone()
-            .unwrap_or_else(|| preselected(self.look.as_ref()))
+        self.pick.clone().unwrap_or(Pick::Off)
     }
 
     /// Chooses Apple on-device, Ollama or Off on screen 4. Apple only when
@@ -602,10 +609,9 @@ impl Wizard {
             }
             card
         };
-        let suggested_ollama = matches!(preselected(self.look.as_ref()), Pick::Ollama { .. });
         let mut choices = vec![card(JudgementEngine::Apple)];
         let mut others = Vec::new();
-        if suggested_ollama {
+        if offers_ollama(self.look.as_ref()) {
             choices.insert(0, card(JudgementEngine::Ollama));
         } else if developer {
             others.push(card(JudgementEngine::Ollama));
@@ -616,6 +622,7 @@ impl Wizard {
         }
         json!({
             "title": if developer { AI_JUDGEMENT_TITLE } else { AI_CHECK_TITLE },
+            "line": if developer { AI_JUDGEMENT_LINE } else { AI_CHECK_LINE },
             "choices": choices,
             "othersLine": (!others.is_empty()).then_some(OTHER_ENGINES),
             "others": others,
@@ -624,7 +631,6 @@ impl Wizard {
             "consent": ai_check::consent(&state, self.posture),
             "keySet": state.claude_key_ending.is_some(),
             "previewLater": PREVIEW_LATER,
-            "later": AI_CHECK_LATER,
         })
     }
 
@@ -641,7 +647,7 @@ impl Wizard {
         };
         json!({
             "lines": BACKGROUND_LINES,
-            "disclosure": BACKGROUND_DISCLOSURE,
+            "disclosure": ONBOARDING_DISCLOSURE,
             "toggles": [
                 toggle("rule_feed", "Fetch newer detection rules", "Rule Feed", self.rule_feed),
                 toggle(
@@ -693,7 +699,11 @@ impl Wizard {
             "step": self.screen.index() + 1,
             "steps": Screen::ALL.len(),
             "back": self.offers_back(),
-            "welcome": WELCOME,
+            "welcome": {
+                "title": WELCOME_TITLE,
+                "lines": WELCOME,
+                "promise": WELCOME_PROMISE,
+            },
             "inventory": self.inventory.to_value(),
             "detail": {
                 "question": DETAIL_QUESTION,
@@ -824,7 +834,7 @@ impl Handover {
     }
 }
 
-/// The engine answer screen 4 preselects from before any daemon runs, taken
+/// The engine answer screen 4 offers its engines from before any daemon runs, taken
 /// on this Mac the way the daemon takes it: Ollama asked at its default
 /// loopback address (nothing leaves the Mac) and the Apple judgement helper
 /// beside the app asked for its `check`. The real Mac only; the suite never
@@ -974,7 +984,8 @@ mod tests {
         assert_eq!(view["screen"], "welcome");
         assert_eq!(view["back"], false);
         assert_eq!(view["steps"], 6);
-        assert_eq!(view["welcome"][1], "Nothing leaves this Mac.");
+        assert_eq!(view["welcome"]["title"], WELCOME_TITLE);
+        assert_eq!(view["welcome"]["promise"], "Nothing leaves this Mac.");
         assert_eq!(view["inventory"]["ownLists"], OWN_LISTS);
         assert_eq!(view["inventory"]["agents"][0]["projects"], "2 projects");
 
@@ -1008,56 +1019,57 @@ mod tests {
             .collect()
     }
 
-    /// Screen 4 preselects the local-first suggestion from the engine
-    /// answer: Apple when it is available, Ollama when a model of 4B or more
-    /// is present (a smaller one counts as absent), Off otherwise, and never
-    /// Claude. Ollama and Claude are offered in the Developer Posture only,
-    /// unless Ollama is itself the suggestion.
+    /// Screen 4 preselects Off whatever the engine answer says, under one
+    /// line on what the AI checks. Apple is offered, never preselected;
+    /// Ollama is offered when a model of 4B or more is present (a smaller
+    /// one counts as absent), in the Simple Posture too; the Developer
+    /// Posture offers Ollama and Claude; Claude is never preselected.
     #[test]
-    fn screen_four_preselects_the_local_first_suggestion_and_never_claude() {
-        // Apple available, no Ollama: Apple, with the spec's sentence.
+    fn screen_four_preselects_off_and_offers_the_engines() {
+        // Apple available, no Ollama: Off, and Apple offered with the spec's
+        // sentence.
         let mut wizard = on(Screen::AiCheck, Posture::Simple, inventory());
         assert_eq!(wizard.pick(), Pick::Off, "nothing answered yet");
         wizard.look(look(Some(OllamaPresence::Absent), apple_available()));
-        assert_eq!(wizard.pick(), Pick::Apple);
+        assert_eq!(wizard.pick(), Pick::Off);
         let view = wizard.to_value();
         assert_eq!(view["ai"]["title"], AI_CHECK_TITLE);
-        assert_eq!(selected(&view), vec!["apple"]);
+        assert_eq!(view["ai"]["line"], AI_CHECK_LINE);
+        assert_eq!(selected(&view), vec!["off"]);
         assert_eq!(engines(&view, "choices"), vec!["apple", "off"]);
         assert_eq!(view["ai"]["choices"][0]["leaves"], APPLE_LINE);
+        assert_eq!(view["ai"]["choices"][0]["enabled"], true);
         assert!(
             engines(&view, "others").is_empty(),
             "Simple offers no others"
         );
         assert_eq!(view["ai"]["othersLine"], Value::Null);
+        wizard.choose_engine(JudgementEngine::Apple).expect("Apple");
+        assert_eq!(selected(&wizard.to_value()), vec!["apple"]);
 
         // The Developer Posture adds the way to choose Ollama or Claude.
-        wizard.choose(Posture::Developer);
+        let mut wizard = on(Screen::AiCheck, Posture::Developer, inventory());
+        wizard.look(look(Some(OllamaPresence::Absent), apple_available()));
         let view = wizard.to_value();
         assert_eq!(view["ai"]["title"], AI_JUDGEMENT_TITLE);
+        assert_eq!(view["ai"]["line"], AI_JUDGEMENT_LINE);
         assert_eq!(engines(&view, "others"), vec!["ollama", "claude"]);
         assert_eq!(view["ai"]["othersLine"], OTHER_ENGINES);
-        assert_eq!(selected(&view), vec!["apple"]);
+        assert_eq!(selected(&view), vec!["off"]);
 
-        // A 4B model pulled: Ollama, whatever Apple says, awaiting its one
-        // confirmation, and shown as a choice even in Simple.
+        // A 4B model pulled: still Off, whatever Apple says; Ollama is a
+        // choice even in Simple, and its confirmation names the model.
         for apple in [apple_available(), apple_off()] {
             let mut wizard = on(Screen::AiCheck, Posture::Simple, inventory());
             wizard.look(look(
                 ollama_with(&[("qwen3:1.7b", "1.7B", false), ("qwen3:4b", "4.0B", true)]),
                 apple,
             ));
-            assert_eq!(
-                wizard.pick(),
-                Pick::Ollama {
-                    model: "qwen3:4b".to_string(),
-                    confirmed: false
-                }
-            );
+            assert_eq!(wizard.pick(), Pick::Off);
             let view = wizard.to_value();
-            assert_eq!(selected(&view), vec!["ollama"]);
+            assert_eq!(selected(&view), vec!["off"]);
             assert_eq!(engines(&view, "choices"), vec!["ollama", "apple", "off"]);
-            assert_eq!(view["ai"]["needsConfirmation"], true);
+            assert_eq!(view["ai"]["needsConfirmation"], false);
             assert!(
                 view["ai"]["ollama"]["question"]
                     .as_str()
@@ -1094,6 +1106,9 @@ mod tests {
             ollama_with(&[("qwen3:8b", "8.2B", true)]),
             apple_available(),
         ));
+        wizard
+            .choose_engine(JudgementEngine::Ollama)
+            .expect("a model to name");
         assert_eq!(wizard.forward(), Step::ConfirmOllama);
         assert_eq!(wizard.screen(), Screen::AiCheck);
         wizard.confirm_ollama();
@@ -1116,6 +1131,65 @@ mod tests {
         assert_eq!(selected(&wizard.to_value()), vec!["claude"]);
     }
 
+    /// Confirming Ollama when Continue asked for it moves on at once: one
+    /// Continue, one confirmation, and the wizard is on screen 5.
+    #[test]
+    fn confirming_ollama_on_continue_moves_on() {
+        let mut wizard = on(Screen::AiCheck, Posture::Simple, inventory());
+        wizard.look(look(
+            ollama_with(&[("qwen3:8b", "8.2B", true)]),
+            apple_available(),
+        ));
+        wizard
+            .choose_engine(JudgementEngine::Ollama)
+            .expect("a model to name");
+        assert_eq!(wizard.to_value()["ai"]["needsConfirmation"], true);
+        assert_eq!(wizard.forward(), Step::ConfirmOllama);
+        assert_eq!(wizard.forward_confirmed(), Step::Moved);
+        assert_eq!(wizard.screen(), Screen::Background);
+        assert_eq!(
+            wizard.pick(),
+            Pick::Ollama {
+                model: "qwen3:8b".to_string(),
+                confirmed: true
+            }
+        );
+
+        // When Continue opened the confirmation, the page answers it with
+        // Next carrying the confirmation, not with the engine alone.
+        let page = include_str!("../ui/onboarding.js");
+        assert!(page.contains(r#"ask("onboarding_next", { ollamaConfirmed: true })"#));
+    }
+
+    /// Screen 1 is titled as the setup and names the Agents and the rule
+    /// updates; screens 1 and 4 keep to a title and a few short lines.
+    #[test]
+    fn the_texts_are_short() {
+        let view = Wizard::new(inventory()).to_value();
+        let welcome = &view["welcome"];
+        assert_eq!(welcome["title"], "Set up AgentSweep");
+        let lines: Vec<&str> = welcome["lines"]
+            .as_array()
+            .expect("lines")
+            .iter()
+            .map(|line| line.as_str().expect("a line"))
+            .collect();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Claude Code and Codex"))
+        );
+        assert!(lines.iter().any(|line| line.contains("update regularly")));
+        assert!(lines.len() <= 2, "two lines and the promise");
+        for line in lines
+            .iter()
+            .chain([&AI_CHECK_LINE, &AI_JUDGEMENT_LINE, &LOOK_THERE_SENT])
+        {
+            assert!(line.len() <= 80, "short: {line}");
+        }
+        assert!(view["ai"].get("later").is_none(), "no extra line");
+    }
+
     /// Screen 5 names the protected location only when the Inventory found
     /// a registered project in one, and its button sends check-now once.
     #[test]
@@ -1124,7 +1198,8 @@ mod tests {
         let view = wizard.to_value();
         assert_eq!(view["background"]["protected"], Value::Null);
         assert_eq!(view["background"]["lines"][1], BACKGROUND_LINES[1]);
-        assert_eq!(view["background"]["disclosure"], BACKGROUND_DISCLOSURE);
+        assert_eq!(view["background"]["lines"][0], BACKGROUND_LINES[0]);
+        assert_eq!(view["background"]["disclosure"], ONBOARDING_DISCLOSURE);
         assert_eq!(view["background"]["button"], TURN_ON);
         assert!(!wizard.look_there(), "no line, no check-now");
 
@@ -1137,6 +1212,7 @@ mod tests {
             "Some of your projects are in Documents. macOS will ask once whether AgentSweep may \
              look there."
         );
+        assert_eq!(view["background"]["protected"]["button"], LOOK_THERE);
         assert_eq!(view["background"]["protected"]["sent"], Value::Null);
         assert!(wizard.look_there());
         assert!(!wizard.look_there(), "check-now goes once");
@@ -1218,6 +1294,7 @@ mod tests {
         let services = Recorded::with(ServiceState::NotRegistered, ServiceState::NotRegistered);
         let mut wizard = on(Screen::AiCheck, Posture::Developer, in_documents());
         wizard.look(look(Some(OllamaPresence::Absent), apple_available()));
+        wizard.choose_engine(JudgementEngine::Apple).expect("Apple");
         wizard.forward();
         wizard.toggle("rule_feed", false).expect("a toggle");
         wizard.toggle("update_check", false).expect("a toggle");
@@ -1435,5 +1512,25 @@ mod tests {
         assert_eq!(view["first"]["items"], "AgentSweep checked 1 item.");
         assert_eq!(view["first"]["stoppedLine"], NOTHING_STOPPED);
         assert_eq!(view["first"]["stopped"], json!([]));
+    }
+
+    /// The onboarding window is tall enough for its tallest screen, screen
+    /// 4 in the Developer Posture with four engines offered (about 550
+    /// points at 560 wide), so no screen scrolls.
+    #[test]
+    fn the_onboarding_window_fits_every_screen() {
+        let config: Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("the shipped config");
+        let window = config["app"]["windows"]
+            .as_array()
+            .expect("windows")
+            .iter()
+            .find(|window| window["label"] == "onboarding")
+            .expect("the onboarding window");
+        assert_eq!(window["title"], WELCOME_TITLE);
+        assert_eq!(window["width"], 560);
+        assert!(window["height"].as_u64().expect("a height") >= 600);
+        let style = include_str!("../ui/onboarding.css");
+        assert!(style.contains(".wizard p {\n  margin: 0 0 8px;"));
     }
 }

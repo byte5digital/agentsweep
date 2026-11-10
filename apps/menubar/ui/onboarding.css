@@ -33,7 +33,12 @@ body {
   flex-direction: column;
   min-height: 100vh;
   box-sizing: border-box;
-  padding: 24px 32px;
+  padding: 20px 28px;
+}
+
+/* Every screen fits the window without scrolling: tight spacing. */
+.wizard p {
+  margin: 0 0 8px;
 }
 
 .steps,
@@ -43,7 +48,7 @@ body {
 
 h1 {
   font-size: 20px;
-  margin: 8px 0 16px;
+  margin: 4px 0 12px;
 }
 
 .promise {
@@ -84,7 +89,7 @@ footer {
   display: flex;
   justify-content: space-between;
   margin-top: auto;
-  padding-top: 16px;
+  padding-top: 12px;
 }
 
 footer .primary {
@@ -112,8 +117,8 @@ button.primary {
   border-radius: 8px;
   color: inherit;
   font: inherit;
-  margin-bottom: 8px;
-  padding: 10px 12px;
+  margin-bottom: 6px;
+  padding: 8px 12px;
 }
 
 .cards .card[aria-checked="true"] {
@@ -140,8 +145,12 @@ button.primary {
 .protected {
   background: var(--card);
   border-radius: 8px;
-  margin-top: 12px;
-  padding: 10px 12px;
+  margin-top: 8px;
+  padding: 8px 12px;
+}
+
+.protected p:last-child {
+  margin: 8px 0 0;
 }
 
 dialog {

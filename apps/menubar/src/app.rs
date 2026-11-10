@@ -905,16 +905,23 @@ fn close_wizard(app: &AppHandle) {
 /// Next in the wizard. On screen 5 it registers the daemon and the login
 /// item once, asks for notification permission, holds the answers until the
 /// daemon answers, and moves to screen 6; on screen 6, once the first check
-/// finished, it closes the wizard and the view is then nothing.
+/// finished, it closes the wizard and the view is then nothing. With
+/// `ollama_confirmed`, the Ollama confirmation Next asked for on screen 4
+/// was given, and the wizard moves on at once.
 #[tauri::command]
-async fn onboarding_next(app: AppHandle) -> Result<Value, String> {
+async fn onboarding_next(app: AppHandle, ollama_confirmed: Option<bool>) -> Result<Value, String> {
     let step = {
         let shell = app.state::<Shell>();
         let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
         let Some(wizard) = held.as_mut() else {
             return Ok(Value::Null);
         };
-        match wizard.forward() {
+        let step = if ollama_confirmed == Some(true) {
+            wizard.forward_confirmed()
+        } else {
+            wizard.forward()
+        };
+        match step {
             Step::Register => Step::Register,
             Step::Done => Step::Done,
             Step::Moved | Step::ConfirmOllama | Step::Waiting => return Ok(wizard.to_value()),
@@ -1831,7 +1838,7 @@ pub fn run(start: Start) {
                             .lock()
                             .expect("the wizard is not poisoned") = Some(Wizard::new(inventory));
                         show_onboarding(&handle);
-                        // Screen 4 preselects from the engine answer: the
+                        // Screen 4 offers its engines from the engine answer: the
                         // daemon's, when one already answers, else the same
                         // look taken on this Mac.
                         let look = handle

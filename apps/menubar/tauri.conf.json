@@ -35,10 +35,10 @@
       },
       {
         "label": "onboarding",
-        "title": "Welcome to AgentSweep",
+        "title": "Set up AgentSweep",
         "url": "onboarding.html",
         "width": 560,
-        "height": 460,
+        "height": 600,
         "resizable": false,
         "visible": false,
         "center": true

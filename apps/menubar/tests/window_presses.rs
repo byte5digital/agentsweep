@@ -108,12 +108,13 @@ fn no_action_waits_greyed_out_for_a_scan() {
 /// A press shows its working line at once: the Finding is marked and the
 /// window rendered before the request goes, and the mark is taken off with
 /// the answer, whatever it was. The pressed Finding shows the app's line in
-/// place of its buttons.
+/// place of its buttons, and stays in sight with it when the stream moves it
+/// out of its pane before the answer.
 #[test]
 fn a_press_shows_its_working_line_before_it_is_asked() {
     let window = read("ui/window.js");
     let run = function(&window, "run");
-    let marked = run.find("pending.add(id)").expect("marked");
+    let marked = run.find("pending.set(id,").expect("marked");
     let rendered = run[marked..].find("render(view)").expect("rendered") + marked;
     let asked = run.find("await invoke(action.command").expect("asked");
     assert!(marked < rendered && rendered < asked, "{run}");
@@ -122,6 +123,9 @@ fn a_press_shows_its_working_line_before_it_is_asked() {
     assert!(actions.contains("if (pending.has(card.id))"));
     assert!(actions.contains("renderWorking()"));
     assert!(function(&window, "renderWorking").contains("view?.working"));
+    let pane = function(&window, "renderFindingPane");
+    assert!(pane.contains("const held = !kept && pressed !== undefined"));
+    assert!(pane.contains("el(\"p\", \"title\", pressed.title), renderWorking()"));
     // A banner button says it is working and waits for its answer.
     let banner = read("ui/banner.js");
     let said = banner

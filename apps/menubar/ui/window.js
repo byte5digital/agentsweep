@@ -15,7 +15,7 @@
 // answers, the Finding pressed shows the working line the app sent in place
 // of its buttons ("Waiting for the check to finish…" while a Scan runs), and
 // every press carries its own name, so the app carries it out once. Each
-// part with buttons keeps its nodes while it shows the same ([`keep`]), so
+// part with buttons keeps its nodes while it shows the same (keep.js), so
 // the next stream event's render cannot swallow a click.
 
 import { renderBanner } from "./banner.js";
@@ -29,8 +29,10 @@ const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
 
-// The Findings whose press waits for the daemon's answer, by id.
-const pending = new Set();
+// The Findings whose press waits for the daemon's answer, by id, each with
+// the pane it was pressed in and its title: a Finding the stream moved out
+// of its pane meanwhile stays in sight there with its working line.
+const pending = new Map();
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -235,7 +237,7 @@ async function run(action, card) {
       return;
     }
     if (id !== null) {
-      pending.add(id);
+      pending.set(id, { pane: paneOf(card), title: titleOf(card) });
       if (view) {
         render(view);
       }
@@ -705,13 +707,16 @@ function selectedCard() {
 
 function renderFindingPane(id, cards, loaded) {
   const node = pane(id);
-  // An answer stays beside its Finding, even once the Finding left the pane.
+  // An answer stays beside its Finding, even once the Finding left the pane,
+  // and so does a press that waits for its answer.
   const kept = answer !== null && answer.pane === id && answer.id === selectedFinding[id];
-  if (!kept && !cards.some((card) => card.id === selectedFinding[id])) {
+  const pressed = pending.get(selectedFinding[id]);
+  const held = !kept && pressed !== undefined && pressed.pane === id;
+  if (!kept && !held && !cards.some((card) => card.id === selectedFinding[id])) {
     selectedFinding[id] = cards.length > 0 ? cards[0].id : null;
   }
-  node.querySelector(".empty").hidden = !loaded || cards.length > 0 || kept;
-  node.querySelector(".split").hidden = cards.length === 0 && !kept;
+  node.querySelector(".empty").hidden = !loaded || cards.length > 0 || kept || held;
+  node.querySelector(".split").hidden = cards.length === 0 && !kept && !held;
   const developer = isDeveloper();
   keep(node.querySelector(".list"), JSON.stringify([cards, selectedFinding[id], developer]), () =>
     cards.map((card) => renderRow(id, card)),
@@ -719,10 +724,11 @@ function renderFindingPane(id, cards, loaded) {
   const selected = cards.find((card) => card.id === selectedFinding[id]);
   // Everything the detail is built from: an unchanged Finding keeps its
   // card, its buttons included, through every render.
-  const waiting = selected !== undefined && pending.has(selected.id);
+  const waiting = (selected !== undefined && pending.has(selected.id)) || held;
   const key = JSON.stringify({
     selected: selected ?? null,
     answer: kept ? answer : null,
+    held: held ? pressed.title : null,
     waiting,
     working: waiting ? (view?.working ?? null) : null,
     details: selected !== undefined && detailsOpen.has(selected.id),
@@ -735,6 +741,8 @@ function renderFindingPane(id, cards, loaded) {
       detail.push(id === "quarantine" ? renderQuarantineEntry(selected) : renderFinding(selected));
     } else if (kept) {
       detail.push(el("p", "title", answer.title));
+    } else if (held) {
+      detail.push(el("p", "title", pressed.title), renderWorking());
     }
     if (kept) {
       detail.push(renderAnswer(answer.result));

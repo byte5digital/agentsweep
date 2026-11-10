@@ -72,7 +72,11 @@
 //!   `onboarding_engine`, `onboarding_claude`, `onboarding_toggle`,
 //!   `onboarding_look_there`: the onboarding wizard's view and its moves
 //!   ([`crate::onboarding`]); Next on screen 5 registers the daemon and the
-//!   login item, and on screen 6 closes the wizard.
+//!   login item and closes the wizard, and the first check waits for the
+//!   first Scan.
+//! - `first_check`, `first_check_seen`: the first check's result for the
+//!   Findings window, null while there is none, and its close
+//!   ([`crate::first_check`]).
 //!
 //! Events the frontend may listen to:
 //! - `agentsweep://view`: the popover's view, whenever it changes.
@@ -88,7 +92,9 @@
 //! - `agentsweep://activity-at`: the Event Log sequence the Activity pane
 //!   opens at after an integrity button, or null for the pane alone.
 //! - `agentsweep://onboarding`: the onboarding wizard's view, when the engine
-//!   look arrived or screen 6's first check finished.
+//!   look arrived.
+//! - `agentsweep://first-check`: the first check's result, once the first
+//!   Scan after onboarding finished.
 //!
 //! The update check (spec section 9.4) runs on a thread of its own from
 //! launch ([`crate::updater`]); the popover's view carries "Update ready,
@@ -97,7 +103,9 @@
 //!
 //! Notifications (spec sections 6.7 and 8.7) are raised here through the
 //! notification plugin, on every launch and on every stream event that may
-//! carry one ([`crate::notifications`]). Launched by the user, from Finder
+//! carry one ([`crate::notifications`]), except while the first check waits:
+//! its one notice then stands for them ([`crate::first_check`]). Launched by
+//! the user, from Finder
 //! or anywhere else, the app opens the Findings window, and so does a reopen
 //! of the running app; launched by its login item or with the windowless
 //! argument, it starts into the menu bar with no window
@@ -127,6 +135,7 @@ use crate::cli_link;
 use crate::developer::offers_reveal;
 use crate::false_alarm::{self, Reports, SystemBrowser};
 use crate::findings::Follow;
+use crate::first_check::{self, FirstCheck};
 use crate::folder;
 use crate::frame::Frame;
 use crate::gate;
@@ -165,8 +174,11 @@ const WINDOW: &str = "findings";
 const ONBOARDING: &str = "onboarding";
 
 /// The event the onboarding wizard's view arrives on when it changed
-/// outside its own commands: the engine look, and the first check finished.
+/// outside its own commands: the engine look.
 pub const ONBOARDING_EVENT: &str = "agentsweep://onboarding";
+
+/// The event the first check's result arrives on in the Findings window.
+pub const FIRST_CHECK_EVENT: &str = "agentsweep://first-check";
 
 /// The event the popover's view arrives on.
 pub const VIEW_EVENT: &str = "agentsweep://view";
@@ -211,10 +223,20 @@ impl Notifier for PluginNotifier {
 /// Raises every un-notified change the daemon holds when `event` may carry
 /// one. The Health that opens every subscription is how this runs on
 /// launch. A daemon that does not answer leaves them for the next trigger.
+/// While the first check waits, nothing: its one notice stands for them.
 fn notify(app: &AppHandle, event: &StateEvent) {
     let Some(notifications) = app.try_state::<Notifications>() else {
         return;
     };
+    if app
+        .state::<Shell>()
+        .first_check
+        .lock()
+        .expect("the first check is not poisoned")
+        .holds_notifications()
+    {
+        return;
+    }
     let _ = notifications.follow(&app.state::<Shell>().asking, event);
 }
 
@@ -296,6 +318,8 @@ struct Shell {
     onboarding: Mutex<Option<Wizard>>,
     /// The answers held for the daemon since onboarding.
     handover: Mutex<Handover>,
+    /// The first check after onboarding, nothing on an ordinary launch.
+    first_check: Mutex<FirstCheck>,
     /// The last press of "I agree, turn it on", so one press hands the
     /// Claude API key over once.
     presses: Arc<ai_check::Presses>,
@@ -903,14 +927,15 @@ fn close_wizard(app: &AppHandle) {
 }
 
 /// Next in the wizard. On screen 5 it registers the daemon and the login
-/// item once, asks for notification permission, holds the answers until the
-/// daemon answers, and moves to screen 6; on screen 6, once the first check
-/// finished, it closes the wizard and the view is then nothing. With
-/// `ollama_confirmed`, the Ollama confirmation Next asked for on screen 4
-/// was given, and the wizard moves on at once.
+/// item once, holds the answers until the daemon answers, closes the wizard
+/// at once and asks for notification permission; the first Scan runs in the
+/// background and the first check waits for it (spec section 8.3, screen
+/// 6). The view is then nothing. With `ollama_confirmed`, the Ollama
+/// confirmation Next asked for on screen 4 was given, and the wizard moves
+/// on at once.
 #[tauri::command]
 async fn onboarding_next(app: AppHandle, ollama_confirmed: Option<bool>) -> Result<Value, String> {
-    let step = {
+    {
         let shell = app.state::<Shell>();
         let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
         let Some(wizard) = held.as_mut() else {
@@ -922,42 +947,52 @@ async fn onboarding_next(app: AppHandle, ollama_confirmed: Option<bool>) -> Resu
             wizard.forward()
         };
         match step {
-            Step::Register => Step::Register,
-            Step::Done => Step::Done,
-            Step::Moved | Step::ConfirmOllama | Step::Waiting => return Ok(wizard.to_value()),
+            Step::Register => {}
+            Step::Moved | Step::ConfirmOllama => return Ok(wizard.to_value()),
         }
-    };
-    if step == Step::Done {
-        close_wizard(&app);
-        return Ok(Value::Null);
     }
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let shell = handle.state::<Shell>();
-        let launched = {
-            let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
-            let mut handover = shell
-                .handover
-                .lock()
-                .expect("the hand-over is not poisoned");
-            held.as_mut().and_then(|wizard| {
-                wizard.leave_background(&*shell.services, &mut handover, Timestamp::now())
-            })
-        };
-        for failure in launched.iter().flat_map(|launched| &launched.failures) {
-            eprintln!("agentsweep-menubar: {failure}");
-        }
-        if let Some(notifications) = handle.try_state::<Notifications>() {
-            notifications.ask_permission_now();
-        }
-    })
-    .await
-    .map_err(|error| format!("AgentSweep could not register its background item: {error}"))?;
-    // A daemon that already answers, as after a reinstall, takes the
-    // answers now rather than at its next Health.
-    let handle = app.clone();
-    let _ = tauri::async_runtime::spawn_blocking(move || hand_over(&handle)).await;
-    Ok(onboarding(app.state::<Shell>()))
+    tauri::async_runtime::spawn_blocking(move || leave_onboarding(&handle))
+        .await
+        .map_err(|error| format!("AgentSweep could not register its background item: {error}"))?;
+    Ok(Value::Null)
+}
+
+/// Leaves screen 5: registers the daemon and the login item once, holds the
+/// answers for the daemon, starts the first check, closes the wizard, asks
+/// for notification permission, and hands the answers over to a daemon that
+/// already answers, as after a reinstall, rather than at its next Health.
+/// The first check then looks at once, in case the first Scan finished
+/// while screen 5 still showed, after its protected-location button.
+fn leave_onboarding(app: &AppHandle) {
+    let shell = app.state::<Shell>();
+    let left = {
+        let mut held = shell.onboarding.lock().expect("the wizard is not poisoned");
+        let mut handover = shell
+            .handover
+            .lock()
+            .expect("the hand-over is not poisoned");
+        held.as_mut().and_then(|wizard| {
+            wizard.leave_background(&*shell.services, &mut handover, Timestamp::now())
+        })
+    };
+    let Some(left) = left else {
+        return;
+    };
+    shell
+        .first_check
+        .lock()
+        .expect("the first check is not poisoned")
+        .start(left.since);
+    close_wizard(app);
+    for failure in left.launched.iter().flat_map(|launched| &launched.failures) {
+        eprintln!("agentsweep-menubar: {failure}");
+    }
+    if let Some(notifications) = app.try_state::<Notifications>() {
+        notifications.ask_permission_now();
+    }
+    hand_over(app);
+    follow_first_check(app, None);
 }
 
 /// A choice on screen 4: `apple`, `ollama` or `off`. With `confirmed`, the
@@ -1080,31 +1115,52 @@ fn check_now_when_ready(asking: &Asking, since: Timestamp) {
     eprintln!("agentsweep-menubar: the daemon did not answer, so check-now was not sent");
 }
 
-/// Screen 6 asks the daemon for its status after `event` while it waits for
-/// the first check, and shows what it found.
-fn first_check(app: &AppHandle, event: &StateEvent) {
+/// Follows the first check on `event`, or looks at once with none: once
+/// the first Scan's result is ready it raises the one notice and sends the
+/// result to the Findings window, which shows it now or when it next opens.
+fn follow_first_check(app: &AppHandle, event: Option<&StateEvent>) {
     let shell = app.state::<Shell>();
-    let wants = shell
-        .onboarding
+    let posture = shell
+        .frame
         .lock()
-        .expect("the wizard is not poisoned")
-        .as_ref()
-        .is_some_and(|wizard| wizard.wants_status(event));
-    if !wants {
-        return;
+        .expect("the frame is not poisoned")
+        .posture();
+    let notifications = app.try_state::<Notifications>();
+    let ready = first_check::follow(
+        &shell.first_check,
+        &shell.asking,
+        notifications.as_deref(),
+        posture,
+        event,
+    );
+    if ready {
+        let _ = app.emit(FIRST_CHECK_EVENT, first_check_view(&shell));
     }
-    let Ok(status) = shell.asking.status() else {
-        return;
-    };
-    let done = shell
-        .onboarding
+}
+
+/// The first check's result as the window shows it, or null.
+fn first_check_view(shell: &Shell) -> Value {
+    shell
+        .first_check
         .lock()
-        .expect("the wizard is not poisoned")
-        .as_mut()
-        .is_some_and(|wizard| wizard.take_status(&status));
-    if done {
-        show_wizard(app);
-    }
+        .expect("the first check is not poisoned")
+        .to_value()
+}
+
+/// The first check's result for a window that just loaded, or null.
+#[tauri::command]
+fn first_check(shell: tauri::State<'_, Shell>) -> Value {
+    first_check_view(&shell)
+}
+
+/// The user closed the first check's result in the window.
+#[tauri::command]
+fn first_check_seen(shell: tauri::State<'_, Shell>) {
+    shell
+        .first_check
+        .lock()
+        .expect("the first check is not poisoned")
+        .seen();
 }
 
 /// Hands the answers held since onboarding to the daemon, now that it
@@ -1471,7 +1527,7 @@ fn take(app: &AppHandle, update: Update) {
             if matches!(event, StateEvent::HealthChanged { .. }) {
                 hand_over(app);
             }
-            first_check(app, &event);
+            follow_first_check(app, Some(&event));
             let follow = app
                 .state::<Shell>()
                 .frame
@@ -1662,6 +1718,7 @@ pub fn run(start: Start) {
         asking: Arc::new(Asking::new(socket.clone())),
         onboarding: Mutex::new(None),
         handover: Mutex::new(Handover::default()),
+        first_check: Mutex::new(FirstCheck::default()),
         presses: Arc::new(ai_check::Presses::default()),
         updates: Arc::new(Updates::new()),
     };
@@ -1724,7 +1781,9 @@ pub fn run(start: Start) {
             onboarding_engine,
             onboarding_claude,
             onboarding_toggle,
-            onboarding_look_there
+            onboarding_look_there,
+            first_check,
+            first_check_seen
         ])
         .setup(move |app| {
             // Whether the login item launched the app is known only now,

@@ -14,6 +14,8 @@
 //! - [`inventory`]: the onboarding Inventory, which the app runs itself.
 //! - [`onboarding`]: the onboarding wizard and the answers it holds for the
 //!   daemon.
+//! - [`first_check`]: the first check after onboarding: its result in the
+//!   Findings window and the one notice that says it is ready.
 //! - [`supervision`]: SMAppService for the daemon and the login item, and the
 //!   decisions over it.
 //! - [`link`]: the connection to the daemon and the version handshake.
@@ -83,6 +85,7 @@ pub mod cli_link;
 pub mod developer;
 pub mod false_alarm;
 pub mod findings;
+pub mod first_check;
 pub mod folder;
 pub mod frame;
 pub mod gate;

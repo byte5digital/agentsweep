@@ -17,6 +17,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use agentsweep_core::envelope::Timestamp;
 use agentsweep_core::finding::{Category, FindingState};
 use agentsweep_core::gate_registration::GateCommand;
 use agentsweep_core::item::Kind;
@@ -37,6 +38,7 @@ use agentsweep_menubar::actions::{after_quarantine, offered};
 use agentsweep_menubar::asking::{ActionRequest, Asking};
 use agentsweep_menubar::banner::{Banner, Button};
 use agentsweep_menubar::findings::{Findings, Follow};
+use agentsweep_menubar::first_check::{self, FIRST_CHECK_TITLE, FirstCheck};
 use agentsweep_menubar::folder::{DropRefusal, resolve_drop, scan};
 use agentsweep_menubar::frame::{Frame, Pane};
 use agentsweep_menubar::gate;
@@ -1394,6 +1396,129 @@ fn the_app_raises_each_change_once_on_launch_and_from_the_stream() {
         Some(Pane::Threats)
     );
     assert_eq!(notifications.activated(Activation::Reopen), None);
+}
+
+/// The first check after onboarding: the daemon's first Full Scan raises one
+/// notice in place of the Finding it left un-notified, which is confirmed to
+/// the daemon as told; the notice is raised once, opens the window on the
+/// Overview, and the result shows until it is closed.
+#[test]
+fn the_first_check_raises_one_notice_for_the_first_scan_and_shows_its_result() {
+    let sandbox = Sandbox::new("first-check");
+    let registered = Timestamp::now();
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let notifier = RecordingNotifier::default();
+    let notifications = Notifications::new(Box::new(notifier.clone()));
+    let first = Mutex::new(FirstCheck::default());
+    first.lock().expect("the first check").start(registered);
+    assert!(
+        !asking.unnotified().expect("the changes").is_empty(),
+        "the planted skill waits to be told"
+    );
+
+    // The Health that opens the subscription finds the Full Scan finished.
+    let following = Following::start(&sandbox);
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut ready = false;
+    while !ready {
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "the first check never finished");
+        if let Ok(event) = following.events.recv_timeout(left) {
+            ready = first_check::follow(
+                &first,
+                &asking,
+                Some(&notifications),
+                Posture::Simple,
+                Some(&event),
+            );
+        }
+    }
+    let shown = notifier.shown();
+    assert_eq!(shown.len(), 1, "one notice: {shown:?}");
+    assert_eq!(shown[0].title, FIRST_CHECK_TITLE);
+    assert!(
+        shown[0].body.contains("1 item needs your decision."),
+        "{shown:?}"
+    );
+    assert!(
+        asking.unnotified().expect("the changes").is_empty(),
+        "the notice stands for the planted skill"
+    );
+    assert_eq!(notifications.raise(&asking).expect("asked"), 0);
+
+    // Once: a later event raises nothing more.
+    let health = StateEvent::HealthChanged {
+        health: Box::new(asking.status().expect("a status").health),
+    };
+    assert!(!first_check::follow(
+        &first,
+        &asking,
+        Some(&notifications),
+        Posture::Simple,
+        Some(&health),
+    ));
+    assert_eq!(notifier.shown().len(), 1);
+
+    // A click opens the window on the Overview, where the result shows
+    // until it is closed.
+    assert_eq!(
+        notifications.activated(Activation::BecameActive),
+        Some(Pane::Overview)
+    );
+    let view = first.lock().expect("the first check").to_value();
+    assert_eq!(view["title"], FIRST_CHECK_TITLE);
+    assert!(
+        view["items"]
+            .as_str()
+            .is_some_and(|line| line.starts_with("AgentSweep checked ")),
+        "{view}"
+    );
+    first.lock().expect("the first check").seen();
+    assert_eq!(
+        first.lock().expect("the first check").to_value(),
+        Value::Null
+    );
+}
+
+/// With notifications refused nothing is raised or confirmed, and the
+/// result waits in the window all the same.
+#[test]
+fn the_first_check_result_waits_in_the_window_when_notifications_are_refused() {
+    struct Refused;
+    impl Notifier for Refused {
+        fn ask_permission(&self) -> bool {
+            false
+        }
+        fn show(&self, _: &Notice) -> bool {
+            panic!("nothing is raised without permission")
+        }
+    }
+    let sandbox = Sandbox::new("first-check-refused");
+    let registered = Timestamp::now();
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let notifications = Notifications::new(Box::new(Refused));
+    let first = Mutex::new(FirstCheck::default());
+    first.lock().expect("the first check").start(registered);
+    assert!(first_check::follow(
+        &first,
+        &asking,
+        Some(&notifications),
+        Posture::Simple,
+        None,
+    ));
+    assert_eq!(
+        first.lock().expect("the first check").to_tell(),
+        None,
+        "tried once"
+    );
+    assert!(!asking.unnotified().expect("the changes").is_empty());
+    assert_eq!(notifications.activated(Activation::BecameActive), None);
+    assert_ne!(
+        first.lock().expect("the first check").to_value(),
+        Value::Null
+    );
 }
 
 /// A daemon that opens its records with a key that is not the one they were

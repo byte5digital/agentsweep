@@ -520,7 +520,8 @@ pub trait SurfaceAdapter {
 
     /// Writes the Gate's own entries into this Agent's user settings, one for
     /// each event the Gate listens on that does not carry one unchanged
-    /// already, takes away every entry that carries AgentSweep's arguments and
+    /// already, in a group of its own or in one another tool shares, takes
+    /// away every entry that carries AgentSweep's arguments and
     /// timeout under another command line interface path, and names every
     /// entry it wrote or took away (spec sections 7.2 and 7.6).
     ///
@@ -549,10 +550,13 @@ pub trait SurfaceAdapter {
     }
 
     /// Takes away exactly the entries whose command, arguments and timeout
-    /// are AgentSweep's, and names every entry it took away. Where the Agent
-    /// files trust by position, the pins of the groups that moved up are filed
-    /// again under their new position. The default is that this Agent has no
-    /// Gate.
+    /// are AgentSweep's, handler by handler, and names every entry it took
+    /// away. A group goes only when that left it empty, so another tool's
+    /// handler in a group it shares with AgentSweep's stays (spec section
+    /// 7.6). Where the Agent files trust by position, the pins of the groups
+    /// that moved up are filed again under their new position, and the pin of
+    /// another tool's handler that moved forward inside a shared group is left
+    /// where it was. The default is that this Agent has no Gate.
     fn remove_gate(
         &self,
         host: &Host,

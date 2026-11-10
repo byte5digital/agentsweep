@@ -74,12 +74,13 @@
               <div class="detail"></div>
             </div>
             <!-- The Developer Posture only: Items in the Ambiguous Band, which
-                 are never Findings (spec sections 4.3 and 8.4). -->
-            <section class="ambiguous-items" hidden>
-              <h3>Ambiguous Items</h3>
-              <p class="muted">Their Score fell in the Ambiguous Band. They are not Findings and nothing is asked of you.</p>
+                 are never Findings (spec sections 4.3 and 8.4). Below the
+                 Findings and closed until opened, one line per Item. -->
+            <details class="ambiguous-items" hidden>
+              <summary>Ambiguous Items <span class="count"></span></summary>
+              <p class="muted">Not Findings. Nothing is asked of you.</p>
               <div class="list"></div>
-            </section>
+            </details>
             <!-- The Developer Posture only: "checked by <engine>" for Items a
                  benign Verdict moved to Clear (spec section 8.2). -->
             <section class="checked-items" hidden>

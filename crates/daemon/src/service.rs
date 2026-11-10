@@ -2391,38 +2391,64 @@ fn watch_the_bundle(daemon: &Arc<Daemon>, socket: &std::path::Path) -> Option<Bu
 }
 
 /// Exits because the bundle changed, once the work in hand is finished.
-///
-/// Replaced exits with [`bundle_watch::EXIT_REPLACED`], which `KeepAlive`
-/// answers by starting the binary that is there now; gone exits with zero,
-/// which it answers by leaving the daemon down. A bundle judged gone is
-/// looked at once more after the work in hand: one back at its path by then
-/// was replaced (a rebuild in place outlasts the grace).
 fn leave(daemon: &Daemon, change: Change, bundle: &std::path::Path, socket: &std::path::Path) {
-    match change {
-        Change::Same => return,
-        Change::Replaced => say!(
-            "the bundle at {} was replaced: finishing the work in hand, then exiting so the new binary starts",
-            bundle.display()
-        ),
-        Change::Gone => say!(
-            "the bundle at {} is gone: finishing the work in hand, then exiting for good",
-            bundle.display()
-        ),
+    if let Some(code) = daemon.leave(change, bundle, socket) {
+        say!("exiting with status {code}");
+        std::process::exit(code);
     }
-    daemon.finish_the_work_in_hand();
-    let last = bundle_watch::at_exit(change, bundle);
-    if last != change {
-        say!(
-            "a bundle is back at {}: it was replaced, so exiting for the new binary to start",
-            bundle.display()
-        );
+}
+
+impl Daemon {
+    /// Gets ready to exit because the bundle changed, and answers with the
+    /// status to exit with, or nothing when it does not exit.
+    ///
+    /// Replaced answers [`bundle_watch::EXIT_REPLACED`], which `KeepAlive`
+    /// answers by starting the binary that is there now; gone answers zero,
+    /// which it answers by leaving the daemon down. A bundle judged gone is
+    /// looked at once more after the work in hand: one back at its path by
+    /// then was replaced (a rebuild in place outlasts the grace). Only a
+    /// bundle still gone then takes the Gate's entries and the Codex pins out
+    /// of every Agent, each recorded in the Event Log (spec section 9.6); a
+    /// replaced one leaves them for the new binary.
+    pub fn leave(
+        &self,
+        change: Change,
+        bundle: &std::path::Path,
+        socket: &std::path::Path,
+    ) -> Option<i32> {
+        match change {
+            Change::Same => return None,
+            Change::Replaced => say!(
+                "the bundle at {} was replaced: finishing the work in hand, then exiting so the new binary starts",
+                bundle.display()
+            ),
+            Change::Gone => say!(
+                "the bundle at {} is gone: finishing the work in hand, then exiting for good",
+                bundle.display()
+            ),
+        }
+        self.finish_the_work_in_hand();
+        let last = bundle_watch::at_exit(change, bundle);
+        if last != change {
+            say!(
+                "a bundle is back at {}: it was replaced, so exiting for the new binary to start",
+                bundle.display()
+            );
+        }
+        let code = last.exit_status()?;
+        if last == Change::Gone {
+            say!("taking the Gate out of the Agents");
+            let removal = self.remove_the_gate();
+            if !removal.failed.is_empty() {
+                say!(
+                    "the Gate could not be taken out of {}",
+                    removal.failed.join(" and ")
+                );
+            }
+        }
+        self.clean_up_at_exit(socket);
+        Some(code)
     }
-    let Some(code) = last.exit_status() else {
-        return;
-    };
-    daemon.clean_up_at_exit(socket);
-    say!("exiting with status {code}");
-    std::process::exit(code);
 }
 
 /// Runs the daemon until the process is stopped.

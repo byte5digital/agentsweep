@@ -62,7 +62,7 @@ use crate::log::counted;
 use crate::machine::Machine;
 use crate::notifications::Launch;
 use crate::options::{KeySourceChoice, Options};
-use crate::permission::{Access, Disk, Folders, proven_readable_classes};
+use crate::permission::{Access, Disk, Folders, LocationClass, proven_readable_classes};
 use crate::rule_feed::{self, Endpoints, FeedClient, FeedTuning, Fetched, Validators};
 use crate::stores::{open_both_chains, open_the_event_log};
 use crate::watcher::{self, Batch, Decision, Timings, Watch};
@@ -184,6 +184,12 @@ struct Queue {
     /// requests arriving before it has taken the first would otherwise start
     /// two threads, and two Scans would run at once.
     draining: bool,
+    /// The protected classes "Check now" proved readable that the waiting
+    /// Full Scan was asked for.
+    checked: BTreeSet<LocationClass>,
+    /// The same for the running Full Scan, which reads them: it took the
+    /// classes the state file remembers after "Check now" wrote them there.
+    reading: BTreeSet<LocationClass>,
 }
 
 impl Queue {
@@ -196,10 +202,12 @@ impl Queue {
 
     /// The next piece of work, marking it as the one running.
     fn next(&mut self) -> Option<Work> {
+        self.reading = BTreeSet::new();
         if let Some(trigger) = self.full.take() {
             // A pending Full Scan absorbs every Change batch waiting with it.
             self.batch = Batch::default();
             self.running = Some(ScanKind::Full);
+            self.reading = std::mem::take(&mut self.checked);
             return Some(Work::Full(trigger));
         }
         if !self.batch.is_empty() {
@@ -215,6 +223,26 @@ impl Queue {
     /// queue, and only then. Answers with true when the caller must start it.
     fn claim_the_thread(&mut self) -> bool {
         !std::mem::replace(&mut self.draining, true)
+    }
+
+    /// "Check now" proved these classes readable and wrote them to the state
+    /// file. Asks for the Full Scan that reads their projects unless one
+    /// already will: a Full Scan still waiting takes the remembered classes
+    /// when it starts, and a running one asked for by an earlier "Check now"
+    /// of the same classes reads them already. Answers with true when a Full
+    /// Scan was asked for, so one click is one Full Scan however often it
+    /// arrives.
+    fn after_check_now(&mut self, classes: &BTreeSet<LocationClass>) -> bool {
+        if self.full.is_some() {
+            self.checked.extend(classes.iter().copied());
+            return false;
+        }
+        if self.running == Some(ScanKind::Full) && classes.is_subset(&self.reading) {
+            return false;
+        }
+        self.full = Some(Trigger::ScanNow);
+        self.checked = classes.clone();
+        true
     }
 }
 
@@ -2172,6 +2200,25 @@ impl Daemon {
         self.scan_behind(Trigger::RulePack);
     }
 
+    /// Asks for the Full Scan behind a "Check now" that proved `classes`
+    /// readable, unless one already reads them ([`Queue::after_check_now`]).
+    /// Answers with true when it asked for one.
+    pub(crate) fn scan_after_check_now(
+        self: &Arc<Daemon>,
+        classes: &BTreeSet<LocationClass>,
+    ) -> bool {
+        let mut queue = self.queue.lock().expect("the queue is not poisoned");
+        if !queue.after_check_now(classes) {
+            return false;
+        }
+        let start = queue.claim_the_thread();
+        drop(queue);
+        if start {
+            self.work();
+        }
+        true
+    }
+
     /// Asks for a Full Scan that starts after anything that is running now:
     /// one that is waiting is joined, one that is running started before
     /// whatever asks for this one, so another is put behind it.
@@ -2579,6 +2626,51 @@ mod tests {
         assert!(matches!(queue.next(), Some(Work::Full(Trigger::Watcher))));
         assert!(queue.batch.is_empty());
         assert!(queue.next().is_none());
+    }
+
+    /// One "Check now" asks for one Full Scan however often it arrives: a
+    /// repeat while that Full Scan waits or runs asks for nothing more. A
+    /// class the running Full Scan was not asked to read, and a "Check now"
+    /// with no Full Scan of its own in hand, each ask for one.
+    #[test]
+    fn a_repeated_check_now_asks_for_one_full_scan() {
+        let documents = BTreeSet::from([LocationClass::Documents]);
+        let downloads = BTreeSet::from([LocationClass::Downloads]);
+        let mut queue = Queue::default();
+
+        assert!(queue.after_check_now(&documents));
+        assert!(!queue.after_check_now(&documents), "one is waiting");
+        assert!(matches!(queue.next(), Some(Work::Full(Trigger::ScanNow))));
+        assert!(
+            !queue.after_check_now(&documents),
+            "the running one reads it"
+        );
+        assert!(
+            queue.after_check_now(&downloads),
+            "the running one does not"
+        );
+        assert!(matches!(queue.next(), Some(Work::Full(Trigger::ScanNow))));
+        assert!(queue.next().is_none());
+
+        // A grant taken back and given again: nothing reads it any more.
+        assert!(queue.after_check_now(&documents));
+    }
+
+    /// A Full Scan nobody asked "Check now" for may have read the class
+    /// before the grant, so a "Check now" puts one behind it.
+    #[test]
+    fn a_check_now_during_another_full_scan_asks_for_one_behind_it() {
+        let documents = BTreeSet::from([LocationClass::Documents]);
+        let mut queue = Queue {
+            full: Some(Trigger::DaemonStart),
+            ..Queue::default()
+        };
+        assert!(matches!(
+            queue.next(),
+            Some(Work::Full(Trigger::DaemonStart))
+        ));
+        assert!(queue.after_check_now(&documents));
+        assert!(matches!(queue.next(), Some(Work::Full(Trigger::ScanNow))));
     }
 
     /// An older state file's toggle is taken over into the settings file

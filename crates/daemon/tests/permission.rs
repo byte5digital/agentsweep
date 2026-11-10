@@ -15,7 +15,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
 use agentsweep_core::baseline::{Baseline, BaselineView};
@@ -72,6 +72,9 @@ struct Stand {
     /// Told the thread's name when a read starts, and then waited on until
     /// the test lets the read finish, the way the system alert holds it.
     block: Mutex<Option<(Sender<String>, Receiver<()>)>>,
+    /// The same for the next read a Scan makes, so a test holds a Full Scan
+    /// while it runs.
+    hold_scan: Mutex<Option<(Sender<String>, Receiver<()>)>>,
 }
 
 impl Folders for Stand {
@@ -85,8 +88,15 @@ impl Folders for Stand {
             .expect("not poisoned")
             .push((root.to_path_buf(), thread.clone()));
         if let Some((entered, release)) = self.block.lock().expect("not poisoned").take() {
-            let _ = entered.send(thread);
+            let _ = entered.send(thread.clone());
             let _ = release.recv();
+        }
+        if thread != FIRST_READ_THREAD {
+            let held = self.hold_scan.lock().expect("not poisoned").take();
+            if let Some((entered, release)) = held {
+                let _ = entered.send(thread);
+                let _ = release.recv();
+            }
         }
         match self.deny.load(Ordering::SeqCst) {
             true => Err(io::Error::from_raw_os_error(libc::EPERM)),
@@ -107,6 +117,50 @@ impl Stand {
             .filter(|(opened, thread)| opened == root && thread == FIRST_READ_THREAD)
             .count()
     }
+
+    /// How many times a Scan read this root.
+    fn scan_reads_of(&self, root: &Path) -> usize {
+        self.opened()
+            .iter()
+            .filter(|(opened, thread)| opened == root && thread != FIRST_READ_THREAD)
+            .count()
+    }
+}
+
+/// Every line the daemons of this test binary log, so a test counts the
+/// lines its own sandbox's paths appear in.
+static SAID: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+struct Said;
+
+impl io::Write for Said {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        SAID.lock().expect("not poisoned").extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Starts listening to the log, once for the whole binary.
+fn listen_to_the_log() {
+    static LISTENING: Once = Once::new();
+    LISTENING.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(|| Said)
+            .try_init();
+    });
+}
+
+/// How many logged lines contain `text`.
+fn lines_saying(text: &str) -> usize {
+    String::from_utf8_lossy(&SAID.lock().expect("not poisoned"))
+        .lines()
+        .filter(|line| line.contains(text))
+        .count()
 }
 
 /// One machine to scan, one data directory and one socket, all temporary.
@@ -520,5 +574,57 @@ fn a_status_answers_while_the_first_read_blocks() {
     assert_eq!(
         sandbox.check_of(&sandbox.status(), &sandbox.documents),
         ProjectCheck::Checked
+    );
+}
+
+/// One click on "Check now" delivered three times while the Full Scan it
+/// asked for runs: one Full Scan reads the project, and the class is said to
+/// be readable once.
+#[test]
+fn a_repeated_check_now_asks_for_one_full_scan_and_says_readable_once() {
+    listen_to_the_log();
+    let sandbox = Sandbox::new("repeated", A_PLAIN_INSTRUCTION_FILE);
+    let stand = Arc::new(Stand::default());
+    let running = sandbox.start(&stand);
+    let daemon = running.daemon();
+
+    let (entered_send, entered) = mpsc::channel();
+    let (release, release_receive) = mpsc::channel();
+    *stand.hold_scan.lock().expect("not poisoned") = Some((entered_send, release_receive));
+
+    let before = sandbox.status().scan.expect("a Scan").started_at;
+    assert!(sandbox.client().check_now().expect("an answer"));
+    entered
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the Full Scan reads the project");
+    for click in 2..=3 {
+        assert!(
+            until(|| sandbox.client().check_now().expect("an answer")),
+            "the project still Needs Permission while the Full Scan runs"
+        );
+        assert!(until(|| stand.first_reads_of(&sandbox.documents) == click));
+    }
+    // The last click's read is made; give its thread the moment it takes to
+    // finish answering it before the Full Scan may end.
+    std::thread::sleep(Duration::from_millis(300));
+
+    release.send(()).expect("the Full Scan is let go");
+    a_full_scan_after(&sandbox, daemon, before);
+    assert_eq!(
+        sandbox.check_of(&sandbox.status(), &sandbox.documents),
+        ProjectCheck::Checked
+    );
+    assert_eq!(
+        stand.scan_reads_of(&sandbox.documents),
+        1,
+        "one Full Scan read the project: {:?}",
+        stand.opened()
+    );
+    assert_eq!(
+        lines_saying(&format!(
+            "documents is readable: {}",
+            sandbox.documents.display()
+        )),
+        1
     );
 }

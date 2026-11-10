@@ -32,7 +32,6 @@ use agentsweep_core::chain::ChainState;
 use agentsweep_core::keychain::KeySource;
 use agentsweep_core::overview::{Overview, ProjectCheck};
 use agentsweep_core::paths::DataDirectory;
-use agentsweep_core::state::Trigger;
 
 use crate::service::Daemon;
 
@@ -270,14 +269,19 @@ impl Daemon {
     /// Reads one root of each class, remembers each class that answered and
     /// asks for the Full Scan that reads their projects. A root that is gone
     /// gives way to the next root of its class.
+    ///
+    /// A class is said to be readable once per change: when it is remembered
+    /// for the first time, or when its read asks for a Full Scan again (a
+    /// grant taken back and given again). A repeated click while the Full
+    /// Scan it asked for is waiting or running says nothing and asks for
+    /// nothing more.
     fn read_for_the_first_time(self: &Arc<Daemon>, pending: BTreeMap<LocationClass, Vec<PathBuf>>) {
-        let mut granted = Vec::new();
+        let mut granted = BTreeMap::new();
         for (class, roots) in pending {
             for root in roots {
                 match self.tuning.folders.read(&root) {
                     Ok(()) => {
-                        say!("{} is readable: {}", class.as_str(), root.display());
-                        granted.push(class);
+                        granted.insert(class, root);
                         break;
                     }
                     Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -299,14 +303,25 @@ impl Daemon {
         if granted.is_empty() {
             return;
         }
-        {
+        let new: BTreeSet<LocationClass> = {
             let mut state = self.state.lock().expect("the state is not poisoned");
-            for class in granted {
-                state.readable_classes.insert(class.as_str().to_string());
+            let new = granted
+                .keys()
+                .filter(|class| state.readable_classes.insert(class.as_str().to_string()))
+                .copied()
+                .collect::<BTreeSet<_>>();
+            if !new.is_empty() {
+                self.write_state(&state);
             }
-            self.write_state(&state);
+            new
+        };
+        let classes = granted.keys().copied().collect();
+        let asked = self.scan_after_check_now(&classes);
+        for (class, root) in &granted {
+            if asked || new.contains(class) {
+                say!("{} is readable: {}", class.as_str(), root.display());
+            }
         }
-        self.scan_behind(Trigger::ScanNow);
     }
 }
 

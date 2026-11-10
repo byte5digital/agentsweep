@@ -5,9 +5,10 @@
 //! Nothing touches the real home, the real data directory, the documented
 //! socket or the login Keychain, which is the rule the whole suite runs under.
 
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
 use agentsweep_adapter_conformance::fixtures;
@@ -316,6 +317,69 @@ fn a_client_of_the_wrong_version_is_told_to_restart_agentsweep() {
         matches!(connection.receive(), Ok(None) | Err(_)),
         "the connection is over"
     );
+}
+
+/// Every line the daemons of this test binary log, so a test counts the
+/// lines only its own daemon could have said.
+static SAID: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+struct Said;
+
+impl io::Write for Said {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        SAID.lock().expect("not poisoned").extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Starts listening to the log, once for the whole binary.
+fn listen_to_the_log() {
+    static LISTENING: Once = Once::new();
+    LISTENING.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(|| Said)
+            .try_init();
+    });
+}
+
+/// How many logged lines contain `text`.
+fn lines_saying(text: &str) -> usize {
+    String::from_utf8_lossy(&SAID.lock().expect("not poisoned"))
+        .lines()
+        .filter(|line| line.contains(text))
+        .count()
+}
+
+/// An app left running from before an update asks once a second and is
+/// refused every time, but the log says so once a minute, not per refusal.
+#[test]
+fn a_peer_refused_again_and_again_is_said_once() {
+    listen_to_the_log();
+    let sandbox = Sandbox::empty("refused-again");
+    let daemon = sandbox.start();
+
+    for _ in 0..3 {
+        let mut connection = connect(&daemon.socket()).expect("a connected client");
+        connection
+            .send(&Message::Hello(Hello {
+                version: "0.0.2".to_string(),
+                role: Role::App,
+            }))
+            .expect("a sent handshake");
+        assert!(
+            matches!(
+                connection.receive().expect("an answer"),
+                Some(Message::Refused(Refusal::VersionMismatch { .. }))
+            ),
+            "every handshake is still refused"
+        );
+    }
+    assert_eq!(lines_saying("and the peer is 0.0.2"), 1);
 }
 
 /// A peer the check does not admit is refused before any request is read,

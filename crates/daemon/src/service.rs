@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use agentsweep_core::adapter::WatchRoots;
 use agentsweep_core::apple_engine::AppleHelper;
@@ -58,7 +59,7 @@ use crate::cloud_caps::{Calendar, CloudLedger, SystemCalendar};
 use crate::due::{self, Occasion, PowerState, Schedule, SystemPower};
 use crate::full_scan::{FullScan, Progress, ScanRun};
 use crate::judgement_queue::{Awaiting, Engines, JudgementQueue, NoEngines, SystemEngines};
-use crate::log::counted;
+use crate::log::{OncePer, counted};
 use crate::machine::Machine;
 use crate::notifications::Launch;
 use crate::options::{KeySourceChoice, Options};
@@ -169,6 +170,10 @@ impl std::fmt::Debug for Tuning {
             .finish_non_exhaustive()
     }
 }
+
+/// How often one peer's refusal at the handshake is said in the log: an app
+/// left running from before an update asks once a second until it is quit.
+const REFUSALS_SAID_EVERY: Duration = Duration::from_secs(60);
 
 /// What has been asked for and what is running, with the rules of spec section
 /// 6.4 about two Scans meeting each other in one place.
@@ -312,6 +317,9 @@ pub struct Daemon {
     pub(crate) raised: Mutex<Vec<Finding>>,
     /// What has been asked for, and what is running.
     queue: Mutex<Queue>,
+    /// The refusals at the handshake said lately, so a peer that keeps
+    /// asking is said once a minute rather than once per refusal.
+    refusals: OncePer,
     /// The Rule Pack in force, compiled once. Compiling it costs far more than
     /// a Change Scan is allowed to take, so no Scan compiles its own. A Scan
     /// takes the pack in force when it starts and keeps it to the end; an
@@ -591,6 +599,7 @@ impl Daemon {
             writing: Mutex::new(()),
             raised: Mutex::new(Vec::new()),
             queue: Mutex::new(Queue::default()),
+            refusals: OncePer::new(REFUSALS_SAID_EVERY),
             pack: RwLock::new(pack),
             bundled,
             feed,
@@ -1401,7 +1410,13 @@ impl Daemon {
                 hello.role
             }
             Err(refusal) => {
-                say!("refused {peer}: {}", refusal.detail());
+                let detail = refusal.detail();
+                if self
+                    .refusals
+                    .lets_through(&format!("{peer}: {detail}"), Instant::now())
+                {
+                    say!("refused {peer}: {detail}");
+                }
                 let _ = connection.send(&Message::Refused(refusal));
                 return;
             }

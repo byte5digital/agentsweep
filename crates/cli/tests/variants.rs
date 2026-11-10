@@ -623,7 +623,8 @@ mod bundle {
     /// `agentsweep uninstall` without a flag is Keep: the daemon takes the
     /// Gate it registered out of the temporary home's Claude Code settings,
     /// keeps the data directory, takes no further work, and the command
-    /// ends by asking the user to move AgentSweep to the Trash.
+    /// ends by asking the user to quit AgentSweep and drag it to the Trash.
+    /// Run from outside a bundle, as here, it unregisters nothing.
     #[test]
     fn uninstall_without_a_flag_keeps_and_takes_the_gate_away() {
         let daemon = Daemon::over(clean_home());
@@ -643,7 +644,7 @@ mod bundle {
             "{printed}"
         );
         assert!(
-            printed.contains("move AgentSweep to the Trash"),
+            printed.ends_with("Quit AgentSweep, then drag it to the Trash.\n"),
             "{printed}"
         );
         assert!(!gate_in(), "the Gate entries are gone");
@@ -651,6 +652,88 @@ mod bundle {
 
         let refused = run(&this_build(), &["scan", "--socket", &daemon.socket()]);
         assert_ne!(refused.status.code(), Some(0), "{}", text(&refused.stdout));
+    }
+
+    /// From a bundle, `agentsweep uninstall` runs the app's own executable
+    /// with `--finish-uninstall` once the daemon has applied the choice. Here
+    /// a stand-in for it notes the flag and stops the test's daemon with the
+    /// `SIGTERM` that unregistering sends, so no launchd job and no Login
+    /// Item is touched. The command waits for the daemon to go, which
+    /// unlinks its socket, exits 0 and names the bundle's real folder.
+    #[test]
+    fn uninstall_from_a_bundle_quits_and_unregisters_through_the_app_and_waits_for_the_daemon() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let daemon = Daemon::over(clean_home());
+        let place = Temporary::new("bundle");
+        let macos = place.path().join("Apps/AgentSweep.app/Contents/MacOS");
+        fs::create_dir_all(&macos).expect("a bundle");
+        let cli = macos.join("agentsweep");
+        fs::copy(this_build(), &cli).expect("the CLI in the bundle");
+        let app = macos.join("agentsweep-menubar");
+        fs::write(
+            &app,
+            "#!/bin/sh\necho \"$@\" > \"$AGENTSWEEP_TEST_FLAG\"\nkill -TERM \"$AGENTSWEEP_TEST_DAEMON\"\n",
+        )
+        .expect("a stand-in for the app");
+        fs::set_permissions(&app, fs::Permissions::from_mode(0o755)).expect("executable");
+        let flag = place.path().join("flag");
+
+        let home = Temporary::new("empty-home");
+        let output = Command::new(&cli)
+            .args([
+                "uninstall",
+                "--delete-everything",
+                "--socket",
+                &daemon.socket(),
+            ])
+            .env("HOME", home.path())
+            .env("AGENTSWEEP_TEST_FLAG", &flag)
+            .env("AGENTSWEEP_TEST_DAEMON", daemon.child.id().to_string())
+            .output()
+            .expect("the CLI runs");
+        let printed = text(&output.stdout);
+        assert_eq!(output.status.code(), Some(0), "{printed}");
+        assert_eq!(
+            fs::read_to_string(&flag).expect("the app ran").trim(),
+            "--finish-uninstall"
+        );
+        assert!(!daemon.socket.exists(), "the daemon unlinked its socket");
+        assert!(
+            printed.ends_with(&format!(
+                "AgentSweep has stopped. Now drag it from {} to the Trash.\n",
+                // The command names the folder as the file system resolves
+                // it, `/private/var` for the temporary directory.
+                fs::canonicalize(place.path().join("Apps"))
+                    .expect("the folder")
+                    .display()
+            )),
+            "{printed}"
+        );
+    }
+
+    /// No daemon: nothing changes, the exit is non-zero, and two lines say
+    /// so and what is left.
+    #[test]
+    fn uninstall_with_no_daemon_exits_non_zero_and_says_what_is_left() {
+        let nowhere = Temporary::new("nobody");
+        let socket = nowhere.path().join("nobody.sock");
+        let output = run(
+            &this_build(),
+            &[
+                "uninstall",
+                "--delete-everything",
+                "--socket",
+                &socket.to_string_lossy(),
+            ],
+        );
+        let printed = text(&output.stdout);
+        assert_eq!(output.status.code(), Some(3), "{printed}");
+        assert_eq!(
+            printed,
+            "Nothing was changed: AgentSweep is not running.\nIts hooks, its data and its \
+             background item stay. Open AgentSweep, then run this again.\n"
+        );
     }
 
     /// Runs the Gate as an Agent runs it, the event on stdin, under a home

@@ -8,8 +8,9 @@
 //! the Gate's entries and the Codex pin away from every Agent first, on every
 //! choice, then applies the choice, since it is the only writer of the stores.
 //! Unregistering the daemon and the login item and moving the app to the
-//! Trash are the app's; the command line interface tells the user to move the
-//! app to the Trash.
+//! Trash are the app's; the command line interface has the app's own
+//! executable quit the app and unregister both, and tells the user to move
+//! the app to the Trash.
 
 use serde_json::{Map, Value};
 

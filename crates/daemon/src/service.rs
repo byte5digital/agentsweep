@@ -58,6 +58,7 @@ use crate::cloud_caps::{Calendar, CloudLedger, SystemCalendar};
 use crate::due::{self, Occasion, PowerState, Schedule, SystemPower};
 use crate::full_scan::{FullScan, Progress, ScanRun};
 use crate::judgement_queue::{Awaiting, Engines, JudgementQueue, NoEngines, SystemEngines};
+use crate::log::counted;
 use crate::machine::Machine;
 use crate::notifications::Launch;
 use crate::options::{KeySourceChoice, Options};
@@ -1041,13 +1042,13 @@ impl Daemon {
         *self.roots.lock().expect("the roots are not poisoned") = run.roots.clone();
 
         say!(
-            "{} Scan ({}): {} Items, {} Findings, {} ms, {} project roots",
+            "{} Scan ({}): {}, {}, {} ms, {}",
             run.summary.kind,
             run.summary.trigger,
-            run.summary.items,
-            run.summary.findings(),
+            counted(run.summary.items, "Item", "Items"),
+            counted(run.summary.findings(), "Finding", "Findings"),
             run.summary.duration_ms,
-            run.roots.len()
+            counted(run.roots.len(), "project root", "project roots")
         );
         if run.events != ChainState::Intact || run.baseline != ChainState::Intact {
             say!(
@@ -1107,9 +1108,9 @@ impl Daemon {
         match started {
             Ok(watch) => {
                 say!(
-                    "watching {} of {} declared roots",
+                    "watching {} of {}",
                     watch.following(),
-                    roots.all().count()
+                    counted(roots.all().count(), "declared root", "declared roots")
                 );
                 *held = Some(watch);
             }
@@ -1129,7 +1130,7 @@ impl Daemon {
         match decision {
             Decision::Nothing => {}
             Decision::Change(batch) => {
-                say!("{} paths changed", batch.len());
+                say!("{} changed", counted(batch.len(), "path", "paths"));
                 self.change(batch);
             }
             Decision::Full(why) => {
@@ -1174,9 +1175,9 @@ impl Daemon {
         }
         match baseline::compact(&self.directory, &*self.keys, &retention, at) {
             Ok(done) => say!(
-                "the Baseline was compacted: {} records dropped, {} stretches of coverage dropped",
-                done.plan.dropped.len(),
-                done.plan.uncovered.len()
+                "the Baseline was compacted: {} dropped, {} of coverage dropped",
+                counted(done.plan.dropped.len(), "record", "records"),
+                counted(done.plan.uncovered.len(), "stretch", "stretches")
             ),
             Err(error) => say!("the Baseline could not be compacted: {error}"),
         }
@@ -1227,8 +1228,8 @@ impl Daemon {
         let installed = installed_models(&judgement, &ollama);
         match verdicts::compact(&self.directory, &*self.keys, &installed) {
             Ok(Some(done)) => say!(
-                "the Verdict cache was compacted: {} records before, {} after",
-                done.before,
+                "the Verdict cache was compacted: {} before, {} after",
+                counted(done.before, "record", "records"),
                 done.after
             ),
             Ok(None) => {}

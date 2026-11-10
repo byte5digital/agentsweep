@@ -36,6 +36,7 @@ use agentsweep_core::quarantine::Conflict;
 use agentsweep_ipc::protocol::{UninstallChoice, UninstallReport};
 use agentsweep_ipc::socket::SOCKET_NAME;
 
+use crate::log::counted;
 use crate::service::Daemon;
 
 /// The app's folder in the per-user temporary directory, where its web view
@@ -183,7 +184,10 @@ impl Daemon {
             .iter()
             .filter(|restored| restored.result == agentsweep_core::eventlog::Outcome::Ok)
             .count();
-        say!("uninstalling: {done} of {total} quarantined Items restored");
+        say!(
+            "uninstalling: {done} of {} restored",
+            counted(total, "quarantined Item", "quarantined Items")
+        );
         report.message = match (done, total) {
             (_, 0) => "Nothing was in quarantine.".to_string(),
             (done, total) if done == total => format!(

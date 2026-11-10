@@ -53,6 +53,7 @@ use agentsweep_ipc::protocol::{FolderFinding, FolderScanResult, RequestError};
 
 use crate::full_scan::read_the_verdicts;
 use crate::judgement_queue::{Ask, Asking, Awaiting, InForce, chosen};
+use crate::log::counted;
 use crate::service::Daemon;
 
 /// What the active Judgement Engine came to for one Folder Scan.
@@ -347,12 +348,11 @@ fn run(
         })
         .collect::<Vec<_>>();
     say!(
-        "ran a Folder Scan of {} on request: {} Items, {} Findings, {} Verdicts, {} unfinished, \
-         {} ms, nothing recorded",
+        "ran a Folder Scan of {} on request: {}, {}, {}, {} unfinished, {} ms, nothing recorded",
         root.display(),
-        report.items_scanned,
-        findings.len(),
-        judgement.applied.len(),
+        counted(report.items_scanned, "Item", "Items"),
+        counted(findings.len(), "Finding", "Findings"),
+        counted(judgement.applied.len(), "Verdict", "Verdicts"),
         judgement.unfinished,
         began.elapsed().as_millis()
     );

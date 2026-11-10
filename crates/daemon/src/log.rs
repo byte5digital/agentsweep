@@ -158,6 +158,19 @@ impl Write for RotatingFile {
     }
 }
 
+/// A count and its noun as a log line says it, in the singular for one:
+/// "1 path", "2 paths", "0 paths".
+pub fn counted<N>(count: N, one: &str, many: &str) -> String
+where
+    N: std::fmt::Display + PartialEq + From<u8>,
+{
+    let noun = match count == N::from(1) {
+        true => one,
+        false => many,
+    };
+    format!("{count} {noun}")
+}
+
 /// Starts the log for this process: the rotated file in `directory`, or the
 /// standard error stream when `directory` is absent. Called once, by the
 /// binary; a test never starts it, so the suite writes no log at all.
@@ -192,6 +205,18 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn a_count_of_one_takes_the_singular() {
+        assert_eq!(counted(1usize, "path", "paths"), "1 path");
+        assert_eq!(counted(2usize, "path", "paths"), "2 paths");
+        assert_eq!(counted(0u64, "Item", "Items"), "0 Items");
+        assert_eq!(counted(1u32, "entry", "entries"), "1 entry");
+        assert_eq!(
+            counted(1usize, "un-notified change", "un-notified changes"),
+            "1 un-notified change"
+        );
     }
 
     #[test]

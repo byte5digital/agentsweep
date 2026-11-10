@@ -397,6 +397,25 @@ pub fn drop_json(
     json::drop_matching(text, list, drops)
 }
 
+/// Drops every member of the inner list `members` of each element of a list
+/// in a JSON file that `drops` picks, and says how many went. `drops` sees
+/// the element the member sits in as well as the member.
+///
+/// What a Gate handler is taken out of a hook group with: the handler goes,
+/// and the group goes only when this left it empty, so a group another tool
+/// shares with AgentSweep keeps that tool's handlers where they are (spec
+/// section 7.6). An element that was empty before stays. A list this left
+/// empty goes with its key, and so does an object above it, as with
+/// [`drop_json`]. Nothing else moves.
+pub fn drop_json_members(
+    text: &str,
+    list: &EntryPath,
+    members: &str,
+    drops: &dyn Fn(&Value, &Value) -> bool,
+) -> Result<(String, usize), EditError> {
+    json::drop_members(text, list, members, drops)
+}
+
 /// Writes one table into a TOML layer, creating the tables above it where
 /// they are not there yet, and replacing a table already at the key path.
 ///
@@ -670,11 +689,54 @@ mod json {
         if dropped == 0 {
             return Ok((text.to_string(), 0));
         }
-        // A container this edit emptied goes with its key, from the list
-        // upwards, and the first one that still holds something stops it.
+        prune_emptied(&mut document, list);
+        Ok((render(&document), dropped))
+    }
+
+    pub(super) fn drop_members(
+        text: &str,
+        list: &EntryPath,
+        members: &str,
+        drops: &dyn Fn(&Value, &Value) -> bool,
+    ) -> Result<(String, usize), EditError> {
+        let mut document = parse(text)?;
+        let Some(Value::Array(items)) = at_mut(&mut document, list) else {
+            return Ok((text.to_string(), 0));
+        };
+        let mut dropped = 0;
+        let mut emptied = Vec::new();
+        for (index, item) in items.iter_mut().enumerate() {
+            let element = item.clone();
+            let Some(Value::Array(inner)) = item.get_mut(members) else {
+                continue;
+            };
+            let before = inner.len();
+            inner.retain(|member| !drops(&element, member));
+            let gone = before - inner.len();
+            dropped += gone;
+            if gone > 0 && inner.is_empty() {
+                emptied.push(index);
+            }
+        }
+        if dropped == 0 {
+            return Ok((text.to_string(), 0));
+        }
+        let mut index = 0;
+        items.retain(|_| {
+            let keep = !emptied.contains(&index);
+            index += 1;
+            keep
+        });
+        prune_emptied(&mut document, list);
+        Ok((render(&document), dropped))
+    }
+
+    /// A container an edit emptied goes with its key, from the list upwards,
+    /// and the first one that still holds something stops it.
+    fn prune_emptied(document: &mut Value, list: &EntryPath) {
         let mut path = list.clone();
         while !path.is_empty() {
-            let emptied = match at(&document, &path) {
+            let emptied = match at(document, &path) {
                 Some(Value::Array(items)) => items.is_empty(),
                 Some(Value::Object(fields)) => fields.is_empty(),
                 _ => false,
@@ -682,12 +744,11 @@ mod json {
             if !emptied {
                 break;
             }
-            if let Some(Value::Object(fields)) = parent_of(&mut document, &path) {
+            if let Some(Value::Object(fields)) = parent_of(document, &path) {
                 fields.shift_remove(path.last());
             }
             path = path.parent();
         }
-        Ok((render(&document), dropped))
     }
 
     /// The value at a key path, to write to.
@@ -1254,6 +1315,69 @@ trust_level = "trusted"
         let (same, none) =
             drop_json(SETTINGS, &path(&["hooks", "Stop"]), &|_| true).expect("nothing to drop");
         assert_eq!((same.as_str(), none), (SETTINGS, 0));
+    }
+
+    /// Dropping members out of the elements of a list takes only the members
+    /// picked, sees the element each one sits in, and takes an element away
+    /// only when the drop left it empty: an element that was empty already,
+    /// or still holds a member of its own, stays where it is.
+    #[test]
+    fn dropping_members_takes_an_element_only_when_the_drop_emptied_it() {
+        let ours = json!({"type": "command", "command": "/ours"});
+        let theirs = json!({"type": "command", "command": "/theirs"});
+        let list = json!([
+            {"hooks": [ours.clone(), theirs.clone()]},
+            {"hooks": []},
+            {"matcher": "Bash", "hooks": [ours.clone()]},
+            {"matcher": "Read", "hooks": [ours.clone()]},
+            {"hooks": [theirs.clone(), ours.clone()]}
+        ]);
+        let mut text = SETTINGS.to_string();
+        for element in list.as_array().expect("a list") {
+            text = append_json(&text, &path(&["hooks", "Stop"]), element).expect("appended");
+        }
+
+        let (left, dropped) = drop_json_members(
+            &text,
+            &path(&["hooks", "Stop"]),
+            "hooks",
+            &|element, member| *member == ours && element.get("matcher") != Some(&json!("Read")),
+        )
+        .expect("dropped");
+
+        assert_eq!(dropped, 3);
+        let value: Value = serde_json::from_str(&left).expect("JSON");
+        assert_eq!(
+            value["hooks"]["Stop"],
+            json!([
+                {"hooks": [theirs.clone()]},
+                {"hooks": []},
+                {"matcher": "Read", "hooks": [ours.clone()]},
+                {"hooks": [theirs.clone()]}
+            ])
+        );
+
+        let (back, gone) =
+            drop_json_members(&text, &path(&["hooks", "Stop"]), "hooks", &|_, _| true)
+                .expect("dropped");
+        assert_eq!(gone, 6);
+        let value: Value = serde_json::from_str(&back).expect("JSON");
+        assert_eq!(value["hooks"]["Stop"], json!([{"hooks": []}]));
+
+        let (same, none) =
+            drop_json_members(SETTINGS, &path(&["hooks", "Stop"]), "hooks", &|_, _| true)
+                .expect("nothing to drop");
+        assert_eq!((same.as_str(), none), (SETTINGS, 0));
+        let only = append_json(
+            SETTINGS,
+            &path(&["hooks", "Stop"]),
+            &json!({"hooks": [ours]}),
+        )
+        .expect("appended");
+        let (emptied, _) =
+            drop_json_members(&only, &path(&["hooks", "Stop"]), "hooks", &|_, _| true)
+                .expect("dropped");
+        assert_eq!(emptied, SETTINGS, "the emptied blocks go with their keys");
     }
 
     /// Nothing is written over a file that does not parse, and nothing over a

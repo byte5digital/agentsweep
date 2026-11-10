@@ -22,13 +22,27 @@
 //! `[hooks.state]` entries, which are never an Item and never raise Drift
 //! (spec section 4.6.5).
 //!
+//! **Handler by handler.** Another tool may append its own handler into the
+//! group AgentSweep wrote, so AgentSweep's handler is recognised by the
+//! handler itself, wherever it sits (spec section 7.6). Registering adds a
+//! group only for an event that carries no handler of AgentSweep's under the
+//! Gate's matcher, and pins AgentSweep's handler under the position it
+//! actually has. Removal takes out AgentSweep's handlers and nothing else: a
+//! group goes only when that left it empty, and exactly the records filed
+//! under the keys of AgentSweep's handlers go with them. When a whole group
+//! goes, the groups after it in the same event move up and their pins are
+//! filed again under the new position with the same hash. When AgentSweep's
+//! handler goes out of a shared group, the other tool's handlers behind it
+//! move forward inside that group; their pins stay under the key they were
+//! reviewed at, because AgentSweep never files trust for a handler that is not
+//! its own, and Codex asks the user to review such a handler again.
+//!
 //! Both files go through the compare-and-swap of spec section 5.3 and are
 //! created when absent. The config layer is parsed before the hooks file is
 //! touched, so a layer that does not parse refuses the whole write rather than
-//! leaving an unpinned group behind. Removal takes away exactly the groups
-//! whose only handler is AgentSweep's, and the records filed under their keys,
-//! and nothing else. Every entry written or taken away is named by the id and
-//! hash the enumeration gives its Hook Item, which is what the daemon records.
+//! leaving an unpinned group behind. Every entry written or taken away is
+//! named by the id and hash the enumeration gives its Hook Item, which is what
+//! the daemon records.
 
 use std::collections::BTreeSet;
 use std::io;
@@ -36,8 +50,8 @@ use std::path::{Path, PathBuf};
 
 use agentsweep_core::adapter::Enumeration;
 use agentsweep_core::entry_edit::{
-    EditError, EntryPath, Format as EditFormat, append_json, drop_json, drop_toml, insert_toml,
-    parses, read_entry,
+    EditError, EntryPath, Format as EditFormat, append_json, drop_json_members, drop_toml,
+    insert_toml, parses, read_entry,
 };
 use agentsweep_core::gate_registration::{
     GATE_TIMEOUT_SECONDS, GateCheck, GateCommand, GateEntry, GateError, GateWrite, SurfaceWriter,
@@ -97,33 +111,26 @@ pub fn group(matcher: Option<&str>, command: &GateCommand) -> Value {
     }
 }
 
-/// True when a group holds AgentSweep's handler and nothing else.
-fn is_ours(group: &Value, ours: &Value) -> bool {
-    group
-        .get("hooks")
-        .and_then(Value::as_array)
-        .is_some_and(|handlers| handlers.len() == 1 && handlers[0] == *ours)
+/// True when `handler`, under `event`, is AgentSweep's own: exactly the
+/// handler the Gate writes, under one of the Gate's events, whatever group it
+/// sits in and whatever else that group holds.
+fn is_ours(event: &str, handler: &Value, ours: &Value) -> bool {
+    EVENTS.iter().any(|(name, _)| *name == event) && handler == ours
 }
 
-/// True when a group under `event` holds one command handler that carries
-/// AgentSweep's arguments and timeout, and nothing else, under the matcher
-/// the Gate gives the event, but runs a command line interface at another
-/// path. That is AgentSweep's own entry after the bundle moved, and the
-/// registration replaces it (the owner's decision of 2026-10-14).
-fn is_moved(event: &str, group: &Value, ours: &Value) -> bool {
+/// True when `handler`, in `group` under `event`, is a command handler that
+/// carries AgentSweep's arguments and timeout under the matcher the Gate
+/// gives the event, but runs a command line interface at another path. That
+/// is AgentSweep's own entry after the bundle moved, and the registration
+/// replaces it (the owner's decision of 2026-10-14), whatever else the group
+/// holds.
+fn is_moved(event: &str, group: &Value, handler: &Value, ours: &Value) -> bool {
     let Some((_, matcher)) = EVENTS.iter().find(|(name, _)| *name == event) else {
         return false;
     };
     if group.get("matcher").and_then(Value::as_str) != *matcher {
         return false;
     }
-    let Some([handler]) = group
-        .get("hooks")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-    else {
-        return false;
-    };
     let Some(fields) = handler.as_object() else {
         return false;
     };
@@ -138,7 +145,7 @@ fn is_moved(event: &str, group: &Value, ours: &Value) -> bool {
         && handler.get("command") != ours.get("command")
 }
 
-/// What taking groups out of a hooks file did: the text left, the entries
+/// What taking handlers out of a hooks file did: the text left, the entries
 /// that went with the keys of their pins, and the pins of the groups that
 /// moved up, from their old key to their new one.
 #[derive(Clone, Debug, Default)]
@@ -149,19 +156,24 @@ struct Dropped {
     rekeys: Vec<(String, String)>,
 }
 
-/// Takes every group `picks` chooses out of a hooks file, and works out where
-/// the groups after them in the same event move to.
+/// Takes every handler `picks` chooses, given its event, its group and the
+/// handler itself, out of a hooks file, takes a group away only when that
+/// left it empty, and works out where the handlers that stay move to.
 ///
-/// Codex files a pin under the position of its group, so a group that goes
-/// shifts every later group of its event one place up, and its pin would no
-/// longer match. Each shifted handler's key is named twice, old and new, in
-/// the order the groups are written, so that moving the records one after
-/// the other never writes over a record still to be moved.
-fn drop_groups(
+/// Codex files a pin under the position of the group and of the handler in
+/// it. A group that goes shifts every later group of its event one place up;
+/// the pins of the handlers in them are named twice, old key and new, in the
+/// order the groups are written, so that moving the records one after the
+/// other never writes over a record still to be moved. A handler that moves
+/// forward inside its own group because a handler of AgentSweep's ahead of it
+/// went is not named: its pin stays where Codex filed it, since AgentSweep
+/// never files trust for a handler that is not its own under a position the
+/// user never reviewed it at.
+fn drop_handlers(
     host: &Host,
     path: &Path,
     text: &str,
-    picks: &dyn Fn(&str, &Value) -> bool,
+    picks: &dyn Fn(&str, &Value, &Value) -> bool,
 ) -> Result<Dropped, EditError> {
     let document = hooks_document(host, path, text)?;
     let mut dropped = Dropped {
@@ -172,20 +184,43 @@ fn drop_groups(
         let Some(groups) = groups.as_array() else {
             continue;
         };
-        let gone: Vec<usize> = groups
+        // The positions of the handlers picked, group by group, and the
+        // groups that taking them out leaves empty.
+        let picked: Vec<Vec<usize>> = groups
             .iter()
-            .enumerate()
-            .filter(|(_, group)| picks(&event, group))
-            .map(|(index, _)| index)
+            .map(|group| {
+                group
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .filter(|(_, handler)| picks(&event, group, handler))
+                    .map(|(index, _)| index)
+                    .collect()
+            })
             .collect();
-        if gone.is_empty() {
+        if picked.iter().all(Vec::is_empty) {
             continue;
         }
+        let emptied: Vec<usize> = groups
+            .iter()
+            .enumerate()
+            .filter(|(index, group)| {
+                !picked[*index].is_empty()
+                    && group
+                        .get("hooks")
+                        .and_then(Value::as_array)
+                        .is_some_and(|handlers| handlers.len() == picked[*index].len())
+            })
+            .map(|(index, _)| index)
+            .collect();
         for handler in hooks::handlers(&document, "hooks") {
             if handler.event != event {
                 continue;
             }
-            if gone.contains(&handler.group_index) {
+            let in_group = &picked[handler.group_index];
+            if in_group.contains(&handler.handler_index) {
                 let locator = handler.locator(&document);
                 dropped.keys.push(hooks::state_key(path, &handler));
                 dropped.entries.push(GateEntry {
@@ -196,7 +231,10 @@ fn drop_groups(
                 });
                 continue;
             }
-            let ahead = gone
+            if in_group.iter().any(|index| *index < handler.handler_index) {
+                continue;
+            }
+            let ahead = emptied
                 .iter()
                 .filter(|index| **index < handler.group_index)
                 .count();
@@ -210,10 +248,11 @@ fn drop_groups(
                 hooks::state_key(path, &moved),
             ));
         }
-        (dropped.text, _) = drop_json(
+        (dropped.text, _) = drop_json_members(
             &dropped.text,
             &EntryPath::of(&["hooks", event.as_str()]),
-            &|group| picks(&event, group),
+            "hooks",
+            &|group, handler| picks(&event, group, handler),
         )?;
     }
     Ok(dropped)
@@ -320,9 +359,9 @@ struct Found {
     entry: GateEntry,
 }
 
-/// The Gate's groups in a hooks document: every group whose only handler is
-/// AgentSweep's, under the event and the matcher the Gate gives it. A handler
-/// of AgentSweep's in a group the user shares is not one of them.
+/// The Gate's handlers in a hooks document: every handler that is exactly
+/// AgentSweep's, under the event and the matcher the Gate gives it, whether
+/// its group holds it alone or shares it with another tool's handlers.
 fn ours_in(document: &Document, command: &GateCommand) -> Vec<Found> {
     let ours = handler(command);
     let mut found = Vec::new();
@@ -334,18 +373,12 @@ fn ours_in(document: &Document, command: &GateCommand) -> Vec<Found> {
         }) else {
             continue;
         };
-        let sole = document
-            .value
-            .get("hooks")
-            .and_then(|hooks| hooks.get(*event))
-            .and_then(|groups| groups.get(handler.group_index))
-            .is_some_and(|group| is_ours(group, &ours));
+        if handler.handler != ours {
+            continue;
+        }
         let Some(pin) = hooks::pin_hash(&handler) else {
             continue;
         };
-        if !sole {
-            continue;
-        }
         let locator = handler.locator(document);
         found.push(Found {
             event,
@@ -397,9 +430,9 @@ fn config_parses(host: &Host, path: &Path) -> Result<(), GateError> {
     })
 }
 
-/// Appends a group for every event that carries none of AgentSweep's, pins
-/// every Gate group whose pin is not trusted, and names every entry it wrote
-/// or pinned.
+/// Appends a group for every event that carries no handler of AgentSweep's,
+/// pins every Gate handler whose pin is not trusted under the position it
+/// has, and names every entry it wrote or pinned.
 pub fn register(
     adapter: &Codex,
     host: &Host,
@@ -410,18 +443,18 @@ pub fn register(
     config_parses(host, &files.config)?;
     let ours = handler(command);
 
-    // The groups first: the keys of their pins are counted from where they
-    // end up, which is known only once the hooks file is written. A group of
-    // AgentSweep's under another path goes before anything is appended, and
-    // the user's groups after it move up with their pins.
+    // The handlers first: the keys of their pins are counted from where they
+    // end up, which is known only once the hooks file is written. A handler
+    // of AgentSweep's under another path goes before anything is appended,
+    // and the groups after one it emptied move up with their pins.
     let mut groups: Vec<Found> = Vec::new();
     let mut dropped = Dropped::default();
     let appended = rewrite(host, writer, &files.hooks, &mut |current| {
-        dropped = drop_groups(
+        dropped = drop_handlers(
             host,
             &files.hooks,
             current.unwrap_or("{}"),
-            &|event, group| is_moved(event, group, &ours),
+            &|event, group, handler| is_moved(event, group, handler, &ours),
         )?;
         let mut text = dropped.text.clone();
         let present: BTreeSet<&str> = ours_in(&hooks_document(host, &files.hooks, &text)?, command)
@@ -464,7 +497,7 @@ pub fn register(
                 &record_path(&found.key),
                 &json!({"trusted_hash": found.pin}),
             )?;
-            pinned.push(found.entry.item_id.clone());
+            pinned.push(found.key.clone());
         }
         match pinned.is_empty() && !refiled {
             true => Ok(None),
@@ -475,7 +508,7 @@ pub fn register(
 
     let written = groups
         .into_iter()
-        .filter(|found| appended.contains(&found.event) || pinned.contains(&found.entry.item_id))
+        .filter(|found| appended.contains(&found.event) || pinned.contains(&found.key))
         .map(|found| found.entry)
         .collect();
     Ok(GateWrite {
@@ -485,8 +518,8 @@ pub fn register(
     })
 }
 
-/// Whether every event carries a Gate group whose pin Codex would trust and
-/// no group of AgentSweep's sits under another path, and whether managed
+/// Whether every event carries a Gate handler whose pin Codex would trust and
+/// no handler of AgentSweep's sits under another path, and whether managed
 /// policy or the user's own layer switch hooks off.
 pub fn check(adapter: &Codex, host: &Host, command: &GateCommand) -> GateCheck {
     if let Some(off) = hooks_switched_off(adapter, host) {
@@ -522,7 +555,18 @@ pub fn check(adapter: &Codex, host: &Host, command: &GateCommand) -> GateCheck {
             .get("hooks")
             .and_then(|hooks| hooks.get(event))
             .and_then(Value::as_array)
-            .is_some_and(|groups| groups.iter().any(|group| is_moved(event, group, &ours)))
+            .is_some_and(|groups| {
+                groups.iter().any(|group| {
+                    group
+                        .get("hooks")
+                        .and_then(Value::as_array)
+                        .is_some_and(|handlers| {
+                            handlers
+                                .iter()
+                                .any(|handler| is_moved(event, group, handler, &ours))
+                        })
+                })
+            })
     };
     let missing: Vec<String> = EVENTS
         .iter()
@@ -535,9 +579,11 @@ pub fn check(adapter: &Codex, host: &Host, command: &GateCommand) -> GateCheck {
     }
 }
 
-/// Takes away the groups whose only handler is AgentSweep's and the pin
-/// records filed under their keys, files the pins of the groups after them
-/// again under their new position, and names the entries taken away.
+/// Takes away AgentSweep's handlers and the pin records filed under their
+/// keys, a group only when that left it empty, files the pins of the groups
+/// after an emptied one again under their new position, and names the
+/// entries taken away. Another tool's handler in a shared group stays, and so
+/// does every pin Codex filed for it.
 pub fn remove(
     adapter: &Codex,
     host: &Host,
@@ -548,7 +594,7 @@ pub fn remove(
     config_parses(host, &files.config)?;
     let ours = handler(command);
 
-    // The keys are counted on the hooks file as it was before the groups
+    // The keys are counted on the hooks file as it was before the handlers
     // went, which is where Codex filed the pins.
     let mut dropped = Dropped::default();
     rewrite(host, writer, &files.hooks, &mut |current| {
@@ -556,8 +602,8 @@ pub fn remove(
         let Some(current) = current else {
             return Ok(None);
         };
-        dropped = drop_groups(host, &files.hooks, current, &|_, group| {
-            is_ours(group, &ours)
+        dropped = drop_handlers(host, &files.hooks, current, &|event, _, handler| {
+            is_ours(event, handler, &ours)
         })?;
         match dropped.entries.is_empty() {
             true => Ok(None),
@@ -1157,7 +1203,7 @@ mod check_tests {
 
     use agentsweep_core::adapter::SurfaceAdapter;
     use agentsweep_core::gate_registration::{WriteError, hash_now};
-    use agentsweep_core::item::Activation;
+    use agentsweep_core::item::{Activation, Kind};
 
     /// Where the bundle puts the command line interface, and where an older
     /// copy of the bundle put it. Nothing runs either.
@@ -1325,6 +1371,326 @@ mod check_tests {
         let users_key = format!("{}:pre_tool_use:0:0", machine.hooks().display());
         assert_eq!(after[&users_key]["trusted_hash"], hash.as_str(), "{after}");
         assert_eq!(after.as_object().map(|records| records.len()), Some(3));
+    }
+
+    /// Another tool's handler, the way a tool that installs hooks on every
+    /// event writes one. Nothing runs it.
+    fn theirs() -> Value {
+        json!({
+            "type": "command",
+            "command": "/usr/local/bin/othertool hook codex",
+            "timeout": 10
+        })
+    }
+
+    fn ours() -> Value {
+        handler(&GateCommand::at(CLI))
+    }
+
+    fn write_hooks(machine: &Machine, value: &Value) {
+        let text = format!("{}\n", serde_json::to_string_pretty(value).expect("JSON"));
+        std::fs::write(machine.hooks(), text).expect("the hooks file");
+    }
+
+    fn read_hooks(machine: &Machine) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(machine.hooks()).expect("the hooks file"))
+            .expect("JSON")
+    }
+
+    /// Pins the handler at this position of the hooks file as it is written
+    /// now, under the key and with the hash Codex's own review files it.
+    fn pin_at(machine: &Machine, event: &str, group: usize, at: usize) -> (String, String) {
+        let text = std::fs::read_to_string(machine.hooks()).expect("the hooks file");
+        let document = hooks_document(&machine.host(), &machine.hooks(), &text).expect("JSON");
+        let handler = hooks::handlers(&document, "hooks")
+            .into_iter()
+            .find(|found| {
+                found.event == event && found.group_index == group && found.handler_index == at
+            })
+            .expect("a handler at the position");
+        let key = hooks::state_key(&machine.hooks(), &handler);
+        let hash = hooks::pin_hash(&handler).expect("a command handler");
+        let config = std::fs::read_to_string(machine.config()).unwrap_or_default();
+        let config = insert_toml(&config, &record_path(&key), &json!({"trusted_hash": hash}))
+            .expect("a pin");
+        std::fs::write(machine.config(), config).expect("the config layer");
+        (key, hash)
+    }
+
+    /// How many of AgentSweep's handlers each event of the hooks file holds.
+    fn count_ours(machine: &Machine) -> Vec<(String, usize)> {
+        let value = read_hooks(machine);
+        let ours = ours();
+        EVENTS
+            .iter()
+            .map(|(event, _)| {
+                let count = value["hooks"][*event]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+                    .filter(|found| **found == ours)
+                    .count();
+                (event.to_string(), count)
+            })
+            .collect()
+    }
+
+    fn one_each() -> Vec<(String, usize)> {
+        vec![
+            ("UserPromptSubmit".to_string(), 1),
+            ("PreToolUse".to_string(), 1),
+        ]
+    }
+
+    /// The owner's hand check: another tool appended its handler into
+    /// AgentSweep's `UserPromptSubmit` group and Codex's review pinned it
+    /// under its position. Registering again finds AgentSweep's handler in
+    /// the shared group and writes nothing: no second group, no second pin.
+    #[test]
+    fn a_shared_group_with_agentsweeps_handler_first_gets_no_second_one() {
+        let machine = Machine::new();
+        let adapter = Codex::new();
+        adapter
+            .register_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("registered");
+        let mut value = read_hooks(&machine);
+        value["hooks"]["UserPromptSubmit"][0]["hooks"]
+            .as_array_mut()
+            .expect("handlers")
+            .push(theirs());
+        write_hooks(&machine, &value);
+        pin_at(&machine, "UserPromptSubmit", 0, 1);
+        let hooks_before = std::fs::read_to_string(machine.hooks()).expect("the file");
+        let config_before = std::fs::read_to_string(machine.config()).expect("the layer");
+        assert_eq!(
+            adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+            GateCheck::Registered
+        );
+
+        for _ in 0..2 {
+            let again = adapter
+                .register_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+                .expect("nothing to do");
+            assert!(again.is_empty(), "{again:?}");
+        }
+
+        assert_eq!(
+            std::fs::read_to_string(machine.hooks()).expect("the file"),
+            hooks_before
+        );
+        assert_eq!(
+            std::fs::read_to_string(machine.config()).expect("the layer"),
+            config_before
+        );
+        assert_eq!(count_ours(&machine), one_each());
+    }
+
+    /// AgentSweep's handler behind another tool's in one group is found
+    /// there, pinned under its own position, and never doubled.
+    #[test]
+    fn a_shared_group_with_agentsweeps_handler_second_gets_no_second_one() {
+        let machine = Machine::new();
+        write_hooks(
+            &machine,
+            &json!({"hooks": {"UserPromptSubmit": [{"hooks": [theirs(), ours()]}]}}),
+        );
+        let (their_key, their_hash) = pin_at(&machine, "UserPromptSubmit", 0, 0);
+        let adapter = Codex::new();
+
+        let first = adapter
+            .register_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("registered");
+        let second = adapter
+            .register_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("nothing to do");
+
+        assert_eq!(first.written.len(), 2, "{first:?}");
+        assert!(second.is_empty(), "{second:?}");
+        assert_eq!(count_ours(&machine), one_each());
+        assert_eq!(
+            read_hooks(&machine)["hooks"]["UserPromptSubmit"],
+            json!([{"hooks": [theirs(), ours()]}])
+        );
+        let after = records(&machine.config());
+        let ours_key = format!("{}:user_prompt_submit:0:1", machine.hooks().display());
+        assert!(after.get(&ours_key).is_some(), "{after}");
+        assert_eq!(after[&their_key]["trusted_hash"], their_hash.as_str());
+        assert_eq!(after.as_object().map(|records| records.len()), Some(3));
+        assert_eq!(
+            adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+            GateCheck::Registered
+        );
+    }
+
+    /// Removal takes AgentSweep's handler out of a group it shares, with the
+    /// pin filed under that handler's position, and leaves the other tool's
+    /// handler and the pin Codex filed for it exactly as they were, whichever
+    /// of the two comes first. With AgentSweep's handler first the other
+    /// tool's handler moves to the front of its group; its pin stays under
+    /// the position it was reviewed at, and AgentSweep files no trust for a
+    /// handler that is not its own, so Codex asks the user to review it again.
+    #[test]
+    fn removal_takes_only_agentsweeps_handler_and_pin_out_of_a_shared_group() {
+        for theirs_first in [false, true] {
+            let machine = Machine::new();
+            let handlers = match theirs_first {
+                true => json!([theirs(), ours()]),
+                false => json!([ours(), theirs()]),
+            };
+            write_hooks(
+                &machine,
+                &json!({"hooks": {
+                    "UserPromptSubmit": [{"hooks": handlers}],
+                    "PreToolUse": [{"matcher": PRE_TOOL_USE_MATCHER, "hooks": [ours()]}]
+                }}),
+            );
+            let (theirs_at, ours_at) = match theirs_first {
+                true => (0, 1),
+                false => (1, 0),
+            };
+            let (their_key, their_hash) = pin_at(&machine, "UserPromptSubmit", 0, theirs_at);
+            pin_at(&machine, "UserPromptSubmit", 0, ours_at);
+            pin_at(&machine, "PreToolUse", 0, 0);
+            let adapter = Codex::new();
+            assert_eq!(
+                adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+                GateCheck::Registered
+            );
+
+            let removed = adapter
+                .remove_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+                .expect("removed");
+
+            assert_eq!(removed.removed.len(), 2, "{removed:?}");
+            assert_eq!(removed.pins_rekeyed, 0, "{removed:?}");
+            assert_eq!(
+                read_hooks(&machine),
+                json!({"hooks": {"UserPromptSubmit": [{"hooks": [theirs()]}]}}),
+                "theirs first: {theirs_first}"
+            );
+            assert_eq!(
+                records(&machine.config()),
+                json!({ their_key.clone(): {"trusted_hash": their_hash} }),
+                "theirs first: {theirs_first}"
+            );
+            let enumeration = adapter.enumerate(&machine.host(), &[]);
+            let item = enumeration
+                .items
+                .iter()
+                .find(|item| item.kind == Kind::Hook && item.path == machine.hooks())
+                .expect("the other tool's Hook Item");
+            match theirs_first {
+                true => assert_eq!(item.activation, Activation::Active),
+                false => assert_ne!(item.activation, Activation::Active),
+            }
+            assert_eq!(
+                adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+                GateCheck::Missing(vec![
+                    "UserPromptSubmit".to_string(),
+                    "PreToolUse".to_string()
+                ])
+            );
+            let again = adapter
+                .remove_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+                .expect("nothing to remove");
+            assert!(again.is_empty(), "{again:?}");
+        }
+    }
+
+    /// The files the owner's hand check left: another tool's handler inside
+    /// AgentSweep's first `UserPromptSubmit` group, the second group and pin
+    /// the earlier registration added beside it, and the other tool's own
+    /// `PreToolUse` group after AgentSweep's. Removal leaves nothing of
+    /// AgentSweep's, neither handler nor pin; the other tool's group that
+    /// moved up keeps its trust under its new position, and the pin of the
+    /// handler that moved inside the shared group stays where it was.
+    #[test]
+    fn removal_clears_the_files_the_hand_check_left() {
+        let machine = Machine::new();
+        let their_pre = json!({
+            "type": "command",
+            "command": "/usr/local/bin/othertool hook pre",
+            "timeout": 10
+        });
+        write_hooks(
+            &machine,
+            &json!({"hooks": {
+                "UserPromptSubmit": [{"hooks": [ours(), theirs()]}, {"hooks": [ours()]}],
+                "PreToolUse": [
+                    {"matcher": PRE_TOOL_USE_MATCHER, "hooks": [ours()]},
+                    {"matcher": "", "hooks": [their_pre.clone()]}
+                ]
+            }}),
+        );
+        pin_at(&machine, "UserPromptSubmit", 0, 0);
+        let (their_key, their_hash) = pin_at(&machine, "UserPromptSubmit", 0, 1);
+        pin_at(&machine, "UserPromptSubmit", 1, 0);
+        pin_at(&machine, "PreToolUse", 0, 0);
+        let (pre_key, pre_hash) = pin_at(&machine, "PreToolUse", 1, 0);
+        let adapter = Codex::new();
+
+        let removed = adapter
+            .remove_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("removed");
+
+        assert_eq!(removed.removed.len(), 3, "{removed:?}");
+        assert_eq!(removed.pins_rekeyed, 1);
+        let text = std::fs::read_to_string(machine.hooks()).expect("the file");
+        assert!(!text.contains("gate --agent codex"), "{text}");
+        assert_eq!(
+            read_hooks(&machine),
+            json!({"hooks": {
+                "UserPromptSubmit": [{"hooks": [theirs()]}],
+                "PreToolUse": [{"matcher": "", "hooks": [their_pre]}]
+            }})
+        );
+        let moved_key = pre_key.replace(":pre_tool_use:1:0", ":pre_tool_use:0:0");
+        assert_eq!(
+            records(&machine.config()),
+            json!({
+                their_key: {"trusted_hash": their_hash},
+                moved_key: {"trusted_hash": pre_hash}
+            })
+        );
+    }
+
+    /// AgentSweep's handler under another path inside a shared group is
+    /// replaced by itself: the handler goes with its pin, the group and the
+    /// other tool's handler and pin stay, and the fresh handler comes in a
+    /// group of its own.
+    #[test]
+    fn registering_replaces_a_handler_under_another_path_inside_a_shared_group() {
+        let machine = Machine::new();
+        let old = handler(&GateCommand::at(OLD_CLI));
+        write_hooks(
+            &machine,
+            &json!({"hooks": {"UserPromptSubmit": [{"hooks": [old, theirs()]}]}}),
+        );
+        pin_at(&machine, "UserPromptSubmit", 0, 0);
+        let (their_key, their_hash) = pin_at(&machine, "UserPromptSubmit", 0, 1);
+        let adapter = Codex::new();
+
+        let moved = adapter
+            .register_gate(&machine.host(), &Writer, &GateCommand::at(CLI))
+            .expect("registered under the new path");
+
+        assert_eq!(moved.removed.len(), 1, "{moved:?}");
+        assert_eq!(moved.written.len(), 2, "{moved:?}");
+        assert_eq!(
+            read_hooks(&machine)["hooks"]["UserPromptSubmit"],
+            json!([{"hooks": [theirs()]}, {"hooks": [ours()]}])
+        );
+        assert_eq!(count_ours(&machine), one_each());
+        let after = records(&machine.config());
+        assert_eq!(after[&their_key]["trusted_hash"], their_hash.as_str());
+        let old_key = format!("{}:user_prompt_submit:0:0", machine.hooks().display());
+        assert!(after.get(&old_key).is_none(), "{after}");
+        assert_eq!(after.as_object().map(|records| records.len()), Some(3));
+        assert_eq!(
+            adapter.check_gate(&machine.host(), &GateCommand::at(CLI)),
+            GateCheck::Registered
+        );
     }
 
     /// `enabled = false` on the pin of AgentSweep's own entry is mended like

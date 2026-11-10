@@ -9,16 +9,21 @@
 //! `timeout` of five seconds.
 //!
 //! Each group is appended after the groups already written, so nothing the
-//! user registered moves. A group whose one handler carries AgentSweep's
-//! arguments and timeout under another command line interface path is
-//! AgentSweep's own entry after the bundle moved, and registering takes it
-//! away, so there is exactly one AgentSweep entry per event (the owner's
-//! decision of 2026-10-14). An entry edited in any other way is never
-//! repaired in place: a fresh one is appended and the edited one stays, a
-//! Hook Item whose locator changed. Removal takes away exactly the groups
-//! whose only handler is AgentSweep's, command, arguments and timeout alike,
-//! and nothing else. Every entry written or taken away is named by the id and
-//! hash the enumeration gives its Hook Item, which is what the daemon records.
+//! user registered moves. Another tool may append its own handler into a
+//! group AgentSweep wrote, so AgentSweep's handler is recognised by the
+//! handler itself, wherever it sits (spec section 7.6): a group is appended
+//! only for an event that carries no handler of AgentSweep's under the Gate's
+//! matcher. A handler that carries AgentSweep's arguments and timeout under
+//! another command line interface path is AgentSweep's own entry after the
+//! bundle moved, and registering takes it out, so there is exactly one
+//! AgentSweep entry per event (the owner's decision of 2026-10-14). An entry
+//! edited in any other way is never repaired in place: a fresh one is
+//! appended and the edited one stays, a Hook Item whose locator changed.
+//! Removal takes out exactly AgentSweep's handlers, command, arguments and
+//! timeout alike, and a group only when that left it empty; another tool's
+//! handler in a shared group stays where it is. Every entry written or taken
+//! away is named by the id and hash the enumeration gives its Hook Item,
+//! which is what the daemon records.
 //!
 //! The check also reads what switches hooks off. A managed
 //! `allowManagedHooksOnly` or `disableAllHooks` is managed policy, and
@@ -30,7 +35,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use agentsweep_core::adapter::Enumeration;
-use agentsweep_core::entry_edit::{EditError, EntryPath, append_json, drop_json};
+use agentsweep_core::entry_edit::{EditError, EntryPath, append_json, drop_json_members};
 use agentsweep_core::gate_registration::{
     GATE_TIMEOUT_SECONDS, GateCheck, GateCommand, GateEntry, GateError, GateWrite, SurfaceWriter,
     rewrite,
@@ -71,12 +76,11 @@ pub fn group(matcher: Option<&str>, command: &GateCommand) -> Value {
     }
 }
 
-/// True when a group holds AgentSweep's handler and nothing else.
-fn is_ours(group: &Value, ours: &Value) -> bool {
-    group
-        .get("hooks")
-        .and_then(Value::as_array)
-        .is_some_and(|handlers| handlers.len() == 1 && handlers[0] == *ours)
+/// True when `handler`, under `event`, is AgentSweep's own: exactly the
+/// handler the Gate writes, under one of the Gate's events, whatever group it
+/// sits in and whatever else that group holds.
+fn is_ours(event: &str, handler: &Value, ours: &Value) -> bool {
+    EVENTS.iter().any(|(name, _)| *name == event) && handler == ours
 }
 
 /// The user settings file of the effective config directory.
@@ -98,8 +102,15 @@ fn document(host: &Host, path: &std::path::Path, text: &str) -> Result<Document,
     })
 }
 
+/// True when a handler sits under the matcher the Gate gives its event.
+fn under_gate_matcher(event: &str, matcher: &str) -> bool {
+    EVENTS
+        .iter()
+        .any(|(name, gate)| *name == event && matcher == gate.unwrap_or_default())
+}
+
 /// The events that carry AgentSweep's handler, unchanged, under the matcher
-/// the Gate gives them.
+/// the Gate gives them, whether its group holds it alone or shares it.
 fn registered_events(document: &Document, command: &GateCommand) -> BTreeSet<&'static str> {
     let ours = handler(command);
     let mut found = BTreeSet::new();
@@ -116,25 +127,18 @@ fn registered_events(document: &Document, command: &GateCommand) -> BTreeSet<&'s
     found
 }
 
-/// True when a group under `event` holds one handler that carries
-/// AgentSweep's arguments and timeout, and nothing else, under the matcher
-/// the Gate gives the event, but runs a command line interface at another
-/// path. That is AgentSweep's own entry after the bundle moved, and the
-/// registration replaces it (the owner's decision of 2026-10-14).
-fn is_moved(event: &str, group: &Value, ours: &Value) -> bool {
+/// True when `handler`, in `group` under `event`, carries AgentSweep's
+/// arguments and timeout under the matcher the Gate gives the event, but runs
+/// a command line interface at another path. That is AgentSweep's own entry
+/// after the bundle moved, and the registration replaces it (the owner's
+/// decision of 2026-10-14), whatever else the group holds.
+fn is_moved(event: &str, group: &Value, handler: &Value, ours: &Value) -> bool {
     let Some((_, matcher)) = EVENTS.iter().find(|(name, _)| *name == event) else {
         return false;
     };
     if group.get("matcher").and_then(Value::as_str) != *matcher {
         return false;
     }
-    let Some([handler]) = group
-        .get("hooks")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-    else {
-        return false;
-    };
     let Some(fields) = handler.as_object() else {
         return false;
     };
@@ -146,47 +150,48 @@ fn is_moved(event: &str, group: &Value, ours: &Value) -> bool {
         && handler.get("command") != ours.get("command")
 }
 
-/// The groups of the Gate's events that are AgentSweep's under another path.
+/// The Gate's events that carry a handler of AgentSweep's under another path.
 fn moved_events(document: &Document, command: &GateCommand) -> BTreeSet<&'static str> {
     let ours = handler(command);
+    let carries = |event: &str, group: &Value| {
+        group
+            .get("hooks")
+            .and_then(Value::as_array)
+            .is_some_and(|handlers| {
+                handlers
+                    .iter()
+                    .any(|handler| is_moved(event, group, handler, &ours))
+            })
+    };
     EVENTS
         .iter()
-        .filter(|(event, _)| {
+        .map(|(event, _)| *event)
+        .filter(|event| {
             document
                 .value
                 .get("hooks")
                 .and_then(|hooks| hooks.get(*event))
                 .and_then(Value::as_array)
-                .is_some_and(|groups| groups.iter().any(|group| is_moved(event, group, &ours)))
+                .is_some_and(|groups| groups.iter().any(|group| carries(event, group)))
         })
-        .map(|(event, _)| *event)
         .collect()
 }
 
-/// The Gate entries of a document, in the events given, as Hook Items. A
-/// handler of AgentSweep's in a group the user shares is not one of them.
-fn entries(document: &Document, command: &GateCommand, events: &[&str]) -> Vec<GateEntry> {
-    let ours = handler(command);
-    entries_where(document, events, &|_, group| is_ours(group, &ours))
-}
-
-/// The entries of the groups `picks` takes, in the events given, as Hook
-/// Items.
+/// The handlers `picks` takes, given the event, the group they sit in and
+/// the handler itself, as Hook Items.
 fn entries_where(
     document: &Document,
-    events: &[&str],
-    picks: &dyn Fn(&str, &Value) -> bool,
+    picks: &dyn Fn(&str, &Value, &Value) -> bool,
 ) -> Vec<GateEntry> {
     hooks::handlers(document)
         .into_iter()
-        .filter(|found| events.contains(&found.event.as_str()))
         .filter(|found| {
             document
                 .value
                 .get("hooks")
                 .and_then(|hooks| hooks.get(&found.event))
                 .and_then(|groups| groups.get(found.group_index))
-                .is_some_and(|group| picks(&found.event, group))
+                .is_some_and(|group| picks(&found.event, group, &found.handler))
         })
         .map(|found| {
             let locator = found.locator(document);
@@ -200,9 +205,10 @@ fn entries_where(
         .collect()
 }
 
-/// Takes away every group that is AgentSweep's under another path, appends a
-/// group for every event that does not carry AgentSweep's entry unchanged,
-/// and names the entries written and taken away.
+/// Takes out every handler that is AgentSweep's under another path, a group
+/// only when that left it empty, appends a group for every event that does
+/// not carry AgentSweep's handler unchanged, and names the entries written
+/// and taken away.
 pub fn register(
     adapter: &ClaudeCode,
     host: &Host,
@@ -211,17 +217,18 @@ pub fn register(
 ) -> Result<GateWrite, GateError> {
     let path = settings_file(adapter, host)?;
     let ours = handler(command);
-    let events: Vec<&str> = EVENTS.iter().map(|(event, _)| *event).collect();
     let written = rewrite(host, writer, &path, &mut |current| {
         let mut text = current.unwrap_or("{}").to_string();
-        let before = document(host, &path, &text)?;
-        let removed = entries_where(&before, &events, &|event, group| {
-            is_moved(event, group, &ours)
-        });
-        for event in moved_events(&before, command) {
-            (text, _) = drop_json(&text, &EntryPath::of(&["hooks", event]), &|group| {
-                is_moved(event, group, &ours)
-            })?;
+        let moved =
+            |event: &str, group: &Value, handler: &Value| is_moved(event, group, handler, &ours);
+        let removed = entries_where(&document(host, &path, &text)?, &moved);
+        for (event, _) in EVENTS {
+            (text, _) = drop_json_members(
+                &text,
+                &EntryPath::of(&["hooks", event]),
+                "hooks",
+                &|group, handler| moved(event, group, handler),
+            )?;
         }
         let present = registered_events(&document(host, &path, &text)?, command);
         let mut appended = Vec::new();
@@ -239,7 +246,12 @@ pub fn register(
         if appended.is_empty() && removed.is_empty() {
             return Ok(None);
         }
-        let written = entries(&document(host, &path, &text)?, command, &appended);
+        let written = entries_where(&document(host, &path, &text)?, &|event, group, handler| {
+            let matcher = group.get("matcher").and_then(Value::as_str);
+            appended.contains(&event)
+                && under_gate_matcher(event, matcher.unwrap_or_default())
+                && *handler == ours
+        });
         Ok(Some((
             text,
             GateWrite {
@@ -298,8 +310,9 @@ pub fn check(adapter: &ClaudeCode, host: &Host, command: &GateCommand) -> GateCh
     }
 }
 
-/// Takes away the groups whose only handler is AgentSweep's, and names the
-/// entries taken away.
+/// Takes out AgentSweep's handlers, a group only when that left it empty,
+/// and names the entries taken away. Another tool's handler in a shared group
+/// stays where it is.
 pub fn remove(
     adapter: &ClaudeCode,
     host: &Host,
@@ -308,20 +321,24 @@ pub fn remove(
 ) -> Result<GateWrite, GateError> {
     let path = settings_file(adapter, host)?;
     let ours = handler(command);
-    let events: Vec<&str> = EVENTS.iter().map(|(event, _)| *event).collect();
     let removed = rewrite(host, writer, &path, &mut |current| {
         let Some(current) = current else {
             return Ok(None);
         };
-        let entries = entries(&document(host, &path, current)?, command, &events);
+        let entries = entries_where(&document(host, &path, current)?, &|event, _, handler| {
+            is_ours(event, handler, &ours)
+        });
         if entries.is_empty() {
             return Ok(None);
         }
         let mut text = current.to_string();
-        for event in &events {
-            (text, _) = drop_json(&text, &EntryPath::of(&["hooks", event]), &|group| {
-                is_ours(group, &ours)
-            })?;
+        for (event, _) in EVENTS {
+            (text, _) = drop_json_members(
+                &text,
+                &EntryPath::of(&["hooks", event]),
+                "hooks",
+                &|_, handler| is_ours(event, handler, &ours),
+            )?;
         }
         Ok(Some((text, entries)))
     })?;
@@ -699,10 +716,11 @@ mod tests {
     }
 
     /// A group whose handler differs from AgentSweep's in command, arguments
-    /// or timeout, and a group where AgentSweep's handler sits beside one of
-    /// the user's, are not AgentSweep's to take away.
+    /// or timeout is not AgentSweep's to take away. From a group where
+    /// AgentSweep's handler sits beside one of the user's, only AgentSweep's
+    /// handler goes and the group stays with the user's.
     #[test]
-    fn removing_leaves_every_group_that_is_not_exactly_agentsweeps() {
+    fn removing_leaves_every_handler_that_is_not_exactly_agentsweeps() {
         let home = Home::new();
         let ours = handler(&command());
         let mut other_timeout = ours.clone();
@@ -727,14 +745,141 @@ mod tests {
             .expect("removed")
             .removed;
 
-        assert_eq!(removed.len(), 1);
+        assert_eq!(removed.len(), 2);
         let after = read(&home.settings());
         let mut expected = file.clone();
-        expected["hooks"]["UserPromptSubmit"]
+        let groups = expected["hooks"]["UserPromptSubmit"]
             .as_array_mut()
-            .expect("groups")
-            .pop();
+            .expect("groups");
+        groups.pop();
+        groups[3] = json!({"hooks": [{"type": "command", "command": "./mine.sh"}]});
         assert_eq!(after, expected);
+    }
+
+    /// Another tool's handler, the way a tool that installs hooks on every
+    /// event writes one. Nothing runs it.
+    fn theirs() -> Value {
+        json!({"type": "command", "command": "/usr/local/bin/othertool hook claude", "timeout": 10})
+    }
+
+    /// How many of AgentSweep's handlers each event of the file holds.
+    fn count_ours(value: &Value) -> Vec<(String, usize)> {
+        let ours = handler(&command());
+        EVENTS
+            .iter()
+            .map(|(event, _)| {
+                let count = value["hooks"][*event]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+                    .filter(|found| **found == ours)
+                    .count();
+                (event.to_string(), count)
+            })
+            .collect()
+    }
+
+    /// A group another tool shares with AgentSweep's handler, in either
+    /// order: registering twice adds no second handler of AgentSweep's, and
+    /// removing takes out AgentSweep's handler alone, leaving the other
+    /// tool's handler in its group (spec section 7.6).
+    #[test]
+    fn a_shared_group_gets_no_second_handler_and_keeps_the_other_tools_on_removal() {
+        for theirs_first in [false, true] {
+            let home = Home::new();
+            let adapter = ClaudeCode::new();
+            let ours = handler(&command());
+            let shared = match theirs_first {
+                true => json!([theirs(), ours.clone()]),
+                false => json!([ours.clone(), theirs()]),
+            };
+            let file = json!({"model": "opus", "hooks": {
+                "UserPromptSubmit": [{"hooks": shared}],
+                "PreToolUse": [{"matcher": PRE_TOOL_USE_MATCHER, "hooks": [ours.clone()]}]
+            }});
+            std::fs::write(
+                home.settings(),
+                format!("{}\n", serde_json::to_string_pretty(&file).expect("JSON")),
+            )
+            .expect("a settings file");
+
+            let first = adapter
+                .register_gate(&home.host(), &Writer::plain(), &command())
+                .expect("registered");
+            let second = adapter
+                .register_gate(&home.host(), &Writer::plain(), &command())
+                .expect("nothing to do");
+
+            assert_eq!(first.written.len(), 1, "UserPromptExpansion alone");
+            assert!(second.is_empty(), "{second:?}");
+            let registered = read(&home.settings());
+            assert_eq!(
+                count_ours(&registered),
+                vec![
+                    ("UserPromptSubmit".to_string(), 1),
+                    ("PreToolUse".to_string(), 1),
+                    ("UserPromptExpansion".to_string(), 1),
+                ],
+                "theirs first: {theirs_first}"
+            );
+            assert_eq!(
+                adapter.check_gate(&home.host(), &command()),
+                GateCheck::Registered
+            );
+
+            let removed = adapter
+                .remove_gate(&home.host(), &Writer::plain(), &command())
+                .expect("removed");
+
+            assert_eq!(removed.removed.len(), 3, "{removed:?}");
+            assert_eq!(
+                read(&home.settings()),
+                json!({"model": "opus", "hooks": {"UserPromptSubmit": [{"hooks": [theirs()]}]}}),
+                "theirs first: {theirs_first}"
+            );
+            assert!(
+                adapter
+                    .remove_gate(&home.host(), &Writer::plain(), &command())
+                    .expect("nothing to remove")
+                    .is_empty()
+            );
+        }
+    }
+
+    /// AgentSweep's handler under another path inside a shared group is
+    /// replaced: it goes, the other tool's handler stays in its group, and
+    /// the fresh handler comes in a group of its own.
+    #[test]
+    fn registering_replaces_a_handler_under_another_path_inside_a_shared_group() {
+        let home = Home::new();
+        let old = handler(&GateCommand::at(
+            "/Volumes/Old/AgentSweep.app/Contents/MacOS/agentsweep",
+        ));
+        let file = json!({"hooks": {"UserPromptSubmit": [{"hooks": [old, theirs()]}]}});
+        std::fs::write(
+            home.settings(),
+            serde_json::to_string_pretty(&file).expect("JSON"),
+        )
+        .expect("a settings file");
+        let adapter = ClaudeCode::new();
+
+        let moved = adapter
+            .register_gate(&home.host(), &Writer::plain(), &command())
+            .expect("registered under the new path");
+
+        assert_eq!(moved.removed.len(), 1, "{moved:?}");
+        assert_eq!(moved.written.len(), 3, "{moved:?}");
+        let after = read(&home.settings());
+        assert_eq!(
+            after["hooks"]["UserPromptSubmit"],
+            json!([{"hooks": [theirs()]}, {"hooks": [handler(&command())]}])
+        );
+        assert!(!after.to_string().contains("/Volumes/Old"), "{after}");
+        assert_eq!(
+            adapter.check_gate(&home.host(), &command()),
+            GateCheck::Registered
+        );
     }
 
     /// The default of the trait: an adapter that has not learned a Gate says

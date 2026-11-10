@@ -148,7 +148,7 @@ pub fn press(
                 focus,
             })
         }
-        Button::OpenLoginItems | Button::StartIt => {
+        Button::OpenLoginItems | Button::StartIt | Button::TurnOnProtection => {
             Err("That is not an answer to the records.".to_string())
         }
     }

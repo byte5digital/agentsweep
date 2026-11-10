@@ -240,11 +240,14 @@ impl Link {
 
     /// No daemon answers: "Not watching right now" when the daemon's
     /// registration is enabled, so launchd has a job to start (spec section
-    /// 8.6); Protection off otherwise, a developer run among them.
+    /// 8.6); Protection off otherwise, a developer run among them, with
+    /// **Turn on protection** when nothing is registered at all.
     fn silent(&self, reason: String) -> View {
         match self.services.supervises() && self.services.agent() == ServiceState::Enabled {
             true => View::not_watching(&reason),
-            false => self.off(Off::Unreachable(reason)),
+            false => View::off(
+                &supervision::off_while_silent(&*self.services).unwrap_or(Off::Unreachable(reason)),
+            ),
         }
     }
 
@@ -332,10 +335,10 @@ mod tests {
         assert_eq!(seen[0].banner, Some(crate::banner::Banner::NotWatching));
         assert!(!seen[0].login_items);
 
-        for state in [
-            ServiceState::RequiresApproval,
-            ServiceState::NotRegistered,
-            ServiceState::NotFound,
+        for (state, unregistered) in [
+            (ServiceState::RequiresApproval, false),
+            (ServiceState::NotRegistered, true),
+            (ServiceState::NotFound, true),
         ] {
             let services = Arc::new(Recorded::with(state, ServiceState::Enabled));
             let mut link = Link::new(Socket::At(socket_in(&directory)), services);
@@ -344,13 +347,15 @@ mod tests {
             let seen = views(&updates);
             assert!(
                 matches!(
-                    seen[0].banner,
-                    Some(crate::banner::Banner::ProtectionOff { .. })
+                    &seen[0].banner,
+                    Some(crate::banner::Banner::ProtectionOff { unregistered: u, .. })
+                        if *u == unregistered
                 ),
                 "{state}: {:?}",
                 seen[0].banner
             );
-            assert!(seen[0].login_items, "{state}");
+            // Nothing registered at all offers Turn on protection instead.
+            assert_eq!(seen[0].login_items, !unregistered, "{state}");
         }
         let mut link = Link::new(Socket::At(socket_in(&directory)), Arc::new(Unsupervised));
         let updates = Mutex::new(Vec::new());
@@ -361,10 +366,9 @@ mod tests {
     #[test]
     fn a_daemon_that_does_not_answer_is_protection_off_with_login_items() {
         let directory = tempfile::tempdir().expect("a temporary directory");
-        let services = Arc::new(Recorded::with(
-            ServiceState::NotFound,
-            ServiceState::Enabled,
-        ));
+        // A developer run, which registers nothing and reads the socket
+        // alone.
+        let services = Arc::new(Unsupervised);
         let mut link = Link::new(Socket::At(socket_in(&directory)), services);
         let updates = Mutex::new(Vec::new());
         link.once(&|update| updates.lock().expect("the updates").push(update));

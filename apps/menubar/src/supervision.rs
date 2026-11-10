@@ -185,15 +185,47 @@ pub fn start_and_wait(
     patience: Duration,
 ) -> Result<bool, String> {
     start_daemon(services)?;
+    Ok(wait_for(answers, patience))
+}
+
+/// Asks `answers` every [`START_POLL`] until it says yes or `patience` has
+/// run out. True when it said yes.
+fn wait_for(answers: impl Fn() -> bool, patience: Duration) -> bool {
     let until = Instant::now() + patience;
     loop {
         if answers() {
-            return Ok(true);
+            return true;
         }
         if Instant::now() >= until {
-            return Ok(false);
+            return false;
         }
         std::thread::sleep(START_POLL);
+    }
+}
+
+/// **Turn on protection** on Protection off when nothing is registered at
+/// all (spec section 8.6): registers the daemon and the login item as
+/// onboarding screen 5 does ([`register`]), then waits for the daemon as
+/// **Start it** does, so the button shows that it is starting until then.
+/// True when the daemon answered. A registration that failed, or one that
+/// now waits for approval in Login Items, is not waited for.
+pub fn turn_on_and_wait(
+    services: &dyn Services,
+    answers: impl Fn() -> bool,
+    patience: Duration,
+) -> Result<bool, String> {
+    if !services.supervises() {
+        return Err("a developer run registers nothing".to_string());
+    }
+    let launched = register(services);
+    match services.agent() {
+        ServiceState::Enabled => Ok(wait_for(answers, patience)),
+        ServiceState::RequiresApproval => Err("allow AgentSweep in Login Items".to_string()),
+        ServiceState::NotRegistered | ServiceState::NotFound => Err(launched
+            .failures
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "the background item is not registered".to_string())),
     }
 }
 
@@ -321,6 +353,16 @@ pub fn off_by_registration(agent: ServiceState) -> Option<Off> {
         ServiceState::RequiresApproval => Some(Off::NeedsApproval),
         ServiceState::NotRegistered => Some(Off::NotRegistered),
         ServiceState::Enabled | ServiceState::NotFound => None,
+    }
+}
+
+/// Why Protection is off while no daemon answers, when the registrations
+/// say: a supervising app whose daemon is not registered at all, "not found"
+/// among them, offers **Turn on protection** (spec section 8.6).
+pub fn off_while_silent(services: &dyn Services) -> Option<Off> {
+    match services.supervises() && unregistered(services.agent()) {
+        true => Some(Off::NotRegistered),
+        false => off_by_registration(services.agent()),
     }
 }
 
@@ -781,6 +823,91 @@ pub(crate) mod tests {
             assert!(services.calls().is_empty(), "{state}");
         }
         assert!(start_daemon(&Unsupervised).is_err());
+    }
+
+    /// Turn on protection registers the daemon and the login item, as
+    /// onboarding screen 5 does, and is answered once the daemon answers.
+    #[test]
+    fn turn_on_protection_registers_both_and_waits_for_the_daemon() {
+        for state in [ServiceState::NotRegistered, ServiceState::NotFound] {
+            let services = Recorded::with(state, state);
+            let asked = std::sync::atomic::AtomicUsize::new(0);
+            let answers = || asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1;
+            assert_eq!(
+                turn_on_and_wait(&services, answers, Duration::from_secs(30)),
+                Ok(true),
+                "{state}"
+            );
+            assert_eq!(
+                services.calls(),
+                vec!["register agent", "register login item"],
+                "{state}"
+            );
+            assert_eq!(services.agent(), ServiceState::Enabled);
+            assert_eq!(services.login_item(), ServiceState::Enabled);
+        }
+
+        let silent = Recorded::with(ServiceState::NotRegistered, ServiceState::NotRegistered);
+        assert_eq!(
+            turn_on_and_wait(&silent, || false, Duration::from_millis(300)),
+            Ok(false)
+        );
+    }
+
+    /// A registration that fails is reported at once and not waited for, and
+    /// a developer run registers nothing.
+    #[test]
+    fn turn_on_protection_reports_a_refused_registration() {
+        let mut services = Recorded::with(ServiceState::NotRegistered, ServiceState::NotRegistered);
+        services.refuse = true;
+        let failed = turn_on_and_wait(&services, || panic!("not asked"), Duration::from_secs(1));
+        assert_eq!(
+            failed,
+            Err("the daemon could not be registered: refused".to_string())
+        );
+        assert!(
+            turn_on_and_wait(
+                &Unsupervised,
+                || panic!("not asked"),
+                Duration::from_secs(1)
+            )
+            .is_err()
+        );
+    }
+
+    /// A registration that now waits for approval says where to give it,
+    /// without waiting for a daemon that cannot start yet.
+    #[test]
+    fn turn_on_protection_points_to_login_items_when_approval_is_needed() {
+        let services = Recorded::with(
+            ServiceState::RequiresApproval,
+            ServiceState::RequiresApproval,
+        );
+        assert_eq!(
+            turn_on_and_wait(&services, || panic!("not asked"), Duration::from_secs(1)),
+            Err("allow AgentSweep in Login Items".to_string())
+        );
+        assert!(services.calls().is_empty(), "approval is the user's");
+    }
+
+    /// With no daemon answering, a supervising app whose daemon is not
+    /// registered, "not found" among it, is Protection off for not being
+    /// registered; a developer run is left to the socket.
+    #[test]
+    fn nothing_registered_is_told_apart_while_no_daemon_answers() {
+        for state in [ServiceState::NotRegistered, ServiceState::NotFound] {
+            let services = Recorded::with(state, ServiceState::Enabled);
+            assert_eq!(
+                off_while_silent(&services),
+                Some(Off::NotRegistered),
+                "{state}"
+            );
+        }
+        let waiting = Recorded::with(ServiceState::RequiresApproval, ServiceState::Enabled);
+        assert_eq!(off_while_silent(&waiting), Some(Off::NeedsApproval));
+        let enabled = Recorded::with(ServiceState::Enabled, ServiceState::Enabled);
+        assert_eq!(off_while_silent(&enabled), None);
+        assert_eq!(off_while_silent(&Unsupervised), None);
     }
 
     fn job(version: &str, last_exit: Option<i32>) -> Job {

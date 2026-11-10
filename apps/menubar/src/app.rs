@@ -13,6 +13,10 @@
 //! - `start_daemon`: **Start it** on "Not watching right now", which asks
 //!   launchd to start the registered daemon job and is answered once the
 //!   daemon answers ([`supervision::start_and_wait`]).
+//! - `turn_on_protection`: **Turn on protection** on Protection off when
+//!   nothing is registered at all, which registers the daemon and the login
+//!   item as onboarding screen 5 does and is answered once the daemon
+//!   answers ([`supervision::turn_on_and_wait`]).
 //! - `start_fresh_record`, `look_at_records`, `show_what_changed`,
 //!   `scan_again_trusting_nothing`: the integrity banners' buttons, each the
 //!   daemon's matching request; the window then opens on Activity at the
@@ -81,8 +85,8 @@
 //!   ([`crate::first_check`]).
 //!
 //! Every command that asks the daemon to do something (the actions, Scan
-//! now, Check now, Start it, the integrity buttons and "I agree, turn it
-//! on") takes the `press` the window named it with, and is carried out once
+//! now, Check now, Start it, Turn on protection, the integrity buttons and
+//! "I agree, turn it on") takes the `press` the window named it with, and is carried out once
 //! per press however often the webview delivers it ([`crate::presses`]).
 //!
 //! Events the frontend may listen to:
@@ -333,7 +337,8 @@ struct Shell {
     presses: Arc<ai_check::Presses>,
     /// The last presses of the action buttons, each carried out once.
     actions: Arc<Presses<Result<Value, String>>>,
-    /// The last presses of Scan now, Start it and the integrity buttons.
+    /// The last presses of Scan now, Start it, Turn on protection and the
+    /// integrity buttons.
     lines: Arc<Presses<Result<String, String>>>,
     /// The last presses of Check now.
     checks: Arc<Presses<Result<bool, String>>>,
@@ -385,6 +390,27 @@ async fn start_daemon(app: AppHandle, press: String) -> Result<String, String> {
             supervision::start_and_wait(&*services, answers, crate::link::REGISTERED_AGAIN)
                 .map(|answered| supervision::started_line(answered).to_string())
                 .map_err(|why| format!("AgentSweep could not be started: {why}"))
+        })
+    })
+    .await
+}
+
+/// **Turn on protection**: registers the daemon and the login item again, as
+/// onboarding screen 5 does, and answers once the daemon answers, so the
+/// banner says it is starting until then. The link sees the daemon on its
+/// own.
+#[tauri::command]
+async fn turn_on_protection(app: AppHandle, press: String) -> Result<String, String> {
+    let shell = app.state::<Shell>();
+    let services = Arc::clone(&shell.services);
+    let asking = Arc::clone(&shell.asking);
+    let lines = Arc::clone(&shell.lines);
+    off_main(move || {
+        lines.once(&press, || {
+            let answers = || asking.status().is_ok();
+            supervision::turn_on_and_wait(&*services, answers, crate::link::REGISTERED_AGAIN)
+                .map(|answered| supervision::started_line(answered).to_string())
+                .map_err(|why| format!("Protection could not be turned on: {why}"))
         })
     })
     .await
@@ -1800,6 +1826,7 @@ pub fn run(start: Start) {
             popover,
             open_login_items,
             start_daemon,
+            turn_on_protection,
             start_fresh_record,
             look_at_records,
             show_what_changed,

@@ -130,20 +130,27 @@ impl View {
     }
 
     /// The view when Protection is off. The sentence is the one Health gives
-    /// Protection off, and the way back is always Login Items: approval
-    /// missing, approval revoked or a daemon that does not answer (spec
-    /// section 8.6).
+    /// Protection off, and the way back is Login Items for approval missing,
+    /// approval revoked or a daemon that does not answer, and **Turn on
+    /// protection** when nothing is registered at all (spec section 8.6).
     pub fn off(why: &Off) -> View {
         let health = Health::unreachable(&why.reason());
+        let unregistered = *why == Off::NotRegistered;
         View {
             orb: Orb::Off,
             sentence: health.headline(),
             developer_sentence: None,
             last_check: None,
             protection_off: true,
-            login_items: true,
+            login_items: !unregistered,
             detail: why.reason(),
-            banner: banner::choose(&health, &Daemon::Off),
+            banner: banner::choose(
+                &health,
+                match unregistered {
+                    true => &Daemon::Unregistered,
+                    false => &Daemon::Off,
+                },
+            ),
         }
     }
 
@@ -337,13 +344,12 @@ mod tests {
         assert_eq!(view.detail, "1 Finding is open.");
     }
 
-    /// Approval missing, not registered, a daemon that does not answer: each
-    /// is Protection is off, with the button to Login Items.
+    /// Approval missing, a daemon that does not answer or refuses: each is
+    /// Protection is off, with the button to Login Items.
     #[test]
-    fn protection_off_always_offers_login_items() {
+    fn protection_off_offers_login_items_while_something_is_registered() {
         for why in [
             Off::NeedsApproval,
-            Off::NotRegistered,
             Off::Unreachable("no daemon answered".to_string()),
             Off::Refused("AgentSweep answers only its own signed programs".to_string()),
         ] {
@@ -356,6 +362,27 @@ mod tests {
         }
         assert!(View::unknown().protection_off);
         assert!(View::of(&Health::unreachable("gone")).protection_off);
+    }
+
+    /// Nothing registered at all is Protection is off with Turn on
+    /// protection, which registers again, and no Login Items button.
+    #[test]
+    fn nothing_registered_offers_turn_on_protection_and_no_login_items() {
+        let view = View::off(&Off::NotRegistered);
+        assert_eq!(view.orb, Orb::Off);
+        assert_eq!(view.sentence, "Protection is off.");
+        assert!(view.protection_off);
+        assert!(!view.login_items);
+        for posture in [Posture::Simple, Posture::Developer] {
+            let value = view.to_value(posture);
+            assert_eq!(value["banner"]["title"], "Protection is off", "{value}");
+            assert_eq!(value["loginItems"], false, "{value}");
+            let buttons = value["banner"]["buttons"].as_array().expect("buttons");
+            assert_eq!(buttons.len(), 1, "{value}");
+            assert_eq!(buttons[0]["label"], "Turn on protection");
+            assert_eq!(buttons[0]["command"], "turn_on_protection");
+            assert_eq!(buttons[0]["working"], crate::banner::STARTING);
+        }
     }
 
     /// The popover shows an integrity state as one line pointing to the

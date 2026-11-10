@@ -254,7 +254,8 @@ fn the_engine_state_starts_at_every_default() {
 
 /// The engine state names whether Ollama runs at the configured loopback
 /// address and every model it has pulled, a model under 4B marked too small
-/// for the suggestion. Only that address is asked, and only to read.
+/// for the suggestion. Only that address is asked, and only to read. A 4B
+/// model present leaves the engine off until the user confirms Ollama.
 #[test]
 fn the_engine_state_names_ollama_s_presence_and_its_models() {
     use fixture_ollama::{Behaviour, FixtureOllama, closed_port, tags};
@@ -291,6 +292,11 @@ fn the_engine_state_names_ollama_s_presence_and_its_models() {
             ..EngineChange::default()
         })
         .expect("a loopback address is taken");
+    assert_eq!(
+        state.engine,
+        JudgementEngine::Off,
+        "a 4B model is offered, and the engine waits for its confirmation"
+    );
     let Some(OllamaPresence::Running { version, models }) = state.ollama else {
         panic!("Ollama is running: {:?}", state.ollama);
     };
@@ -338,7 +344,8 @@ fn the_engine_state_names_ollama_s_presence_and_its_models() {
 /// The engine state names whether Apple's on-device model is available, and
 /// the reason when it is not, as the helper the daemon was pointed at answers
 /// its check. Here the helper is a fake: a script answering canned JSON. Each
-/// check spawns it once, and it is gone when the answer arrives.
+/// check spawns it once, and it is gone when the answer arrives. Apple being
+/// available never switches the engine on: a fresh install stays off.
 #[cfg(unix)]
 #[test]
 fn the_engine_state_names_apple_s_availability_and_its_reason() {
@@ -390,6 +397,11 @@ fn the_engine_state_names_apple_s_availability_and_its_reason() {
             model_version: "26.6.2 (25G83)".to_string(),
             context_size: Some(4096),
         })
+    );
+    assert_eq!(
+        state.engine,
+        JudgementEngine::Off,
+        "Apple available on a fresh install still leaves the engine off"
     );
 
     let pids: Vec<String> = std::fs::read_to_string(sandbox.root.join("pids"))

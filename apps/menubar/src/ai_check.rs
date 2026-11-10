@@ -713,6 +713,30 @@ mod tests {
         assert_eq!(cards[0]["selected"], true);
     }
 
+    /// A fresh install shows Off selected, whatever Apple says, and Apple
+    /// on-device still choosable in both Postures (spec section 4.4 as
+    /// amended 2026-11-10: offered, never preselected).
+    #[test]
+    fn a_fresh_install_shows_off_and_apple_still_choosable() {
+        let mut answer = state(JudgementEngine::Off);
+        answer.apple = Some(AppleAvailability::Available {
+            model_version: "26.6.2 (25G83)".to_string(),
+            context_size: Some(4096),
+        });
+        for posture in [Posture::Simple, Posture::Developer] {
+            let cards = cards(&answer, posture, true, &within);
+            let selected: Vec<_> = cards
+                .iter()
+                .filter(|card| card["selected"] == true)
+                .map(|card| card["engine"].clone())
+                .collect();
+            assert_eq!(selected, ["off"]);
+            let apple = by_engine(&cards, "apple");
+            assert_eq!(apple["selected"], false);
+            assert_eq!(apple["enabled"], true);
+        }
+    }
+
     #[test]
     fn apple_unavailable_says_why_and_the_developer_sees_the_reason() {
         let mut answer = state(JudgementEngine::Off);

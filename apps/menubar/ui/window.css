@@ -503,6 +503,10 @@ dialog {
   margin-left: 6px;
 }
 
+#activity-older {
+  margin-top: 8px;
+}
+
 /* The Settings pane (spec section 8.10): tabs, one block per setting. The
    tabs stay in sight while a tab scrolls, over the pane's top padding. */
 

@@ -97,8 +97,10 @@
 //!
 //! Notifications (spec sections 6.7 and 8.7) are raised here through the
 //! notification plugin, on every launch and on every stream event that may
-//! carry one ([`crate::notifications`]). Launched with the windowless
-//! argument, the app starts into the menu bar with no window
+//! carry one ([`crate::notifications`]). Launched by the user, from Finder
+//! or anywhere else, the app opens the Findings window, and so does a reopen
+//! of the running app; launched by its login item or with the windowless
+//! argument, it starts into the menu bar with no window
 //! ([`crate::window::Start`]).
 
 use std::sync::{Arc, Mutex};
@@ -147,7 +149,7 @@ use crate::uninstall;
 use crate::updater::{
     self, Look, PluginInstaller, PluginSource, Preferences, Ready, Remembered, Updates,
 };
-use crate::window::{Presence, Start, presence};
+use crate::window::{self, Presence, Reopened, Start, presence};
 use crate::wording;
 
 /// The tray icon's id.
@@ -257,6 +259,31 @@ fn observe_activation(app: &AppHandle) {
 
 #[cfg(not(target_os = "macos"))]
 fn observe_activation(_app: &AppHandle) {}
+
+/// macOS asked the running app to reopen: a double-click on it in Finder, a
+/// click on its Dock icon, or a launch of it while it runs. That opens the
+/// Findings window, on Needs your decision after a notification (spec
+/// section 8.1), or brings back the onboarding wizard while it is not done.
+fn reopened(app: &AppHandle) {
+    let wizard_held = app
+        .state::<Shell>()
+        .onboarding
+        .lock()
+        .expect("the wizard is not poisoned")
+        .is_some();
+    match window::reopened(wizard_held) {
+        Reopened::Wizard => show_onboarding(app),
+        Reopened::Window => {
+            let pane = app
+                .try_state::<Notifications>()
+                .and_then(|notifications| notifications.activated(Activation::Reopen));
+            show_window(app);
+            if let Some(pane) = pane {
+                let _ = app.emit(PANE_EVENT, pane.id());
+            }
+        }
+    }
+}
 
 /// What the shell holds while it runs.
 struct Shell {
@@ -1624,6 +1651,9 @@ pub fn run(start: Start) {
             onboarding_look_there
         ])
         .setup(move |app| {
+            // Whether the login item launched the app is known only now,
+            // while the app finishes launching.
+            let start = start.at_login(window::launched_as_login_item());
             // Menu bar only while idle: no Dock icon and no Cmd-Tab entry
             // (spec section 8.1).
             // A windowless start, by the daemon, is menu bar only too.
@@ -1685,12 +1715,6 @@ pub fn run(start: Start) {
                         present(&handle, presence(false));
                     }
                 });
-                if cfg!(debug_assertions)
-                    && start == Start::Ordinary
-                    && std::env::var_os("AGENTSWEEP_DEV_SHOW_WINDOW").is_some()
-                {
-                    show_window(app.handle());
-                }
             }
 
             // Closing the wizard hides it; it shows again on the next launch,
@@ -1724,8 +1748,13 @@ pub fn run(start: Start) {
                 .spawn(move || {
                     // A launch where the daemon is not registered shows the
                     // onboarding wizard and registers nothing; its screen 2
-                    // is the Inventory, which the app runs itself.
-                    if start.shows_onboarding(supervision::shows_onboarding(&*services)) {
+                    // is the Inventory, which the app runs itself. Any other
+                    // launch by the user opens the window (spec section 8.1).
+                    let unregistered = supervision::shows_onboarding(&*services);
+                    if start.opens_window(unregistered) {
+                        show_window(&handle);
+                    }
+                    if start.shows_onboarding(unregistered) {
                         let inventory = Inventory::of_this_mac().unwrap_or_default();
                         *handle
                             .state::<Shell>()
@@ -1779,10 +1808,10 @@ pub fn run(start: Start) {
             return;
         }
         // macOS asks a running app to reopen when it is launched again or
-        // clicked in Finder; after a notification that opens the window.
+        // double-clicked in Finder; that opens the window.
         #[cfg(target_os = "macos")]
         if let RunEvent::Reopen { .. } = event {
-            activated(app, Activation::Reopen);
+            reopened(app);
         }
         #[cfg(not(target_os = "macos"))]
         let _ = (app, event);

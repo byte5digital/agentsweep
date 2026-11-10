@@ -122,3 +122,30 @@ fn a_title_in_the_list_is_never_cut() {
     assert!(row.contains("card.simple.place"), "{row}");
     assert!(row.contains("\"place\""), "{row}");
 }
+
+/// The Posture radios, the Background toggles and the Gate switch are
+/// filled through `keep`, so a stream event's render keeps the control the
+/// user is clicking; an answer builds them again from the view.
+#[test]
+fn the_settings_controls_are_kept_through_a_render() {
+    let script = ui("window.js");
+    let settings = function(&script, "renderSettings");
+    assert!(settings.contains("keep(detail.querySelector(\".choices\")"));
+    assert!(settings.contains("keep(background.querySelector(\".toggles\")"));
+    for replaced in [
+        "querySelector(\".choices\").replaceChildren",
+        "querySelector(\".toggles\").replaceChildren",
+    ] {
+        assert!(!settings.contains(replaced), "{replaced}");
+    }
+    let gate = function(&script, "renderGateSwitch");
+    assert!(gate.contains("keep($(\"settings-gate\")"));
+    assert!(!gate.contains("replaceChildren"));
+    // An answer, whatever it was, builds the controls again from the view,
+    // so a change the daemon refused does not stay ticked.
+    let change = function(&script, "changeSetting");
+    assert!(change.contains("settingsAnswered += 1;"), "{change}");
+    assert!(settings.contains("settingsAnswered"));
+    assert!(gate.contains("JSON.stringify([gate, settingsAnswered])"));
+    assert!(gate.contains("settingsAnswered += 1;"));
+}

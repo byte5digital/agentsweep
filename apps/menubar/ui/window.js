@@ -941,12 +941,19 @@ function settingsAnswer(text) {
   $("settings-answer").textContent = text;
 }
 
+// How many settings changes the daemon answered. The radios, toggles and
+// the Gate switch keep their nodes while it stays the same (keep.js), so a
+// render cannot swallow a click on one; an answer builds them again from the
+// view, so a change the daemon refused does not stay ticked.
+let settingsAnswered = 0;
+
 async function changeSetting(change) {
   try {
     settingsAnswer(await invoke("change_settings", { change }));
   } catch (why) {
     settingsAnswer(String(why));
   }
+  settingsAnswered += 1;
   if (view) {
     render(view);
   }
@@ -960,8 +967,9 @@ function renderSettings(settings) {
 
   const detail = $("settings-detail");
   detail.querySelector("h3").textContent = settings.detail.title;
-  detail.querySelector(".choices").replaceChildren(
-    ...settings.detail.choices.map((choice) => {
+  const choices = JSON.stringify([settings.detail.choices, disabled, settingsAnswered]);
+  keep(detail.querySelector(".choices"), choices, () =>
+    settings.detail.choices.map((choice) => {
       const label = el("label", "choice");
       const input = el("input");
       input.type = "radio";
@@ -977,8 +985,9 @@ function renderSettings(settings) {
   const background = $("settings-background");
   background.querySelector("h3").textContent = settings.background.title;
   background.querySelector(".disclosure").textContent = settings.background.disclosure;
-  background.querySelector(".toggles").replaceChildren(
-    ...settings.background.toggles.map((toggle) => {
+  const toggles = JSON.stringify([settings.background.toggles, disabled, settingsAnswered]);
+  keep(background.querySelector(".toggles"), toggles, () =>
+    settings.background.toggles.map((toggle) => {
       const label = el("label", "toggle");
       const input = el("input");
       input.type = "checkbox";
@@ -1126,30 +1135,35 @@ $("settings-not-protected")
   .addEventListener("click", () => invoke("open_not_protected").catch((why) => settingsAnswer(String(why))));
 
 // The Gate switch in Background (spec section 8.10). The daemon writes and
-// removes the entries; the switch shows where the daemon says it stands.
+// removes the entries; the switch shows where the daemon says it stands. It
+// keeps its node while that stays the same, and waits greyed out, as the
+// user left it, until the daemon answered.
 function renderGateSwitch(gate) {
-  const label = el("label", "toggle");
-  const input = el("input");
-  input.type = "checkbox";
-  input.checked = gate.on;
-  input.disabled = !gate.available;
-  input.addEventListener("change", async () => {
-    input.disabled = true;
-    try {
-      settingsAnswer(await invoke("switch_gate", { on: input.checked }));
-    } catch (why) {
-      settingsAnswer(String(why));
+  keep($("settings-gate"), JSON.stringify([gate, settingsAnswered]), () => {
+    const label = el("label", "toggle");
+    const input = el("input");
+    input.type = "checkbox";
+    input.checked = gate.on;
+    input.disabled = !gate.available;
+    input.addEventListener("change", async () => {
+      input.disabled = true;
+      try {
+        settingsAnswer(await invoke("switch_gate", { on: input.checked }));
+      } catch (why) {
+        settingsAnswer(String(why));
+      }
+      settingsAnswered += 1;
+      if (view) {
+        render(view);
+      }
+    });
+    label.append(input, el("span", "", gate.label));
+    const parts = [label, el("p", "muted", gate.subtitle)];
+    for (const location of gate.locations ?? []) {
+      parts.push(el("p", "id", location));
     }
-    if (view) {
-      render(view);
-    }
+    return parts;
   });
-  label.append(input, el("span", "", gate.label));
-  const parts = [label, el("p", "muted", gate.subtitle)];
-  for (const location of gate.locations ?? []) {
-    parts.push(el("p", "id", location));
-  }
-  $("settings-gate").replaceChildren(...parts);
   $("settings-gate").hidden = false;
 }
 

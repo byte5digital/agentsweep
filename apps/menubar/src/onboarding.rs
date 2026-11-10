@@ -11,8 +11,8 @@
 //! [`Wizard`] is the pure model: which screen is showing, Back and Next, and
 //! the answers. The shell renders its view and carries out the steps it
 //! cannot take itself: registering the daemon and the login item (through
-//! the [`Services`] seam), asking for notification permission, sending
-//! check-now, and asking the daemon for the status screen 6 reports.
+//! the [`Services`] seam), asking for notification permission and sending
+//! check-now.
 //!
 //! - Screen 4, the AI check, says in one line what the AI checks and
 //!   preselects Off. Apple on-device is offered; Ollama is offered when a
@@ -25,26 +25,23 @@
 //!   update toggles, and, only when the Inventory found a registered project
 //!   in a protected location class, offers the one click that sends
 //!   check-now so the operating system's prompt appears in front of the
-//!   user. Leaving it registers the daemon and the login item once and holds
-//!   every answer for the daemon.
-//! - Screen 6, First check finished, waits for the first Full Scan after the
-//!   registration and reports its Item count, that everything present was
-//!   recorded as the Baseline, what was stopped, and the result.
+//!   user. Leaving it registers the daemon and the login item once, holds
+//!   every answer for the daemon and closes the wizard.
+//! - Screen 6 of spec section 8.3 is no screen: the first Scan runs in the
+//!   background, and [`crate::first_check`] says when its result is ready.
 
 use agentsweep_core::apple::AppleAvailability;
 use agentsweep_core::envelope::Timestamp;
-use agentsweep_core::finding::FindingState;
 use agentsweep_core::judgement::{EngineSuggestion, suggested_engine};
 use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::location::LocationClass;
 use agentsweep_core::ollama::OllamaPresence;
-use agentsweep_core::scan_pass::ScanKind;
 use agentsweep_core::settings::{
     CloudCaps, DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_ADDRESS, JudgementEngine, Posture,
 };
 use agentsweep_ipc::ClientError;
 use agentsweep_ipc::engine::{CloudUse, EngineChange, EngineState};
-use agentsweep_ipc::protocol::{SettingsChange, SettingsState, StateEvent, Status};
+use agentsweep_ipc::protocol::{SettingsChange, SettingsState};
 use serde_json::{Value, json};
 
 use crate::ai_check::{self, Bar};
@@ -65,21 +62,18 @@ pub enum Screen {
     /// Screen 4: the AI check.
     AiCheck,
     /// Screen 5: Keep watching in the background: leaving it registers the
-    /// daemon and the login item.
+    /// daemon and the login item and closes the wizard.
     Background,
-    /// Screen 6: First check finished.
-    FirstCheck,
 }
 
 impl Screen {
     /// The screens in the order the wizard shows them.
-    pub const ALL: [Screen; 6] = [
+    pub const ALL: [Screen; 5] = [
         Screen::Welcome,
         Screen::Found,
         Screen::Detail,
         Screen::AiCheck,
         Screen::Background,
-        Screen::FirstCheck,
     ];
 
     /// The spelling the page switches on.
@@ -90,7 +84,6 @@ impl Screen {
             Screen::Detail => "detail",
             Screen::AiCheck => "ai",
             Screen::Background => "background",
-            Screen::FirstCheck => "first",
         }
     }
 
@@ -110,14 +103,10 @@ pub enum Step {
     /// Ollama is chosen on screen 4 but not yet confirmed: show the one
     /// confirmation, and stay.
     ConfirmOllama,
-    /// Leaving screen 5: register the daemon and the login item, ask for
-    /// notification permission, and hold the answers for the daemon
-    /// ([`Wizard::leave_background`]).
+    /// Leaving screen 5: register the daemon and the login item, hold the
+    /// answers for the daemon, close the wizard and ask for notification
+    /// permission ([`Wizard::leave_background`]).
     Register,
-    /// Screen 6 still waits for the first check; stay.
-    Waiting,
-    /// Screen 6 is done: close the wizard.
-    Done,
 }
 
 /// Screen 1's heading: the setup.
@@ -171,21 +160,6 @@ pub const TURN_ON: &str = "Turn on protection";
 pub const LOOK_THERE: &str = "Give permission";
 /// What screen 5 says once that button was pressed.
 pub const LOOK_THERE_SENT: &str = "When macOS asks, click Allow.";
-
-/// Screen 6's heading.
-pub const FIRST_CHECK_TITLE: &str = "First check finished";
-/// Screen 6's heading while it waits.
-pub const FIRST_CHECK_WAITING_TITLE: &str = "Checking for the first time";
-/// What screen 6 says while it waits.
-pub const FIRST_CHECK_WAITING: &str =
-    "AgentSweep is looking at everything your agents use. This can take a minute.";
-/// The Baseline sentence of screen 6 (spec section 8.3).
-pub const BASELINE_LINE: &str = "Everything present was recorded as the Baseline, so AgentSweep \
-     notices when something changes.";
-/// What screen 6 says when nothing was stopped.
-pub const NOTHING_STOPPED: &str = "Nothing was stopped.";
-/// The button that closes the wizard.
-pub const DONE: &str = "Done";
 
 /// The sentence of screen 5 naming where the protected projects are, and
 /// that macOS will ask once. Documents reads as spec section 8.3 words it.
@@ -281,15 +255,15 @@ pub fn unanswered() -> EngineState {
     }
 }
 
-/// What screen 6 reports once the first check finished.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Checked {
-    /// How many Items the first Full Scan enumerated.
-    pub items: usize,
-    /// The Items that were stopped, as the Simple Posture names them.
-    pub stopped: Vec<String>,
-    /// The result: the Health's one sentence in the Posture chosen.
-    pub result: String,
+/// What leaving screen 5 came to.
+#[derive(Debug)]
+pub struct Left {
+    /// The registration, when this call made it; none when the
+    /// protected-location button had made it already.
+    pub launched: Option<Launched>,
+    /// When the daemon was registered: the first check counts only a Full
+    /// Scan that finished after it.
+    pub since: Timestamp,
 }
 
 /// The answers the daemon is handed once it answers.
@@ -313,7 +287,6 @@ pub struct Wizard {
     update_check: bool,
     looked_there: bool,
     registered_at: Option<Timestamp>,
-    checked: Option<Checked>,
 }
 
 impl Wizard {
@@ -331,7 +304,6 @@ impl Wizard {
             update_check: true,
             looked_there: false,
             registered_at: None,
-            checked: None,
         }
     }
 
@@ -345,10 +317,9 @@ impl Wizard {
         self.posture
     }
 
-    /// True on every screen but the first and the last: once the daemon is
-    /// registered there is no going back.
+    /// True on every screen but the first.
     pub fn offers_back(&self) -> bool {
-        !matches!(self.screen, Screen::Welcome | Screen::FirstCheck)
+        self.screen != Screen::Welcome
     }
 
     /// Next: the following screen, or what the shell must do first.
@@ -366,10 +337,6 @@ impl Wizard {
                 Step::ConfirmOllama
             }
             Screen::Background => Step::Register,
-            Screen::FirstCheck => match self.checked {
-                Some(_) => Step::Done,
-                None => Step::Waiting,
-            },
             screen => {
                 self.screen = Screen::ALL[screen.index() + 1];
                 Step::Moved
@@ -384,8 +351,8 @@ impl Wizard {
         self.forward()
     }
 
-    /// Back: the screen before, and nothing on the first or the last. An
-    /// answer given stays.
+    /// Back: the screen before, and nothing on the first. An answer given
+    /// stays.
     pub fn back(&mut self) {
         if !self.offers_back() {
             return;
@@ -491,7 +458,7 @@ impl Wizard {
 
     /// Registers the daemon and the login item through `services`, once:
     /// a second call registers nothing and answers None. `now` is when, so
-    /// screen 6 reports only a Full Scan that finished after it.
+    /// the first check reports only a Full Scan that finished after it.
     pub fn register_once(&mut self, services: &dyn Services, now: Timestamp) -> Option<Launched> {
         if self.registered_at.is_some() {
             return None;
@@ -505,21 +472,25 @@ impl Wizard {
         self.registered_at.is_some()
     }
 
-    /// Leaving screen 5: registers the daemon and the login item once, holds
-    /// every answer for the daemon in `handover`, and moves to screen 6.
+    /// Leaving screen 5: registers the daemon and the login item once and
+    /// holds every answer for the daemon in `handover`. The wizard is then
+    /// done; the shell closes it and the first check waits for a Full Scan
+    /// that finished after [`Left::since`]. Nothing on any other screen.
     pub fn leave_background(
         &mut self,
         services: &dyn Services,
         handover: &mut Handover,
         now: Timestamp,
-    ) -> Option<Launched> {
+    ) -> Option<Left> {
         if self.screen != Screen::Background {
             return None;
         }
         let launched = self.register_once(services, now);
         handover.hold(self.answers());
-        self.screen = Screen::FirstCheck;
-        launched
+        Some(Left {
+            launched,
+            since: self.registered_at.unwrap_or(now),
+        })
     }
 
     /// The answers the daemon is handed once it answers.
@@ -541,49 +512,6 @@ impl Wizard {
                 ..EngineChange::default()
             },
         }
-    }
-
-    /// Whether screen 6 should ask the daemon for its status after
-    /// `event`: while it waits, on the first Full Scan's ScanFinished, and
-    /// on the Health every subscription opens with, in case that Scan
-    /// finished before the app was listening.
-    pub fn wants_status(&self, event: &StateEvent) -> bool {
-        if self.screen != Screen::FirstCheck || self.checked.is_some() {
-            return false;
-        }
-        match event {
-            StateEvent::ScanFinished { summary } => summary.kind == ScanKind::Full,
-            StateEvent::HealthChanged { .. } => true,
-            _ => false,
-        }
-    }
-
-    /// Takes the daemon's status on screen 6: once it carries a Full Scan
-    /// that finished after the registration, the screen reports that
-    /// Scan's Item count, the Items standing stopped, and the Health's one
-    /// sentence. True when this completed the screen.
-    pub fn take_status(&mut self, status: &Status) -> bool {
-        if self.screen != Screen::FirstCheck || self.checked.is_some() {
-            return false;
-        }
-        let (Some(registered_at), Some(scan)) = (self.registered_at, &status.scan) else {
-            return false;
-        };
-        if scan.kind != ScanKind::Full || scan.finished_at() < registered_at {
-            return false;
-        }
-        let stopped = status
-            .findings
-            .iter()
-            .filter(|finding| finding.state == FindingState::Stopped)
-            .map(|finding| crate::wording::simple(finding).title)
-            .collect();
-        self.checked = Some(Checked {
-            items: scan.items,
-            stopped,
-            result: status.health.headline_in(self.posture),
-        });
-        true
     }
 
     /// Screen 4's view: the choices, and in the Developer Posture the
@@ -666,32 +594,6 @@ impl Wizard {
         })
     }
 
-    /// Screen 6's view.
-    fn first_view(&self) -> Value {
-        match &self.checked {
-            None => json!({
-                "title": FIRST_CHECK_WAITING_TITLE,
-                "waiting": FIRST_CHECK_WAITING,
-            }),
-            Some(checked) => json!({
-                "title": FIRST_CHECK_TITLE,
-                "items": match checked.items {
-                    1 => "AgentSweep checked 1 item.".to_string(),
-                    n => format!("AgentSweep checked {n} items."),
-                },
-                "baseline": BASELINE_LINE,
-                "stoppedLine": match checked.stopped.len() {
-                    0 => NOTHING_STOPPED.to_string(),
-                    1 => "AgentSweep stopped 1 item before an agent could use it:".to_string(),
-                    n => format!("AgentSweep stopped {n} items before an agent could use them:"),
-                },
-                "stopped": checked.stopped,
-                "result": checked.result,
-                "button": DONE,
-            }),
-        }
-    }
-
     /// The view the page renders: the screen, its words, and the answers.
     pub fn to_value(&self) -> Value {
         json!({
@@ -714,7 +616,6 @@ impl Wizard {
             },
             "ai": self.ai_view(),
             "background": self.background_view(),
-            "first": self.first_view(),
         })
     }
 }
@@ -862,11 +763,7 @@ mod tests {
     use std::cell::RefCell;
     use std::io;
 
-    use agentsweep_core::finding::Category;
-    use agentsweep_core::health::Health;
-    use agentsweep_core::item::Kind;
     use agentsweep_core::ollama::OllamaModel;
-    use agentsweep_core::state::{ScanSummary, Trigger};
 
     use crate::inventory::{Found, OWN_LISTS};
     use crate::supervision::ServiceState;
@@ -983,7 +880,8 @@ mod tests {
         let view = wizard.to_value();
         assert_eq!(view["screen"], "welcome");
         assert_eq!(view["back"], false);
-        assert_eq!(view["steps"], 6);
+        assert_eq!(view["steps"], 5);
+        assert!(view.get("first").is_none(), "no screen 6");
         assert_eq!(view["welcome"]["title"], WELCOME_TITLE);
         assert_eq!(view["welcome"]["promise"], "Nothing leaves this Mac.");
         assert_eq!(view["inventory"]["ownLists"], OWN_LISTS);
@@ -1314,18 +1212,19 @@ mod tests {
         let link = FakeLink::default();
         assert!(handover.deliver(&link).is_none(), "nothing is held yet");
         assert_eq!(wizard.forward(), Step::Register);
-        assert!(
-            wizard
-                .leave_background(&services, &mut handover, now)
-                .is_none()
+        let later = moment("2026-10-19T10:05:00.000Z");
+        let left = wizard
+            .leave_background(&services, &mut handover, later)
+            .expect("left screen 5");
+        assert!(left.launched.is_none(), "registered already");
+        assert_eq!(
+            left.since, now,
+            "the first check counts from the registration"
         );
-        assert_eq!(wizard.screen(), Screen::FirstCheck);
-        assert!(!wizard.offers_back());
-        assert!(
-            wizard
-                .leave_background(&services, &mut handover, now)
-                .is_none()
-        );
+        let left = wizard
+            .leave_background(&services, &mut handover, later)
+            .expect("left screen 5");
+        assert!(left.launched.is_none());
         assert_eq!(
             services.calls(),
             vec!["register agent", "register login item"],
@@ -1366,9 +1265,12 @@ mod tests {
         let services = Recorded::with(ServiceState::NotFound, ServiceState::NotRegistered);
         let mut wizard = on(Screen::Background, Posture::Simple, inventory());
         let mut handover = Handover::default();
-        let launched = wizard
-            .leave_background(&services, &mut handover, Timestamp::now())
-            .expect("registered");
+        let now = Timestamp::now();
+        let left = wizard
+            .leave_background(&services, &mut handover, now)
+            .expect("left screen 5");
+        assert_eq!(left.since, now);
+        let launched = left.launched.expect("registered");
         assert!(launched.registered_agent && launched.registered_login_item);
         assert_eq!(
             services.calls(),
@@ -1411,107 +1313,6 @@ mod tests {
             assert_eq!(link.keys.borrow().len(), 1, "once");
             assert!(!format!("{handover:?}").contains("sk-ant"));
         }
-    }
-
-    fn summary(kind: ScanKind, started_at: &str, items: usize) -> ScanSummary {
-        ScanSummary {
-            kind,
-            trigger: Trigger::DaemonStart,
-            started_at: moment(started_at),
-            duration_ms: 1_200,
-            items,
-            threats: 0,
-            exposures: 0,
-            clear: items,
-            ambiguous: 0,
-            suspicious: 0,
-            rule_pack: 1,
-            engine: String::new(),
-        }
-    }
-
-    fn registered_wizard() -> Wizard {
-        let mut wizard = on(Screen::Background, Posture::Simple, inventory());
-        wizard.leave_background(
-            &Recorded::with(ServiceState::NotRegistered, ServiceState::NotRegistered),
-            &mut Handover::default(),
-            moment("2026-10-19T10:00:00.000Z"),
-        );
-        wizard
-    }
-
-    /// Screen 6 waits for the first Full Scan after the registration, then
-    /// reports its Item count, the Baseline sentence, what was stopped and
-    /// the result; a Scan from before the registration does not count.
-    #[test]
-    fn screen_six_waits_for_the_first_scan_and_reports_what_was_stopped() {
-        let mut wizard = registered_wizard();
-        assert_eq!(wizard.forward(), Step::Waiting);
-        let view = wizard.to_value();
-        assert_eq!(view["screen"], "first");
-        assert_eq!(view["first"]["waiting"], FIRST_CHECK_WAITING);
-
-        let finished = StateEvent::ScanFinished {
-            summary: Box::new(summary(ScanKind::Full, "2026-10-19T10:00:05.000Z", 42)),
-        };
-        let change = StateEvent::ScanFinished {
-            summary: Box::new(summary(ScanKind::Change, "2026-10-19T10:00:05.000Z", 1)),
-        };
-        assert!(wizard.wants_status(&finished));
-        assert!(!wizard.wants_status(&change));
-
-        let stopped = crate::findings::tests::recorded(
-            "claude-code/user/skill/~/.claude/skills/setup",
-            Kind::Skill,
-            "rule 0001",
-            Category::Threat,
-            FindingState::Stopped,
-        );
-        let open = crate::findings::tests::recorded(
-            "claude-code/user/mcp-server/~/.claude.json#tracker",
-            Kind::McpServer,
-            "score 7",
-            Category::Threat,
-            FindingState::Open,
-        );
-        let mut status = crate::findings::tests::status_of(vec![stopped.clone(), open]);
-
-        // No Scan yet, and then one from before the registration.
-        assert!(!wizard.take_status(&status));
-        status.scan = Some(summary(ScanKind::Full, "2026-10-19T09:00:00.000Z", 7));
-        assert!(!wizard.take_status(&status));
-        assert_eq!(wizard.forward(), Step::Waiting);
-
-        status.scan = Some(summary(ScanKind::Full, "2026-10-19T10:00:05.000Z", 42));
-        assert!(wizard.take_status(&status));
-        assert!(!wizard.wants_status(&finished), "done waiting");
-        let view = wizard.to_value();
-        assert_eq!(view["first"]["title"], FIRST_CHECK_TITLE);
-        assert_eq!(view["first"]["items"], "AgentSweep checked 42 items.");
-        assert_eq!(view["first"]["baseline"], BASELINE_LINE);
-        assert_eq!(
-            view["first"]["stoppedLine"],
-            "AgentSweep stopped 1 item before an agent could use it:"
-        );
-        assert_eq!(
-            view["first"]["stopped"][0],
-            crate::wording::simple(&stopped).title
-        );
-        assert_eq!(view["first"]["result"], status.health.headline());
-        assert_eq!(wizard.forward(), Step::Done);
-    }
-
-    #[test]
-    fn screen_six_says_so_when_nothing_was_stopped() {
-        let mut wizard = registered_wizard();
-        let mut status = crate::findings::tests::status_of(Vec::new());
-        status.health = Health::running();
-        status.scan = Some(summary(ScanKind::Full, "2026-10-19T10:00:01.000Z", 1));
-        assert!(wizard.take_status(&status));
-        let view = wizard.to_value();
-        assert_eq!(view["first"]["items"], "AgentSweep checked 1 item.");
-        assert_eq!(view["first"]["stoppedLine"], NOTHING_STOPPED);
-        assert_eq!(view["first"]["stopped"], json!([]));
     }
 
     /// The onboarding window is tall enough for its tallest screen, screen

@@ -6,6 +6,7 @@
     <title>AgentSweep</title>
     <link rel="stylesheet" href="window.css" />
     <script type="module" src="window.js"></script>
+    <script type="module" src="first_check.js"></script>
   </head>
   <body>
     <div class="frame">
@@ -328,6 +329,22 @@
         <div class="actions">
           <button value="cancel">Cancel</button>
           <button value="ok" class="primary" id="false-alarm-open"></button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- The first check's result (spec section 8.3, screen 6): shown once
+         the first Scan after onboarding finished, until it is closed. -->
+    <dialog id="first-check">
+      <form method="dialog">
+        <p class="message" id="first-check-title"></p>
+        <p id="first-check-items"></p>
+        <p id="first-check-baseline"></p>
+        <p id="first-check-stopped-line"></p>
+        <ul id="first-check-stopped"></ul>
+        <p class="muted" id="first-check-result"></p>
+        <div class="actions">
+          <button value="ok" class="primary" id="first-check-ok"></button>
         </div>
       </form>
     </dialog>

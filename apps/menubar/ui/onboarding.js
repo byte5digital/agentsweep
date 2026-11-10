@@ -202,22 +202,6 @@ function renderBackground(background) {
   }
 }
 
-function renderFirst(first) {
-  text("first-title", first.title);
-  const waiting = first.waiting !== undefined;
-  $("first-waiting").hidden = !waiting;
-  $("first-done").hidden = waiting;
-  if (waiting) {
-    text("first-waiting", first.waiting);
-    return;
-  }
-  text("first-items", first.items);
-  text("first-baseline", first.baseline);
-  text("first-stopped-line", first.stoppedLine);
-  $("first-stopped").replaceChildren(...first.stopped.map((title) => el("li", "", title)));
-  text("first-result", first.result);
-}
-
 function render(view) {
   if (!view) {
     return;
@@ -240,15 +224,8 @@ function render(view) {
   }
   renderAi(view.ai);
   renderBackground(view.background);
-  renderFirst(view.first);
   back.hidden = !view.back;
-  next.hidden = view.screen === "first" && view.first.waiting !== undefined;
-  next.textContent =
-    view.screen === "background"
-      ? view.background.button
-      : view.screen === "first"
-        ? (view.first.button ?? "")
-        : "Continue";
+  next.textContent = view.screen === "background" ? view.background.button : "Continue";
   error.hidden = true;
 }
 
@@ -283,7 +260,8 @@ $("consent").addEventListener("close", () => {
   $("consent-key").value = "";
 });
 
-// The engine look and the first check finished arrive without a command.
+// The engine look arrives without a command. Leaving screen 5 closes the
+// wizard; the first check's result shows in the Findings window.
 listen("agentsweep://onboarding", (event) => render(event.payload));
 
 ask("onboarding");

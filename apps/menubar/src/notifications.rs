@@ -15,7 +15,11 @@
 //! 6.1). A click activates the app through the operating system, and the
 //! app's reopen and activation handling opens the window on Needs your
 //! decision when a notification was raised since the user last looked
-//! ([`Attention`]).
+//! ([`Attention`]), or on the Overview after the first check's notice.
+//!
+//! The first check after onboarding raises one notice in place of every
+//! change the first Scan left un-notified ([`Notifications::raise_summary`],
+//! [`crate::first_check`]).
 //!
 //! Every notification goes through the [`Notifier`] seam, so the suite never
 //! posts a real one.
@@ -174,30 +178,31 @@ pub enum Activation {
     BecameActive,
 }
 
-/// Whether a notification was raised since the user last looked, which is
-/// what turns an activation into "open the window on Needs your decision".
+/// Whether a notification was raised since the user last looked, and the
+/// pane it opens: what turns an activation into "open the window on Needs
+/// your decision", or on the Overview after the first check's notice.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Attention {
-    raised: bool,
+    raised: Option<Pane>,
 }
 
 impl Attention {
-    /// A notification was raised.
-    pub fn raised(&mut self) {
-        self.raised = true;
+    /// A notification was raised that opens the window on `pane`.
+    pub fn raised(&mut self, pane: Pane) {
+        self.raised = Some(pane);
     }
 
     /// The user opened the popover or the window by other means, so the
     /// next activation is an ordinary one.
     pub fn seen(&mut self) {
-        self.raised = false;
+        self.raised = None;
     }
 
-    /// The pane to open the window on for this activation: Needs your
-    /// decision after a notification, nothing extra otherwise.
+    /// The pane to open the window on for this activation: the last raised
+    /// notification's, nothing extra otherwise.
     pub fn activated(&mut self, activation: Activation) -> Option<Pane> {
         let _ = activation;
-        std::mem::take(&mut self.raised).then_some(Pane::Threats)
+        self.raised.take()
     }
 }
 
@@ -264,9 +269,42 @@ impl Notifications {
         self.attention
             .lock()
             .expect("the attention is not poisoned")
-            .raised();
+            .raised(Pane::Threats);
         asking.notified(&raised)?;
         Ok(raised.len())
+    }
+
+    /// Raises `notice` alone, in place of every change un-notified now, and
+    /// confirms those changes as told: one notification stands for them
+    /// all, as the first check's does (spec section 8.3). A click on it
+    /// opens the window on `pane`. The permission is asked as for any other
+    /// notification; while it is refused nothing is raised and nothing
+    /// confirmed. Answers whether it was raised, and an error, with nothing
+    /// raised, when the daemon could not say what is un-notified.
+    pub fn raise_summary(
+        &self,
+        asking: &Asking,
+        notice: &Notice,
+        pane: Pane,
+    ) -> Result<bool, ClientError> {
+        let mut permission = self.raising.lock().expect("the raise is not poisoned");
+        let changes = asking.unnotified()?;
+        let permitted = *permission.get_or_insert_with(|| self.notifier.ask_permission());
+        if !permitted || !self.notifier.show(notice) {
+            return Ok(false);
+        }
+        self.attention
+            .lock()
+            .expect("the attention is not poisoned")
+            .raised(pane);
+        let told: Vec<String> = changes.into_iter().map(|change| change.id).collect();
+        // The notice is up: a daemon that does not take the confirmation
+        // leaves these changes to the ordinary notifications, and the
+        // notice is never raised twice.
+        if !told.is_empty() && asking.notified(&told).is_err() {
+            eprintln!("agentsweep-menubar: the changes the notice stands for were not confirmed");
+        }
+        Ok(true)
     }
 
     /// Raises what is un-notified when the event may carry something new.
@@ -466,7 +504,7 @@ mod tests {
         assert_eq!(attention.activated(Activation::Reopen), None);
         assert_eq!(attention.activated(Activation::BecameActive), None);
 
-        attention.raised();
+        attention.raised(Pane::Threats);
         assert_eq!(
             attention.activated(Activation::BecameActive),
             Some(Pane::Threats)
@@ -474,12 +512,19 @@ mod tests {
         // The next activation is an ordinary one again.
         assert_eq!(attention.activated(Activation::Reopen), None);
 
-        attention.raised();
+        attention.raised(Pane::Threats);
         assert_eq!(attention.activated(Activation::Reopen), Some(Pane::Threats));
 
         // A user who opened the popover or the window has seen it.
-        attention.raised();
+        attention.raised(Pane::Threats);
         attention.seen();
         assert_eq!(attention.activated(Activation::BecameActive), None);
+
+        // The first check's notice opens the Overview.
+        attention.raised(Pane::Overview);
+        assert_eq!(
+            attention.activated(Activation::BecameActive),
+            Some(Pane::Overview)
+        );
     }
 }

@@ -2,7 +2,8 @@
 //!
 //! The popover opens under the menu bar icon that was clicked, on whatever
 //! display that icon is on. The Findings window opens centred on the display
-//! that holds the pointer, the one the user is working on.
+//! that holds the pointer, the one the user is working on, except right after
+//! the onboarding wizard: then it opens on the display the wizard was on.
 //!
 //! On macOS the displays share one space in points, with the main display's
 //! top left corner at the origin: a display left of the main one has a
@@ -108,6 +109,32 @@ pub fn window_position(display: Display, window: Size) -> Point {
     Point {
         x: left + ((width - window.width) / 2.0).max(0.0),
         y: top + ((height - window.height) / 2.0).max(0.0),
+    }
+}
+
+/// The display the onboarding wizard was on when it closed, kept for the
+/// Findings window that follows it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AfterOnboarding {
+    closed_on: Option<Display>,
+}
+
+impl AfterOnboarding {
+    /// The wizard closed, done, on `display`.
+    pub fn closed_on(&mut self, display: Option<Display>) {
+        self.closed_on = display;
+    }
+
+    /// The display a Findings window that opens anew opens on: the wizard's
+    /// while it shows, the one it closed on for the first window after it,
+    /// and the one under the pointer otherwise.
+    pub fn window_display(
+        &mut self,
+        wizard: Option<Display>,
+        pointer: Option<Display>,
+    ) -> Option<Display> {
+        let closed_on = self.closed_on.take();
+        wizard.or(closed_on).or(pointer)
     }
 }
 
@@ -275,6 +302,24 @@ mod tests {
             height: 640.0,
         };
         assert_eq!(window_position(small, window), Point { x: -800.0, y: 0.0 });
+    }
+
+    #[test]
+    fn the_window_that_follows_onboarding_opens_on_the_wizards_display() {
+        let mut after = AfterOnboarding::default();
+        // Before onboarding, under the pointer.
+        assert_eq!(after.window_display(None, Some(MAIN)), Some(MAIN));
+        // While the wizard shows, on its display.
+        assert_eq!(after.window_display(Some(LEFT), Some(MAIN)), Some(LEFT));
+        // The first window after the wizard closed, on the display it was on,
+        // wherever the pointer is.
+        after.closed_on(Some(LEFT));
+        assert_eq!(after.window_display(None, Some(MAIN)), Some(LEFT));
+        // Every later one under the pointer again.
+        assert_eq!(after.window_display(None, Some(MAIN)), Some(MAIN));
+        // A wizard whose display is not known leaves the pointer's.
+        after.closed_on(None);
+        assert_eq!(after.window_display(None, Some(MAIN)), Some(MAIN));
     }
 
     #[test]

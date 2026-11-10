@@ -149,7 +149,7 @@ This check needs no hand install. It runs a debug daemon on a temporary home wit
 w=$(mktemp -d /tmp/asw.XXXX)
 # ... lay out $w/home as above, and mkdir $w/data
 target/debug/agentsweepd --home $w/home --data-dir $w/data --socket $w/d.sock --key-source memory --log stderr &
-AGENTSWEEP_DEV_SOCKET=$w/d.sock AGENTSWEEP_DEV_SHOW_WINDOW=1 target/debug/agentsweep-menubar &
+AGENTSWEEP_DEV_SOCKET=$w/d.sock target/debug/agentsweep-menubar &
 target/debug/agentsweep status --socket $w/d.sock
 ```
 
@@ -428,7 +428,7 @@ This is the milestone's exit criterion "notification round trip after Quit". It 
 Quit the app from the popover (**Quit AgentSweep (protection stays on)**), check that `pgrep -x agentsweep-menubar` prints nothing, and plant the skill as in section 14.
 
 - [ ] The app comes back windowless as in section 14, and macOS asks once whether AgentSweep may send notifications (allow it). Exactly one notification appears. Under a stable pack its title is "Stopped: the skill 'agentsweep-hand-check'" and its body says AgentSweep moved it out of the way by itself, whether Claude Code appears to be running and, where it may be, asks for a restart. Under the bundled pack its title is "The skill 'agentsweep-hand-check' needs your decision" and its body "Nothing was changed. Open AgentSweep to decide what happens to it." Neither names an id, a path, a Rule, a Score or AI.
-- [ ] Clicking the notification opens the Findings window on Needs your decision, and the app gains its Dock icon while the window is open. Close the window, then click the app in Finder: nothing opens beyond what the app does on an ordinary reopen.
+- [ ] Clicking the notification opens the Findings window on Needs your decision, and the app gains its Dock icon while the window is open. Turn the window to another pane and close it, then double-click the app in Finder: the window opens as on any reopen (section 23), and the notification already clicked does not turn it to Needs your decision again.
 - [ ] Quit the app from the popover and open it again from Finder: no notification is raised a second time. Quit it once more and wait a minute: the daemon does not bring it back, since nothing new is un-notified.
 
 The wording of every notification, for the owner to read on the dogfooding day (spec section 8.7 and the owner's decision of 2026-10-14):
@@ -525,6 +525,18 @@ Once more with a cask-installed app (stack research, unverified item 11): instal
 - [ ] The updater replaces the cask's bundle in place without an administrator prompt, the daemon comes back on the new version as above, and `brew list --cask --versions agentsweep` still names the old version (expected: the cask's `auto_updates true` tells Homebrew that the app updates itself, so Homebrew leaves the version alone outside `brew upgrade --greedy`). Write under Record of runs whether `brew upgrade` afterwards tries to install the same version again.
 
 Seams in the suite: `updater::tests` in the app (the toggle from the wizard's held choice, the daemon's answer, the app's copy and the default, a user's off never overridden; a check at launch and once a day, none with the toggle off; the line in the popover while an update is ready; the install called once at quit when an update is ready and never otherwise, and never after Uninstall), and the app's `updater` tests, which run the real updater plugin on Tauri's mock runtime against a loopback fixture server that counts requests: a newer version under the development key is downloaded and verified, a bad signature and an older or equal version are refused, no request with the toggle off, one GET per check, and no identifier in the request.
+
+## 23. The window opens from Finder, and not at login
+
+This check needs the hand install of section 1, with onboarding done, because only an installed bundle has a login item and is launched through LaunchServices. Spec section 8.1.
+
+- [ ] With the app running and its window closed, double-click AgentSweep in `/Applications`: the window opens, with a Dock icon. Close it, open it again with `open -a AgentSweep`: the same.
+- [ ] Quit the app from the popover, then double-click it in Finder: the window opens at launch.
+- [ ] Quit the app, log out and log in again: the login item starts the app into the menu bar with no window, no Dock icon and the app that had focus still in front (`lsappinfo info -only ApplicationType -app agentsweep-menubar` says `UIElement`). If a window opens, AppKit's launch event did not mark the launch as the login item's on this macOS; write the version under Record of runs.
+- [ ] Section 14's windowless launch still opens no window.
+- [ ] On a Mac with two displays, onboarding on a clean user (section 21): the wizard opens on one display, and the first window after **Done** opens on that display wherever the pointer is.
+
+Seams in the suite: `window::tests` in the app (the launch kinds against opening the window, the onboarding wizard in its place while the daemon is not registered, the launch event of the login item read from an AppKit Apple event, and a reopen showing the window or the wizard in hand) and `placement::tests::the_window_that_follows_onboarding_opens_on_the_wizards_display`.
 
 ## Dogfooding: one day with the app
 

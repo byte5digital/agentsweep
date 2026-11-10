@@ -191,3 +191,24 @@ fn the_window_switches_the_settings_tabs() {
     let ai = ui("ai_check.js");
     assert!(ai.contains("$(\"settings-tab-ai\").textContent = view.title;"));
 }
+
+/// The Ollama address and, in the Developer Posture, the Claude model id
+/// take the pane's width: label above, field beneath at full width, in
+/// either Posture.
+#[test]
+fn the_two_advanced_fields_take_the_pane_width() {
+    let css = ui("window.css");
+    let advanced = rule(&css, "#settings-advanced");
+    assert!(advanced.contains("max-width: none;"), "{advanced}");
+    let row = rule(&css, "#settings-advanced-ai .dir");
+    assert!(row.contains("flex-direction: column;"), "{row}");
+    assert!(row.contains("align-items: stretch;"), "{row}");
+    let label = rule(&css, "#settings-advanced-ai .dir .label");
+    assert!(label.contains("flex: none;"), "{label}");
+    let input = rule(&css, "#settings-advanced-ai .dir input");
+    assert!(input.contains("width: 100%;"), "{input}");
+    assert!(
+        !css.contains("[data-posture"),
+        "the layout follows no Posture"
+    );
+}

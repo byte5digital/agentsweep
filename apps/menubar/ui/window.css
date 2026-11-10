@@ -550,6 +550,28 @@ dialog {
   min-width: 0;
 }
 
+/* Advanced takes the pane's width, and the Ollama address and the Claude
+   model id each take all of it: label above, field beneath, in either
+   Posture. */
+#settings-advanced {
+  max-width: none;
+}
+
+#settings-advanced-ai .dir {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  margin: 8px 0;
+}
+
+#settings-advanced-ai .dir .label {
+  flex: none;
+}
+
+#settings-advanced-ai .dir input {
+  width: 100%;
+}
+
 /* The AI check's four cards and the consent screen. */
 
 .setting .cards {

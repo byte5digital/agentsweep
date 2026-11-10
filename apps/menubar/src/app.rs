@@ -138,7 +138,7 @@ use crate::link::{Link, Socket, Update};
 use crate::notifications::{Activation, Notice, Notifications, Notifier};
 use crate::onboarding::{self, Handover, Step, Wizard};
 use crate::permission;
-use crate::placement;
+use crate::placement::{self, AfterOnboarding};
 use crate::popover::View;
 use crate::reveal::{self, SystemFinder};
 use crate::settings_pane::{
@@ -853,13 +853,19 @@ fn show_wizard(app: &AppHandle) {
     }
 }
 
-/// Closes the wizard: it is done, and the app is a menu bar app again.
+/// Closes the wizard: it is done, and the app is a menu bar app again. The
+/// Findings window that follows it opens on the display it was on.
 fn close_wizard(app: &AppHandle) {
     *app.state::<Shell>()
         .onboarding
         .lock()
         .expect("the wizard is not poisoned") = None;
     if let Some(window) = app.get_webview_window(ONBOARDING) {
+        let display = display_of_window(&window);
+        app.state::<Mutex<AfterOnboarding>>()
+            .lock()
+            .expect("the display after onboarding is not poisoned")
+            .closed_on(display);
         let _ = window.hide();
     }
     present(app, presence(false));
@@ -1317,9 +1323,10 @@ fn show_window(app: &AppHandle) {
     present(app, presence(true));
     if let Some(window) = app.get_webview_window(WINDOW) {
         // A window already open, or in the Dock, comes back where it was; one
-        // that opens anew opens centred on the display the user is working on.
+        // that opens anew opens centred on the display the user is working
+        // on, or on the onboarding wizard's when it follows the wizard.
         let open = window.is_visible().unwrap_or(false) || window.is_minimized().unwrap_or(false);
-        if !open && let Some(display) = display_under_pointer(app) {
+        if !open && let Some(display) = window_display(app) {
             let placed = placement::window_position(display, size_of(&window));
             let _ = window.set_position(LogicalPosition::new(placed.x, placed.y));
         }
@@ -1504,13 +1511,42 @@ fn display_under_pointer(app: &AppHandle) -> Option<placement::Display> {
         let point = placement::pointer_in_points(pointer.x, pointer.y, scale);
         app.monitor_from_point(point.x, point.y).ok().flatten()
     });
-    under.or(main).map(|monitor| placement::Display {
+    under.or(main).as_ref().map(display_of)
+}
+
+/// The display a Findings window that opens anew opens on
+/// ([`AfterOnboarding::window_display`]).
+fn window_display(app: &AppHandle) -> Option<placement::Display> {
+    let wizard = app
+        .get_webview_window(ONBOARDING)
+        .filter(|wizard| wizard.is_visible().unwrap_or(false))
+        .and_then(|wizard| display_of_window(&wizard));
+    let pointer = display_under_pointer(app);
+    app.state::<Mutex<AfterOnboarding>>()
+        .lock()
+        .expect("the display after onboarding is not poisoned")
+        .window_display(wizard, pointer)
+}
+
+/// The display a window is on, as the operating system reports it.
+fn display_of_window(window: &WebviewWindow) -> Option<placement::Display> {
+    window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .as_ref()
+        .map(display_of)
+}
+
+/// A display as the operating system reports it.
+fn display_of(monitor: &Monitor) -> placement::Display {
+    placement::Display {
         x: monitor.position().x,
         y: monitor.position().y,
         width: monitor.size().width,
         height: monitor.size().height,
         scale: monitor.scale_factor(),
-    })
+    }
 }
 
 /// A frame that names the user's own rules folder for the Settings pane.
@@ -1596,6 +1632,7 @@ pub fn run(start: Start) {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(shell)
         .manage(Reports::default())
+        .manage(Mutex::new(AfterOnboarding::default()))
         .invoke_handler(tauri::generate_handler![
             popover,
             open_login_items,

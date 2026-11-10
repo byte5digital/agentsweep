@@ -20,7 +20,7 @@ use std::collections::BTreeSet;
 use agentsweep_core::finding::{Category, FindingState};
 use agentsweep_core::health::Health;
 use agentsweep_core::overview::Overview;
-use agentsweep_core::settings::Posture;
+use agentsweep_core::settings::{JudgementEngine, Posture};
 use agentsweep_core::state::ScanSummary;
 use agentsweep_ipc::engine::EngineState;
 use agentsweep_ipc::protocol::{SettingsState, StateEvent, Status};
@@ -157,6 +157,9 @@ pub struct Frame {
     /// answer carries: whether Ollama runs and whether Apple's on-device
     /// model is available, for the AI check.
     presence: Option<EngineState>,
+    /// The engine a press chose that the daemon has not answered yet, shown
+    /// as selected meanwhile.
+    choosing: Option<JudgementEngine>,
     /// The Activity lines of the last status, followed from the stream.
     activity: Activity,
     /// The banner the link chose while no daemon answers: Protection off,
@@ -234,7 +237,22 @@ impl Frame {
             };
         }
         self.presence = Some(state.clone());
+        self.choosing = None;
         Follow::Render
+    }
+
+    /// Shows `engine` as selected at once, while the daemon has not
+    /// answered the press that chose it; nothing shows the engine the
+    /// daemon holds again, as for a press that came to nothing. The
+    /// daemon's engine answer settles it ([`Frame::engine`]).
+    pub fn choosing(&mut self, engine: Option<JudgementEngine>) -> Follow {
+        match self.choosing == engine {
+            true => Follow::Nothing,
+            false => {
+                self.choosing = engine;
+                Follow::Render
+            }
+        }
     }
 
     /// The AI Judgement choices as the AI check shows them: the daemon's
@@ -244,6 +262,9 @@ impl Frame {
         if let Some(presence) = &self.presence {
             state.ollama = presence.ollama.clone();
             state.apple = presence.apple.clone();
+        }
+        if let Some(engine) = self.choosing {
+            state.engine = engine;
         }
         Some(state)
     }
@@ -514,7 +535,7 @@ mod tests {
     use agentsweep_core::item::Kind;
     use agentsweep_core::overview::{AgentRecord, AmbiguousItem};
     use agentsweep_core::scan_pass::ScanKind;
-    use agentsweep_core::settings::{CloudCaps, JudgementEngine};
+    use agentsweep_core::settings::CloudCaps;
     use agentsweep_core::state::Trigger;
     use agentsweep_ipc::engine::EngineState;
 

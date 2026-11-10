@@ -272,6 +272,43 @@ fn one_press_hands_the_key_over_once() {
     assert_eq!(keys_added(&asking), 2, "a second press hands it over again");
 }
 
+/// Claude shows as selected the moment "I agree, turn it on" is pressed,
+/// before the daemon answers, through every settings change on the way; the
+/// daemon's answer settles it, and a press that came to nothing shows the
+/// engine the daemon holds again.
+#[test]
+fn claude_shows_as_selected_at_once() {
+    let sandbox = Sandbox::new("at-once");
+    let _daemon = sandbox.start();
+    let asking = sandbox.asking();
+    let mut frame = loaded(&asking);
+    assert_eq!(card(&frame, "off")["selected"], true);
+
+    frame.choosing(Some(JudgementEngine::Claude));
+    assert_eq!(card(&frame, "claude")["selected"], true);
+    assert_eq!(card(&frame, "off")["selected"], false);
+    // The key's own settings change, with the engine still off, on the way.
+    frame.settings(&asking.settings().expect("the settings"));
+    assert_eq!(card(&frame, "claude")["selected"], true);
+
+    // A press that came to nothing.
+    ai_check::turn_on_claude(&asking, None).expect_err("no key");
+    frame.choosing(None);
+    assert_eq!(card(&frame, "off")["selected"], true);
+
+    frame.choosing(Some(JudgementEngine::Claude));
+    let state = ai_check::turn_on_claude(&asking, Some(A_KEY.to_string())).expect("turned on");
+    frame.engine(&state);
+    assert_eq!(card(&frame, "claude")["selected"], true);
+    let removed = ai_check::remove_claude_key(&asking).expect("removed");
+    frame.engine(&removed);
+    assert_eq!(
+        card(&frame, "off")["selected"],
+        true,
+        "the answer settles it"
+    );
+}
+
 /// Every engine change through the cards says it was recorded; an Ollama
 /// address off this Mac is refused before it is sent and moves nothing.
 #[test]

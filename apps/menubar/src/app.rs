@@ -715,7 +715,8 @@ async fn change_engine(app: AppHandle, change: Value) -> Result<String, String> 
 }
 
 /// "I agree, turn it on": the typed key, if any, goes to the daemon once and
-/// is wiped here; then the Claude engine is turned on. The window names the
+/// is wiped here; then the Claude engine is turned on. Claude shows as
+/// selected at once; the daemon's answer settles it. The window names the
 /// press, so the same press delivered twice hands nothing over again.
 #[tauri::command]
 async fn turn_on_claude(
@@ -723,11 +724,31 @@ async fn turn_on_claude(
     key: Option<String>,
     press: String,
 ) -> Result<String, String> {
+    choosing(&app, Some(JudgementEngine::Claude));
     let shell = app.state::<Shell>();
     let asking = Arc::clone(&shell.asking);
     let presses = Arc::clone(&shell.presses);
-    let state = off_main(move || presses.turn_on_claude(&asking, &press, key)).await?;
-    Ok(take_engine(&app, &state))
+    match off_main(move || presses.turn_on_claude(&asking, &press, key)).await {
+        Ok(state) => Ok(take_engine(&app, &state)),
+        Err(refused) => {
+            choosing(&app, None);
+            Err(refused)
+        }
+    }
+}
+
+/// Shows `engine` as selected in the AI check until the daemon answers, or
+/// the engine the daemon holds again.
+fn choosing(app: &AppHandle, engine: Option<JudgementEngine>) {
+    let follow = app
+        .state::<Shell>()
+        .frame
+        .lock()
+        .expect("the frame is not poisoned")
+        .choosing(engine);
+    if follow != Follow::Nothing {
+        render(app);
+    }
 }
 
 /// Removes the Claude API key, which turns the Claude engine off.

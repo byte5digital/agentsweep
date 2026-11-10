@@ -171,6 +171,21 @@ impl std::fmt::Debug for Tuning {
     }
 }
 
+/// What a state file that could not be read is, by why it could not: on a
+/// first start, where no earlier Scan left a record, it was never written
+/// and there is nothing to say; otherwise it was lost or did not verify, and
+/// the status says it was rebuilt.
+fn lost_state_file(
+    error: &agentsweep_core::state::StateError,
+    scanned_before: bool,
+) -> StateFileHealth {
+    match error {
+        agentsweep_core::state::StateError::Missing if !scanned_before => StateFileHealth::New,
+        agentsweep_core::state::StateError::Missing => StateFileHealth::Missing,
+        _ => StateFileHealth::Rebuilt,
+    }
+}
+
 /// How often one peer's refusal at the handshake is said in the log: an app
 /// left running from before an update asks once a second until it is quit.
 const REFUSALS_SAID_EVERY: Duration = Duration::from_secs(60);
@@ -447,6 +462,13 @@ impl Daemon {
         let directory = options.data_dir.clone();
         directory.create()?;
 
+        // A Baseline with records was written by an earlier Scan, which wrote
+        // a state file too: without one, the state file is lost rather than
+        // never written. Looked at before the chains are opened, which may
+        // write.
+        let scanned_before =
+            std::fs::metadata(directory.baseline()).is_ok_and(|metadata| metadata.len() > 0);
+
         // Opening both chains is what turns a key that went missing into one
         // chain restart rather than into a restart per write, and it is what
         // says whether the records were tampered with.
@@ -466,14 +488,12 @@ impl Daemon {
         let (mut state, state_file) = match file.read(&*keys) {
             Ok(state) => (state, StateFileHealth::Loaded),
             Err(error) if error.rebuilds() => {
-                say!("the cached state is being rebuilt: {error}");
-                (
-                    State::empty(),
-                    match error {
-                        agentsweep_core::state::StateError::Missing => StateFileHealth::Missing,
-                        _ => StateFileHealth::Rebuilt,
-                    },
-                )
+                let health = lost_state_file(&error, scanned_before);
+                match health {
+                    StateFileHealth::New => say!("no cached state yet: a first start"),
+                    _ => say!("the cached state is being rebuilt: {error}"),
+                }
+                (State::empty(), health)
             }
             Err(error) => return Err(Box::new(error)),
         };
@@ -2641,6 +2661,28 @@ mod tests {
         assert!(matches!(queue.next(), Some(Work::Full(Trigger::Watcher))));
         assert!(queue.batch.is_empty());
         assert!(queue.next().is_none());
+    }
+
+    /// A state file missing on a first start is new and says nothing; one
+    /// missing after a Scan wrote records was lost, and one that does not
+    /// verify was rebuilt.
+    #[test]
+    fn a_missing_state_file_is_new_only_on_a_first_start() {
+        use agentsweep_core::state::StateError;
+        assert_eq!(
+            lost_state_file(&StateError::Missing, false),
+            StateFileHealth::New
+        );
+        assert_eq!(
+            lost_state_file(&StateError::Missing, true),
+            StateFileHealth::Missing
+        );
+        for scanned_before in [false, true] {
+            assert_eq!(
+                lost_state_file(&StateError::MacFailed, scanned_before),
+                StateFileHealth::Rebuilt
+            );
+        }
     }
 
     /// One "Check now" asks for one Full Scan however often it arrives: a

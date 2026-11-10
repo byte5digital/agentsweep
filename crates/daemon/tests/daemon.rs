@@ -460,6 +460,40 @@ fn the_state_file_verifies_and_a_deleted_one_is_rebuilt() {
     assert_eq!(after.open().count(), before.open().count());
 }
 
+/// A first start has no state file and says nothing about it: a first-time
+/// user never reads that the cached state was rebuilt. A state file lost
+/// after a Scan wrote one is a note.
+#[test]
+fn only_a_lost_state_file_says_it_was_rebuilt() {
+    let sandbox = Sandbox::with_a_planted_skill("first-start");
+    let options = sandbox.options();
+    {
+        let daemon = sandbox.open(&options, Arc::new(SameUser));
+        let health = daemon.health();
+        assert_eq!(health.state_file, StateFileHealth::New);
+        assert!(
+            health.notes().iter().all(|note| !note.contains("rebuilt")),
+            "{:?}",
+            health.notes()
+        );
+    }
+    {
+        let daemon = sandbox.start();
+        drop(daemon);
+    }
+    std::fs::remove_file(StateFile::in_data_directory(&sandbox.data()).path())
+        .expect("the state file goes");
+
+    let daemon = sandbox.open(&options, Arc::new(SameUser));
+    let health = daemon.health();
+    assert_eq!(health.state_file, StateFileHealth::Missing);
+    assert!(
+        health.notes().iter().any(|note| note.contains("rebuilt")),
+        "{:?}",
+        health.notes()
+    );
+}
+
 /// A daemon that starts on a data directory whose state file does not verify
 /// says so as a note and rebuilds it, rather than refusing to start.
 #[test]

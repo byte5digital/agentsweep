@@ -9,26 +9,28 @@
 // `<Kind> · <name>` with its chips, the same body lines and the technical
 // table shown always, and the Threat Findings pane lists the Ambiguous Items
 // beneath the Findings (spec sections 4.3 and 8.2).
+//
+// The action buttons are never disabled while a Scan runs (spec sections
+// 6.4 and 6.6). A press is taken at once: from the click until the daemon
+// answers, the Finding pressed shows the working line the app sent in place
+// of its buttons ("Waiting for the check to finish…" while a Scan runs), and
+// every press carries its own name, so the app carries it out once. Each
+// part with buttons keeps its nodes while it shows the same ([`keep`]), so
+// the next stream event's render cannot swallow a click.
 
 import { renderBanner } from "./banner.js";
 import { isDeveloper, onPostureChange, takePosture } from "./posture.js";
 import { lookAtAiCheck, renderAiCheck } from "./ai_check.js";
+import { keep } from "./keep.js";
+import { nextPress } from "./press.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
 
-// Why the actions cannot be pressed right now, or null when they can: while a
-// Scan runs every action waits for it (the app's list says so).
-let actionsWait = null;
-
-// Every action button, the Restore conflict choices included, follows it.
-function disableActions() {
-  for (const button of document.querySelectorAll("button[data-action]")) {
-    button.disabled = actionsWait !== null;
-  }
-}
+// The Findings whose press waits for the daemon's answer, by id.
+const pending = new Set();
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -71,7 +73,6 @@ function askConflict(result, card) {
     return button;
   });
   $("conflict-choices").replaceChildren(...buttons);
-  disableActions();
   dialog.showModal();
 }
 
@@ -219,7 +220,11 @@ function renderHeader(card, title) {
   return header;
 }
 
+// One press of an action: its confirmation first where it has one, then the
+// working line on that Finding at once, the request named for this press,
+// and the answer beside the Finding.
 async function run(action, card) {
+  const id = card?.id ?? null;
   try {
     const asked = {
       trust: card?.trustConfirm,
@@ -229,17 +234,34 @@ async function run(action, card) {
     if (asked && !(await confirmWith(asked))) {
       return;
     }
+    if (id !== null) {
+      pending.add(id);
+      if (view) {
+        render(view);
+      }
+    }
     const result = await invoke(action.command, {
       target: action.target,
       conflict: action.conflict,
+      press: nextPress(),
     });
+    pending.delete(id);
     showResult(result, card);
     if (result.conflict) {
       askConflict(result, card);
     }
   } catch (why) {
+    pending.delete(id);
     showFailure(why, card);
   }
+}
+
+// What a pressed Finding shows in place of its buttons until the daemon
+// answers: the line the app sent with the view.
+function renderWorking() {
+  const line = el("p", "working", view?.working ?? "");
+  line.setAttribute("role", "status");
+  return line;
 }
 
 // A Folder Scan's Finding in the Posture's wording: the Simple verdict title
@@ -291,16 +313,23 @@ function renderTechnical(card) {
   }
   shown.append(table);
   const behind = (card.actions ?? []).filter((action) => action.technical);
-  if (behind.length > 0) {
+  // A pressed Finding says it is working once, where its buttons in sight
+  // were.
+  if (behind.length > 0 && !pending.has(card.id)) {
     shown.append(renderActions(card, behind));
   }
   return shown;
 }
 
 // The buttons of one Finding: those the Posture shows in sight, or the ones
-// given.
+// given. While a press of one waits for the daemon's answer, the Finding
+// shows the working line in their place.
 function renderActions(card, actions = card.actions.filter((action) => !action.technical)) {
   const node = el("div", "actions");
+  if (pending.has(card.id)) {
+    node.append(renderWorking());
+    return node;
+  }
   for (const action of actions) {
     const button = el("button", "", action.label);
     button.type = "button";
@@ -517,7 +546,9 @@ function renderAmbiguousList(items) {
   const section = pane("threats").querySelector(".ambiguous-items");
   const shown = isDeveloper() && Array.isArray(items) && items.length > 0;
   section.hidden = !shown;
-  section.querySelector(".list").replaceChildren(...(shown ? items.map(renderAmbiguous) : []));
+  const list = shown ? items : [];
+  const open = list.filter((item) => detailsOpen.has(`ambiguous:${item.id}`)).map((item) => item.id);
+  keep(section.querySelector(".list"), JSON.stringify([list, open]), () => list.map(renderAmbiguous));
 }
 
 // The "checked by <engine>" notes of Items a benign Verdict moved to Clear.
@@ -560,7 +591,15 @@ function select(id) {
 }
 
 function renderSidebar(entries) {
-  const buttons = entries.map((entry) => {
+  keep($("sidebar"), JSON.stringify([entries, selectedPane]), () => renderEntries(entries));
+  for (const entry of entries) {
+    pane(entry.pane).querySelector(".pane-title").textContent = entry.label;
+    pane(entry.pane).hidden = entry.pane !== selectedPane;
+  }
+}
+
+function renderEntries(entries) {
+  return entries.map((entry) => {
     const button = el("button", "entry");
     button.type = "button";
     button.dataset.pane = entry.pane;
@@ -574,11 +613,6 @@ function renderSidebar(entries) {
     button.addEventListener("click", () => select(entry.pane));
     return button;
   });
-  $("sidebar").replaceChildren(...buttons);
-  for (const entry of entries) {
-    pane(entry.pane).querySelector(".pane-title").textContent = entry.label;
-    pane(entry.pane).hidden = entry.pane !== selectedPane;
-  }
 }
 
 function renderRow(id, card) {
@@ -638,20 +672,27 @@ function renderQuarantineEntry(card) {
 function renderTrusted(entries) {
   const section = pane("quarantine").querySelector(".trusted");
   section.hidden = entries.length === 0;
-  const rows = entries.map((entry) => {
-    const row = el("div", "trusted-entry");
-    row.setAttribute("role", "listitem");
-    row.append(el("span", "title", entry.title));
-    const button = el("button", "", entry.action.label);
-    button.type = "button";
-    button.dataset.action = entry.action.command;
-    button.addEventListener("click", () =>
-      run(entry.action, { id: entry.id, state: "trusted", trustedTitle: entry.title }),
-    );
-    row.append(button);
-    return row;
-  });
-  section.querySelector(".trusted-list").replaceChildren(...rows);
+  const waiting = entries.filter((entry) => pending.has(entry.id)).map((entry) => entry.id);
+  const key = JSON.stringify([entries, waiting, waiting.length > 0 ? view?.working : null]);
+  keep(section.querySelector(".trusted-list"), key, () =>
+    entries.map((entry) => {
+      const row = el("div", "trusted-entry");
+      row.setAttribute("role", "listitem");
+      row.append(el("span", "title", entry.title));
+      if (pending.has(entry.id)) {
+        row.append(renderWorking());
+        return row;
+      }
+      const button = el("button", "", entry.action.label);
+      button.type = "button";
+      button.dataset.action = entry.action.command;
+      button.addEventListener("click", () =>
+        run(entry.action, { id: entry.id, state: "trusted", trustedTitle: entry.title }),
+      );
+      row.append(button);
+      return row;
+    }),
+  );
 }
 
 // The Finding selected in the pane in sight, if that pane lists Findings.
@@ -671,18 +712,35 @@ function renderFindingPane(id, cards, loaded) {
   }
   node.querySelector(".empty").hidden = !loaded || cards.length > 0 || kept;
   node.querySelector(".split").hidden = cards.length === 0 && !kept;
-  node.querySelector(".list").replaceChildren(...cards.map((card) => renderRow(id, card)));
+  const developer = isDeveloper();
+  keep(node.querySelector(".list"), JSON.stringify([cards, selectedFinding[id], developer]), () =>
+    cards.map((card) => renderRow(id, card)),
+  );
   const selected = cards.find((card) => card.id === selectedFinding[id]);
-  const detail = [];
-  if (selected) {
-    detail.push(id === "quarantine" ? renderQuarantineEntry(selected) : renderFinding(selected));
-  } else if (kept) {
-    detail.push(el("p", "title", answer.title));
-  }
-  if (kept) {
-    detail.push(renderAnswer(answer.result));
-  }
-  node.querySelector(".detail").replaceChildren(...detail);
+  // Everything the detail is built from: an unchanged Finding keeps its
+  // card, its buttons included, through every render.
+  const waiting = selected !== undefined && pending.has(selected.id);
+  const key = JSON.stringify({
+    selected: selected ?? null,
+    answer: kept ? answer : null,
+    waiting,
+    working: waiting ? (view?.working ?? null) : null,
+    details: selected !== undefined && detailsOpen.has(selected.id),
+    howTo: selected !== undefined && howToOpen.has(selected.id),
+    developer,
+  });
+  keep(node.querySelector(".detail"), key, () => {
+    const detail = [];
+    if (selected) {
+      detail.push(id === "quarantine" ? renderQuarantineEntry(selected) : renderFinding(selected));
+    } else if (kept) {
+      detail.push(el("p", "title", answer.title));
+    }
+    if (kept) {
+      detail.push(renderAnswer(answer.result));
+    }
+    return detail;
+  });
 }
 
 // A moment in local time, as the popover writes it.
@@ -1107,9 +1165,6 @@ function render(list) {
   renderAiCheck(list.settings.aiCheck);
   renderGateSwitch(list.settings.gate);
   renderSettingsTabs();
-  actionsWait = list.actionsWait;
-  $("actions-wait").hidden = actionsWait === null;
-  $("actions-wait").textContent = actionsWait === null ? "" : actionsWait;
   renderSidebar(list.sidebar);
   for (const id of FINDING_PANES) {
     renderFindingPane(id, list.panes[id], list.loaded);
@@ -1118,7 +1173,6 @@ function render(list) {
   renderActivity(list.activity, list.loaded);
   renderAmbiguousList(list.ambiguous);
   renderCheckedList(list.checked);
-  disableActions();
 }
 
 // The Scan a folder dialog as the app sent it last, or null while it is
@@ -1223,19 +1277,20 @@ if (webview) {
 // Scan follow from the stream.
 $("scan-now").addEventListener("click", async () => {
   try {
-    scanAnswer = await invoke("scan_now");
+    scanAnswer = await invoke("scan_now", { press: nextPress() });
     $("scan-line").textContent = scanAnswer;
   } catch (why) {
     $("scan-line").textContent = String(why);
   }
 });
-// Check now sends check-now once; the app disables the button until the
-// daemon answers and the stream shows the projects once they are checked.
+// Check now sends check-now once per press; the button says "Checking…"
+// and waits until the daemon answers, and the stream shows the projects once
+// they are checked.
 $("check-now").addEventListener("click", async () => {
   $("check-now").disabled = true;
   $("permission-answer").hidden = true;
   try {
-    await invoke("check_now");
+    await invoke("check_now", { press: nextPress() });
   } catch (why) {
     $("permission-answer").textContent = String(why);
     $("permission-answer").hidden = false;

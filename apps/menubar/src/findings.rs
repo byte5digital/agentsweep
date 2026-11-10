@@ -3,8 +3,9 @@
 //! ones already stopped or decided, each with exactly the actions the daemon
 //! allows on it ([`crate::actions`]); and the Scan in hand, followed from the
 //! subscribe stream. While a Scan runs every action waits for it to finish
-//! (decision 22 of the owner), so the window disables the action buttons and
-//! says why; Health on the stream says when they may be pressed again.
+//! (decision 22 of the owner). The buttons are never disabled for it: a press
+//! is taken at once, and the Finding pressed shows that it waits for the
+//! check until the daemon answers (spec sections 6.4 and 6.6).
 //!
 //! The list is the daemon's, never worked out here. It is loaded from a
 //! status answer and then kept current from the state events: a Finding that
@@ -172,9 +173,9 @@ impl Findings {
 
     /// A Health on the stream: Protection back on, or a count of open
     /// Findings the list does not match, asks for the status again. Whether a
-    /// Scan runs follows Health too, which is what disables the actions and
-    /// enables them again; the Scan's own progress and end come as events of
-    /// their own and write the line.
+    /// Scan runs follows Health too, which is what a pressed action waits
+    /// for; the Scan's own progress and end come as events of their own and
+    /// write the line.
     fn health(&mut self, health: &Health) -> Follow {
         if health.protection.is_off() {
             return self.off(health.protection.reason());
@@ -198,12 +199,12 @@ impl Findings {
         }
     }
 
-    /// Why the actions cannot be pressed right now, absent when they can:
-    /// every action waits for a running Scan to finish.
-    pub fn actions_wait(&self) -> Option<&'static str> {
+    /// What a pressed action shows on its Finding until the daemon answers:
+    /// while a Scan runs the action waits for it to finish.
+    pub fn working(&self) -> &'static str {
         match self.scan.running && self.off.is_none() {
-            true => Some(ACTIONS_WAIT),
-            false => None,
+            true => WAITING,
+            false => WORKING,
         }
     }
 
@@ -252,7 +253,7 @@ impl Findings {
             "off": self.off,
             "loaded": self.loaded,
             "scan": { "running": self.scan.running, "line": self.scan.line },
-            "actionsWait": self.actions_wait(),
+            "working": self.working(),
             "counts": {
                 "threats": open.iter().filter(|f| f.category == Category::Threat).count(),
                 "exposures": open.iter().filter(|f| f.category == Category::Exposure).count(),
@@ -268,9 +269,11 @@ impl Findings {
     }
 }
 
-/// Why the action buttons are disabled while a Scan runs. Placeholder.
-pub const ACTIONS_WAIT: &str =
-    "Checking now. Actions wait until the check has finished, then they can be used again.";
+/// What a Finding pressed while a Scan runs shows until the daemon answers.
+pub const WAITING: &str = "Waiting for the check to finish…";
+
+/// What a Finding pressed shows until the daemon answers, when no Scan runs.
+pub const WORKING: &str = "Working…";
 
 /// True for the kinds a Quarantine neutralises in place and that are never
 /// quarantined automatically: Repository Metadata and env files (spec
@@ -728,11 +731,14 @@ pub(crate) mod tests {
         }
     }
 
+    /// A press waits for a running Scan, and the Finding pressed says so;
+    /// nothing in the list disables a button for it.
     #[test]
-    fn the_actions_wait_while_a_scan_runs() {
+    fn a_press_waits_for_a_running_scan_and_says_so() {
         let mut list = Findings::new();
         list.load(&status_of(every_source()));
-        assert_eq!(list.to_value()["actionsWait"], Value::Null);
+        assert_eq!(list.to_value()["working"], WORKING);
+        assert!(list.to_value().get("actionsWait").is_none());
 
         let open = list.open().count();
         let counted = |scanning: bool| {
@@ -746,17 +752,17 @@ pub(crate) mod tests {
 
         // Health says "checking now" before the Scan's own start arrives.
         assert_eq!(list.apply(&counted(true)), Follow::Render);
-        assert_eq!(list.to_value()["actionsWait"], ACTIONS_WAIT);
+        assert_eq!(list.to_value()["working"], WAITING);
         assert_eq!(list.to_value()["scan"]["running"], true);
         assert_eq!(list.apply(&counted(true)), Follow::Nothing);
         assert_eq!(
             list.apply(&StateEvent::ScanProgress { done: 1, total: 4 }),
             Follow::Render
         );
-        assert_eq!(list.to_value()["actionsWait"], ACTIONS_WAIT);
+        assert_eq!(list.to_value()["working"], WAITING);
 
-        // The Scan finished, and Health still counts the queue busy: the
-        // actions keep waiting until Health lets go.
+        // The Scan finished, and Health still counts the queue busy: a press
+        // keeps waiting until Health lets go.
         assert_eq!(
             list.apply(&StateEvent::ScanFinished {
                 summary: Box::new(summary()),
@@ -764,16 +770,16 @@ pub(crate) mod tests {
             Follow::Refresh
         );
         assert_eq!(list.apply(&counted(true)), Follow::Render);
-        assert_eq!(list.to_value()["actionsWait"], ACTIONS_WAIT);
+        assert_eq!(list.to_value()["working"], WAITING);
         assert!(
             list.scan().line.starts_with("Last full Scan"),
             "the line keeps the finished Scan: {}",
             list.scan().line
         );
         assert_eq!(list.apply(&counted(false)), Follow::Render);
-        assert_eq!(list.to_value()["actionsWait"], Value::Null);
+        assert_eq!(list.to_value()["working"], WORKING);
 
-        // A Scan the stream announces itself disables them the same way.
+        // A Scan the stream announces itself is waited for the same way.
         assert_eq!(
             list.apply(&StateEvent::ScanStarted {
                 trigger: Trigger::Watcher,
@@ -781,17 +787,17 @@ pub(crate) mod tests {
             }),
             Follow::Render
         );
-        assert_eq!(list.to_value()["actionsWait"], ACTIONS_WAIT);
+        assert_eq!(list.to_value()["working"], WAITING);
         list.apply(&StateEvent::ScanFinished {
             summary: Box::new(summary()),
         });
         assert_eq!(list.apply(&counted(false)), Follow::Nothing);
-        assert_eq!(list.to_value()["actionsWait"], Value::Null);
+        assert_eq!(list.to_value()["working"], WORKING);
 
         // With Protection off nothing is offered, so nothing waits either.
         list.apply(&counted(true));
         list.off("the daemon stopped answering");
-        assert_eq!(list.to_value()["actionsWait"], Value::Null);
+        assert_eq!(list.to_value()["working"], WORKING);
     }
 
     /// The fixed note of a never-auto kind and of a Managed Item.

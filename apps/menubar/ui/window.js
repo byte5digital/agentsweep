@@ -505,7 +505,7 @@ function addHowTo(card, node, actions) {
   node.append(section);
 }
 
-// The Show technical details toggle of one Finding or Ambiguous Item.
+// The Show technical details toggle of one Finding.
 function renderToggle(id, again = () => render(view)) {
   const open = detailsOpen.has(id);
   const toggle = el("button", "link", open ? "Hide technical details" : "Show technical details");
@@ -522,32 +522,45 @@ function renderToggle(id, again = () => render(view)) {
   return toggle;
 }
 
-// One Ambiguous Item, in the Developer Posture only: its title, its Score,
-// its Heuristic lines and its technical details. It is not a Finding, so it
-// offers no action.
+// One Ambiguous Item, in the Developer Posture only: one line with its
+// title and its Score, and a click on it opens its Heuristic lines and its
+// technical details beneath. It is not a Finding, so it offers no action.
 function renderAmbiguous(item) {
-  const node = el("article", "card ambiguous");
-  node.append(el("p", "title", item.title));
-  node.append(el("p", "muted", item.score));
-  const list = el("ul", "heuristics");
-  for (const line of item.lines) {
-    list.append(el("li", "", line));
-  }
-  node.append(list);
   const key = `ambiguous:${item.id}`;
-  node.append(renderToggle(key));
-  if (detailsOpen.has(key)) {
-    node.append(renderTechnical(item));
+  const open = detailsOpen.has(key);
+  const node = el("div", "ambiguous-item");
+  node.setAttribute("role", "listitem");
+  const row = el("button", "ambiguous-row");
+  row.type = "button";
+  row.setAttribute("aria-expanded", String(open));
+  row.append(el("span", "title", item.title), el("span", "score", item.score));
+  row.addEventListener("click", () => {
+    if (detailsOpen.has(key)) {
+      detailsOpen.delete(key);
+    } else {
+      detailsOpen.add(key);
+    }
+    render(view);
+  });
+  node.append(row);
+  if (open) {
+    const list = el("ul", "heuristics");
+    for (const line of item.lines) {
+      list.append(el("li", "", line));
+    }
+    node.append(list, renderTechnical(item));
   }
   return node;
 }
 
-// The Ambiguous Items beneath the Threat Findings. The app sends them in the
+// The Ambiguous Items below the Threat Findings, in a section closed until
+// the user opens it, its count beside its name. The app sends them in the
 // Developer Posture only; the Simple Posture never shows one (spec 8.4).
 function renderAmbiguousList(items) {
   const section = pane("threats").querySelector(".ambiguous-items");
   const shown = isDeveloper() && Array.isArray(items) && items.length > 0;
   section.hidden = !shown;
+  section.querySelector(".count").textContent = shown ? String(items.length) : "";
   const list = shown ? items : [];
   const open = list.filter((item) => detailsOpen.has(`ambiguous:${item.id}`)).map((item) => item.id);
   keep(section.querySelector(".list"), JSON.stringify([list, open]), () => list.map(renderAmbiguous));
@@ -622,12 +635,18 @@ function renderRow(id, card) {
   row.type = "button";
   row.setAttribute("role", "listitem");
   row.dataset.category = card.category;
+  // The whole title, wrapped, and in the Simple Posture the project or
+  // Agent under it.
+  const text = el("span", "text");
   if (isDeveloper()) {
-    row.append(el("span", "title", card.developer.title));
-    row.append(el("span", "chip", card.severity));
+    text.append(el("span", "title", card.developer.title));
+    row.append(text, el("span", "chip", card.severity));
   } else {
-    row.append(el("span", "title", card.simple.title));
-    row.append(el("span", `chip ${card.simple.chip}`, card.simple.severity));
+    text.append(el("span", "title", card.simple.title));
+    if (card.simple.place) {
+      text.append(el("span", "place", card.simple.place));
+    }
+    row.append(text, el("span", `chip ${card.simple.chip}`, card.simple.severity));
   }
   if (card.id === selectedFinding[id]) {
     row.setAttribute("aria-current", "true");
@@ -922,12 +941,19 @@ function settingsAnswer(text) {
   $("settings-answer").textContent = text;
 }
 
+// How many settings changes the daemon answered. The radios, toggles and
+// the Gate switch keep their nodes while it stays the same (keep.js), so a
+// render cannot swallow a click on one; an answer builds them again from the
+// view, so a change the daemon refused does not stay ticked.
+let settingsAnswered = 0;
+
 async function changeSetting(change) {
   try {
     settingsAnswer(await invoke("change_settings", { change }));
   } catch (why) {
     settingsAnswer(String(why));
   }
+  settingsAnswered += 1;
   if (view) {
     render(view);
   }
@@ -941,8 +967,9 @@ function renderSettings(settings) {
 
   const detail = $("settings-detail");
   detail.querySelector("h3").textContent = settings.detail.title;
-  detail.querySelector(".choices").replaceChildren(
-    ...settings.detail.choices.map((choice) => {
+  const choices = JSON.stringify([settings.detail.choices, disabled, settingsAnswered]);
+  keep(detail.querySelector(".choices"), choices, () =>
+    settings.detail.choices.map((choice) => {
       const label = el("label", "choice");
       const input = el("input");
       input.type = "radio";
@@ -958,8 +985,9 @@ function renderSettings(settings) {
   const background = $("settings-background");
   background.querySelector("h3").textContent = settings.background.title;
   background.querySelector(".disclosure").textContent = settings.background.disclosure;
-  background.querySelector(".toggles").replaceChildren(
-    ...settings.background.toggles.map((toggle) => {
+  const toggles = JSON.stringify([settings.background.toggles, disabled, settingsAnswered]);
+  keep(background.querySelector(".toggles"), toggles, () =>
+    settings.background.toggles.map((toggle) => {
       const label = el("label", "toggle");
       const input = el("input");
       input.type = "checkbox";
@@ -1107,30 +1135,35 @@ $("settings-not-protected")
   .addEventListener("click", () => invoke("open_not_protected").catch((why) => settingsAnswer(String(why))));
 
 // The Gate switch in Background (spec section 8.10). The daemon writes and
-// removes the entries; the switch shows where the daemon says it stands.
+// removes the entries; the switch shows where the daemon says it stands. It
+// keeps its node while that stays the same, and waits greyed out, as the
+// user left it, until the daemon answered.
 function renderGateSwitch(gate) {
-  const label = el("label", "toggle");
-  const input = el("input");
-  input.type = "checkbox";
-  input.checked = gate.on;
-  input.disabled = !gate.available;
-  input.addEventListener("change", async () => {
-    input.disabled = true;
-    try {
-      settingsAnswer(await invoke("switch_gate", { on: input.checked }));
-    } catch (why) {
-      settingsAnswer(String(why));
+  keep($("settings-gate"), JSON.stringify([gate, settingsAnswered]), () => {
+    const label = el("label", "toggle");
+    const input = el("input");
+    input.type = "checkbox";
+    input.checked = gate.on;
+    input.disabled = !gate.available;
+    input.addEventListener("change", async () => {
+      input.disabled = true;
+      try {
+        settingsAnswer(await invoke("switch_gate", { on: input.checked }));
+      } catch (why) {
+        settingsAnswer(String(why));
+      }
+      settingsAnswered += 1;
+      if (view) {
+        render(view);
+      }
+    });
+    label.append(input, el("span", "", gate.label));
+    const parts = [label, el("p", "muted", gate.subtitle)];
+    for (const location of gate.locations ?? []) {
+      parts.push(el("p", "id", location));
     }
-    if (view) {
-      render(view);
-    }
+    return parts;
   });
-  label.append(input, el("span", "", gate.label));
-  const parts = [label, el("p", "muted", gate.subtitle)];
-  for (const location of gate.locations ?? []) {
-    parts.push(el("p", "id", location));
-  }
-  $("settings-gate").replaceChildren(...parts);
   $("settings-gate").hidden = false;
 }
 

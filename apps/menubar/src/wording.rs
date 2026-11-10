@@ -107,6 +107,9 @@ pub struct Wording {
     pub chip: Chip,
     /// The body, in the fixed order.
     pub lines: Vec<Line>,
+    /// Where it is, under the title in the list: the project, or else the
+    /// Agent; empty for an Item of neither.
+    pub place: String,
     /// The message **Copy a message for your admin** puts on the clipboard,
     /// present on a Managed Finding only.
     pub admin_message: Option<String>,
@@ -117,6 +120,7 @@ impl Wording {
     pub fn strings(&self) -> Vec<&str> {
         let mut strings = vec![self.title.as_str(), self.severity];
         strings.extend(self.lines.iter().map(|line| line.text.as_str()));
+        strings.extend(Some(self.place.as_str()).filter(|place| !place.is_empty()));
         strings.extend(self.admin_message.as_deref());
         strings
     }
@@ -128,6 +132,7 @@ impl Wording {
             "severity": self.severity,
             "chip": self.chip.as_str(),
             "lines": lines_value(&self.lines),
+            "place": self.place,
             "admin": self.admin_message.is_some(),
         })
     }
@@ -189,6 +194,7 @@ pub fn simple(finding: &RecordedFinding) -> Wording {
         severity: severity_word(finding.severity),
         chip: chip(finding.category),
         lines: body(finding, &named, Posture::Simple),
+        place: named.place(),
         admin_message: managed(finding).then(|| admin_message(finding, &named)),
     }
 }
@@ -297,7 +303,8 @@ pub struct Named {
     pub name: String,
     /// The plugin it came with, empty unless it did.
     pub plugin: String,
-    /// The project's folder name, for a project's git settings.
+    /// The project's folder name, for a project's git settings and the
+    /// place under a title.
     pub project_name: String,
     /// True for a Project-scope Item.
     pub project: bool,
@@ -343,6 +350,15 @@ impl Named {
             return format!("the git settings of the project '{}'", self.project_name);
         }
         format!("the {} '{}'", self.noun, self.name)
+    }
+
+    /// Where the Item is, in as few words as names it: "Project acme" for a
+    /// project's Item, else its Agent.
+    pub fn place(&self) -> String {
+        if self.project && !self.project_name.is_empty() {
+            return format!("Project {}", self.project_name);
+        }
+        self.agent.unwrap_or_default().to_string()
     }
 
     /// The Item opening a sentence.
@@ -1007,6 +1023,28 @@ mod tests {
         let user = finding(PDF_HELPER, Kind::Skill, "rule 0001", Category::Threat);
         assert!(texts(&simple(&user), Part::Project).is_empty());
         assert!(!simple(&user).strings().contains(&PROJECT_LINE));
+    }
+
+    /// The line under a title in the list names the project a Finding is in,
+    /// or else its Agent, and nothing for an Item of neither.
+    #[test]
+    fn the_place_names_the_project_or_else_the_agent() {
+        let cases = [
+            (CLAUDE_MD, Kind::InstructionFile, "Project vendor-sdk"),
+            (GIT, Kind::RepositoryMetadata, "Project vendor-sdk"),
+            (PDF_HELPER, Kind::Skill, "Claude Code"),
+            (NOTES_SYNC, Kind::McpServer, "Codex"),
+            (MANAGED, Kind::SettingsEntry, "Claude Code"),
+        ];
+        for (item, kind, place) in cases {
+            let wording = simple(&finding(item, kind, "rule 0001", Category::Threat));
+            assert_eq!(wording.place, place, "{item}");
+            assert_eq!(wording.to_value()["place"], place, "{item}");
+            assert!(wording.strings().contains(&place), "{item}");
+        }
+        let mut nowhere = finding(ENV, Kind::EnvFile, "rule 0001", Category::Threat);
+        nowhere.facts.project_root = String::new();
+        assert_eq!(simple(&nowhere).place, "");
     }
 
     /// A Managed Finding whose evidence holds a secret, as a match on a

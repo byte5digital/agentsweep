@@ -133,8 +133,14 @@ main {
   gap: 12px;
 }
 
-.list {
-  flex: 0 0 240px;
+/* The list beside a Finding: wide enough for a title in a few lines, and
+   the user can drag its corner to make it wider or narrower. */
+.split > .list {
+  flex: 0 0 auto;
+  width: 40%;
+  min-width: 240px;
+  max-width: 70%;
+  resize: horizontal;
   overflow-y: auto;
   border-right: 1px solid var(--rule);
   padding-right: 8px;
@@ -149,7 +155,7 @@ main {
 .row {
   display: flex;
   width: 100%;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 6px;
   margin: 2px 0;
@@ -173,11 +179,25 @@ main {
   background: var(--selected);
 }
 
-.row .title {
+/* A title is never cut: it wraps whole, and the project or Agent stands
+   under it. */
+.row .text {
+  display: flex;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex-direction: column;
+}
+
+.row .title {
+  overflow-wrap: anywhere;
+}
+
+.row .place {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.row .chip {
+  flex: none;
 }
 
 h2 {
@@ -632,26 +652,64 @@ dialog {
   display: none !important;
 }
 
-/* The Ambiguous Items beneath the Threat Findings, Developer Posture only. */
+/* The Ambiguous Items below the Threat Findings, Developer Posture only:
+   closed until opened, then one line per Item. */
 .ambiguous-items,
 .checked-items {
   margin-top: 24px;
 }
 
-.ambiguous-items h3,
+.ambiguous-items summary {
+  font-weight: 600;
+}
+
+.ambiguous-items summary .count {
+  margin-left: 4px;
+  font-weight: normal;
+}
+
 .checked-items h3 {
   font-size: 13px;
   margin: 0 0 4px;
+}
+
+.ambiguous-row {
+  display: flex;
+  width: 100%;
+  gap: 12px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ambiguous-row .title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ambiguous-row .score {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ambiguous-row[aria-expanded="true"] {
+  background: var(--selected);
+}
+
+.ambiguous-item > :not(.ambiguous-row) {
+  margin-left: 12px;
 }
 
 /* The AI block: the engine's own words, set apart from AgentSweep's. */
 .card p.ai {
   border-left: 3px solid var(--rule);
   padding-left: 8px;
-}
-
-.card.ambiguous {
-  border-style: dashed;
 }
 
 /* The Quarantine pane: who stopped an entry and when, under its chips, and

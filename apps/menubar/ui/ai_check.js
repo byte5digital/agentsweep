@@ -102,13 +102,21 @@ function openConsent() {
   dialog.showModal();
 }
 
+// Names every press of "I agree, turn it on", unique across reloads of the
+// window, so the app hands the key over once per press even when the
+// webview delivers the press twice.
+const loaded = crypto.getRandomValues(new Uint32Array(2)).join("-");
+let presses = 0;
+
 async function agreeToClaude() {
   const field = $("ai-consent-key");
   const typed = field.value.trim();
   // Emptied before anything else: the window keeps no copy of the key.
   field.value = "";
   $("ai-consent").close();
-  await ask("turn_on_claude", { key: typed === "" ? null : typed });
+  presses += 1;
+  const press = `${loaded}-${presses}`;
+  await ask("turn_on_claude", { key: typed === "" ? null : typed, press });
 }
 
 async function showPreview() {

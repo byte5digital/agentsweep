@@ -220,6 +220,58 @@ fn the_key_is_handed_over_once_and_kept_nowhere_in_the_app() {
     assert_eq!(frame.to_value()["settings"]["aiCheck"]["key"]["set"], false);
 }
 
+/// The Event Log's key-added records, counted from the Activity the daemon
+/// builds from them.
+fn keys_added(asking: &Asking) -> usize {
+    asking
+        .status()
+        .expect("a status")
+        .activity
+        .iter()
+        .filter(|line| line.line == "A Claude API key was handed over for the AI check.")
+        .count()
+}
+
+/// One press of "I agree, turn it on" hands the key over once, even when
+/// the webview delivers the press twice, at the same time or one after the
+/// other: one key-added in the Event Log, and every delivery answered alike.
+/// A second press is a second hand-over.
+#[test]
+fn one_press_hands_the_key_over_once() {
+    let sandbox = Sandbox::new("press");
+    let _daemon = sandbox.start();
+    let asking = Arc::new(sandbox.asking());
+    let presses = Arc::new(ai_check::Presses::default());
+
+    let deliveries: Vec<_> = (0..2)
+        .map(|_| {
+            let asking = Arc::clone(&asking);
+            let presses = Arc::clone(&presses);
+            std::thread::spawn(move || {
+                presses.turn_on_claude(&asking, "press-1", Some(A_KEY.to_string()))
+            })
+        })
+        .collect();
+    let answers: Vec<_> = deliveries
+        .into_iter()
+        .map(|delivery| delivery.join().expect("a delivery").expect("turned on"))
+        .collect();
+    let late = presses
+        .turn_on_claude(&asking, "press-1", Some(A_KEY.to_string()))
+        .expect("turned on");
+    for answer in answers.iter().chain([&late]) {
+        assert_eq!(answer.engine, JudgementEngine::Claude);
+        assert_eq!(answer.recorded, 2, "the key added and the engine enabled");
+    }
+    assert_eq!(keys_added(&asking), 1, "one press, one key-added");
+    assert!(!format!("{presses:?}").contains(A_KEY));
+
+    presses
+        .turn_on_claude(&asking, "press-2", Some(A_KEY.to_string()))
+        .expect("turned on again");
+    assert_eq!(keys_added(&asking), 2, "a second press hands it over again");
+}
+
 /// Every engine change through the cards says it was recorded; an Ollama
 /// address off this Mac is refused before it is sent and moves nothing.
 #[test]
@@ -323,6 +375,11 @@ fn the_window_empties_the_key_field_and_stores_nothing() {
     assert!(
         emptied < handed,
         "the field is emptied before the hand-over"
+    );
+    assert!(
+        script[handed..]
+            .starts_with("\"turn_on_claude\", { key: typed === \"\" ? null : typed, press })"),
+        "every press is named, so it is handed over once"
     );
     assert!(script.contains("$(\"ai-consent\").addEventListener(\"close\""));
     let page = std::fs::read_to_string(ui.join("window.html")).expect("the page");

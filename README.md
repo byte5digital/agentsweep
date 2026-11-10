@@ -22,6 +22,10 @@ This installs the app and puts its command line tool, `agentsweep`, on your path
 
 On first launch a short setup asks one question per screen. Full Disk Access is never required.
 
+### Uninstall
+
+Use **Uninstall AgentSweep…** in Settings, or `agentsweep uninstall`. You can also quit AgentSweep and drag it to the Trash: it takes its hooks out of Claude Code and Codex and stops. Your data stays, so a reinstall picks up where it left off. After a drag, System Settings may list AgentSweep under Login Items for a while; macOS removes the entry later by itself.
+
 ### The command line tool on its own
 
 `cargo install agentsweep` (arrives with 0.1.0, when the crate is published) gives only the on-demand scanner: `agentsweep scan <dir>` checks one folder before you open it with an assistant and answers "safe to open" or "do not open yet". It runs in the terminal, records nothing and writes nothing. It has no background service, does not watch anything, cannot quarantine and cannot show status, because the AgentSweep service answers only the signed tools of its own app. For protection that keeps running, install the app.

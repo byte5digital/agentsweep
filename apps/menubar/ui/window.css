@@ -225,7 +225,7 @@ button:disabled {
   border-color: var(--rule);
 }
 
-.wait {
+.working {
   color: var(--muted);
   font-weight: 600;
 }

@@ -34,9 +34,9 @@ use agentsweep_ipc::Client;
 use agentsweep_ipc::peer::SameUser;
 use agentsweep_ipc::protocol::{Role, SettingsChange, StateEvent, Status};
 use agentsweep_menubar::actions::{after_quarantine, offered};
-use agentsweep_menubar::asking::{ActionRequest, Asking};
+use agentsweep_menubar::asking::{ActionRequest, Asking, MOVED_TO_QUARANTINE};
 use agentsweep_menubar::banner::{Banner, Button};
-use agentsweep_menubar::findings::{Findings, Follow};
+use agentsweep_menubar::findings::{Findings, Follow, WORKING};
 use agentsweep_menubar::folder::{DropRefusal, resolve_drop, scan};
 use agentsweep_menubar::frame::{Frame, Pane};
 use agentsweep_menubar::gate;
@@ -369,12 +369,9 @@ fn the_window_lists_the_status_and_follows_every_action_from_the_stream() {
     // user-level skill.
     let quarantined = asking.act(&ActionRequest::Quarantine(skill.id.to_string()));
     assert_eq!(quarantined["done"], true, "{quarantined}");
-    assert!(
-        quarantined["message"]
-            .as_str()
-            .expect("a sentence")
-            .starts_with("Quarantined the skill 'setup'."),
-        "{quarantined}"
+    assert_eq!(
+        quarantined["message"], MOVED_TO_QUARANTINE,
+        "said plainly: {quarantined}"
     );
     let sessions = asking.sessions().expect("the sessions");
     assert_eq!(
@@ -469,14 +466,12 @@ fn the_window_lists_the_status_and_follows_every_action_from_the_stream() {
         .expect("the settings file");
     assert!(!settings.contains("bypassPermissions"), "{settings}");
 
-    // A refusal is one sentence and changes nothing.
+    // A refusal is one sentence and changes nothing. The fixed Exposure is
+    // in quarantine already, and that is the reason given.
     let refused = asking.act(&ActionRequest::Quarantine(exposure.id.to_string()));
     assert_eq!(refused["done"], false);
-    assert!(
-        refused["message"]
-            .as_str()
-            .expect("a sentence")
-            .starts_with("Nothing was done:"),
+    assert_eq!(
+        refused["message"], "It is already in quarantine.",
         "{refused}"
     );
 
@@ -490,10 +485,10 @@ fn the_window_lists_the_status_and_follows_every_action_from_the_stream() {
         false => &agentsweep_core::state::Trigger::ALL,
     };
     following.until_a_full_scan_finished(&mut list, &asking, triggers);
-    // Once Health no longer says "checking now", the actions can be pressed
-    // again, and the stream alone said so.
-    following.until(&mut list, &asking, "the actions enabled again", |list| {
-        list.actions_wait().is_none() && list.to_value()["actionsWait"].is_null()
+    // Once Health no longer says "checking now", a press no longer waits,
+    // and the stream alone said so.
+    following.until(&mut list, &asking, "a press no longer waits", |list| {
+        list.working() == WORKING && list.to_value()["working"] == WORKING
     });
     following.in_step(&mut list, &asking);
 }

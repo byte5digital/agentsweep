@@ -753,6 +753,71 @@ mod tests {
         assert_eq!(frame.sidebar()[2].count, Some(0));
     }
 
+    /// What the window keeps a card's nodes by (`keep` in window.js): a
+    /// Scan starting, progressing, Health moving with it and the Scan
+    /// finishing, with the status asked again after it, leave every Finding
+    /// that did not change exactly as it was, so the button under the
+    /// pointer stays the same node and its click is not swallowed. Only the
+    /// line a press shows follows the Scan. A Finding that changed moves.
+    #[test]
+    fn a_scan_leaves_every_unchanged_card_as_it_was() {
+        for posture in [Posture::Simple, Posture::Developer] {
+            let mut frame = Frame::new();
+            frame.load(&status());
+            frame.settings(&settings(posture));
+            let before = frame.to_value();
+            let mut scanning = status();
+            scanning.health.scanning = true;
+            let events = [
+                StateEvent::ScanStarted {
+                    trigger: Trigger::Watcher,
+                    at: moment(),
+                },
+                StateEvent::HealthChanged {
+                    health: Box::new(scanning.health.clone()),
+                },
+                StateEvent::ScanProgress { done: 1, total: 4 },
+                StateEvent::ScanProgress { done: 3, total: 4 },
+            ];
+            for event in &events {
+                frame.apply(event);
+                let now = frame.to_value();
+                for part in ["panes", "sidebar", "trusted"] {
+                    assert_eq!(
+                        now[part], before[part],
+                        "{posture:?} {part} after {event:?}"
+                    );
+                }
+                assert_eq!(now["working"], crate::findings::WAITING);
+            }
+            frame.apply(&StateEvent::ScanFinished {
+                summary: Box::new(finished()),
+            });
+            frame.load(&status());
+            let after = frame.to_value();
+            for part in ["panes", "sidebar", "trusted"] {
+                assert_eq!(
+                    after[part], before[part],
+                    "{posture:?} {part} after the Scan"
+                );
+            }
+            assert_eq!(after["working"], crate::findings::WORKING);
+
+            let first = status().findings[0].id.clone();
+            frame.apply(&StateEvent::FindingChanged {
+                id: first.clone(),
+                state: "trusted".to_string(),
+                finding: None,
+            });
+            let moved = frame.to_value();
+            assert_ne!(moved["panes"]["threats"], before["panes"]["threats"]);
+            assert_eq!(
+                moved["panes"]["threats"][0], before["panes"]["threats"][1],
+                "the other card is as it was"
+            );
+        }
+    }
+
     /// The `settings-changed` event re-labels the frame without a status.
     #[test]
     fn a_settings_changed_event_relabels_the_frame() {
@@ -951,11 +1016,17 @@ mod tests {
         assert!(!frame.check_now_sent(), "sent once while it waits");
         let sending = frame.overview().permission.expect("the line");
         assert!(!sending.enabled);
+        assert_eq!(
+            sending.button,
+            crate::permission::CHECKING,
+            "it says it is working"
+        );
         assert!(sending.privacy.is_none());
 
         frame.check_now_answered();
         let answered = frame.overview().permission.expect("the line");
         assert!(answered.enabled);
+        assert_eq!(answered.button, crate::permission::CHECK_NOW);
         assert!(answered.privacy.is_some());
         assert!(frame.to_value()["overview"]["permission"]["privacy"].is_object());
 

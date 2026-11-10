@@ -18,7 +18,7 @@ use std::io::ErrorKind;
 use std::sync::Mutex;
 
 use agentsweep_core::envelope::ChainId;
-use agentsweep_core::eventlog::Outcome;
+use agentsweep_core::eventlog::{Outcome, Primitive};
 use agentsweep_core::item::ItemId;
 use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::quarantine::{Conflict, RestoreReport};
@@ -278,9 +278,16 @@ impl Asking {
         self.with(false, Client::check_now)
     }
 
-    /// Carries out one action and renders the answer for the window.
+    /// Carries out one action and renders the answer for the window. It goes
+    /// on a connection of its own: an action waits for a running Scan to
+    /// finish, and the shared connection stays free meanwhile for the status
+    /// and the settings the window follows. It is asked once.
     pub fn act(&self, request: &ActionRequest) -> Value {
-        match self.with(false, |client| request.send(client)) {
+        match self
+            .socket
+            .connect()
+            .and_then(|mut client| request.send(&mut client))
+        {
             Ok(report) => report_view(&report, request.target()),
             Err(error) => refusal_view(&error),
         }
@@ -384,7 +391,9 @@ pub fn report_view(report: &ActionReport, target: &str) -> Value {
             true => "Something else is at the original place now, so nothing was put back. \
                      Replace the new file, or restore beside it."
                 .to_string(),
-            false => report.message.clone(),
+            false => plainly(report)
+                .map(str::to_string)
+                .unwrap_or_else(|| report.message.clone()),
         },
         "lines": lines,
         "details": details,
@@ -393,6 +402,33 @@ pub fn report_view(report: &ActionReport, target: &str) -> Value {
         "target": target,
     })
 }
+
+/// What a Quarantine or a fix that was carried out did, in the window's
+/// plain words and with the button that undoes it; nothing for any other
+/// answer, which keeps the daemon's sentence. The daemon's sentence names
+/// the command line's Restore, which the window does not offer.
+pub fn plainly(report: &ActionReport) -> Option<&'static str> {
+    if report.result != Outcome::Ok {
+        return None;
+    }
+    let every = |primitive: Primitive| {
+        !report.steps.is_empty() && report.steps.iter().all(|step| step.primitive == primitive)
+    };
+    match report.action.as_str() {
+        "quarantine" if every(Primitive::NativeDisable) => {
+            Some("Switched off. Switch it back on undoes it.")
+        }
+        "quarantine" if every(Primitive::NeutraliseInPlace) => {
+            Some("Switched the line off. Switch the line back on undoes it.")
+        }
+        "quarantine" => Some(MOVED_TO_QUARANTINE),
+        "fix" => Some("Taken out of its file. Restore undoes it."),
+        _ => None,
+    }
+}
+
+/// What a Quarantine that moved the Item says in the window.
+pub const MOVED_TO_QUARANTINE: &str = "Moved to quarantine. Restore undoes it.";
 
 /// A request that was not carried out, in the command line interface's words.
 pub fn refusal_view(error: &ClientError) -> Value {
@@ -407,6 +443,10 @@ pub fn refusal_view(error: &ClientError) -> Value {
     })
 }
 
+/// The refusal code of an action asked again on a Finding it was already
+/// taken on.
+pub const ALREADY: &str = "already";
+
 /// The sentence for a request that was not carried out.
 pub fn refusal(error: &ClientError) -> String {
     match error {
@@ -414,6 +454,14 @@ pub fn refusal(error: &ClientError) -> String {
             "Protection is off: {}. Nothing was done.",
             error.unreachable()
         ),
+        // What was already done is the whole answer.
+        ClientError::Request(refusal) if refusal.code == ALREADY => {
+            let mut said = refusal.message.chars();
+            match said.next() {
+                Some(first) => format!("{}{}.", first.to_uppercase(), said.as_str()),
+                None => "It was already done.".to_string(),
+            }
+        }
         ClientError::Request(refusal) => format!("Nothing was done: {}.", refusal.message),
         other => format!("AgentSweep could not be asked: {other}"),
     }
@@ -483,20 +531,15 @@ mod tests {
         assert_eq!(ActionRequest::of("status", "f", None), None);
     }
 
-    /// The answer reads as the command line interface prints it, with the
-    /// sessions sentence under it.
+    /// The answer says plainly what happened, with the sessions sentence
+    /// under it and the command line interface's lines under Details.
     #[test]
     fn an_action_answer_is_rendered_in_the_cli_words() {
         let mut step = ReceiptStep::new(Primitive::MoveOut, "/home/.claude/skills/x");
         step.outcome = Outcome::Ok;
         let view = report_view(&report("quarantine", Outcome::Ok, vec![step]), "f");
         assert_eq!(view["done"], true);
-        assert!(
-            view["message"]
-                .as_str()
-                .expect("a sentence")
-                .starts_with("Quarantined the skill 'x'.")
-        );
+        assert_eq!(view["message"], "Moved to quarantine. Restore undoes it.");
         let details: Vec<&str> = view["details"]
             .as_array()
             .expect("details")
@@ -590,6 +633,62 @@ mod tests {
                 .expect("a sentence")
                 .contains("--replace")
         );
+    }
+
+    /// What a Quarantine or a fix did, in plain words with the button that
+    /// undoes it; any other answer, and one that did not finish, keeps the
+    /// daemon's sentence.
+    #[test]
+    fn a_quarantine_says_plainly_what_happened() {
+        let steps = |primitive: Primitive| {
+            let mut step = ReceiptStep::new(primitive, "/home/.claude/x");
+            step.outcome = Outcome::Ok;
+            vec![step]
+        };
+        let said = |action: &str, result: Outcome, primitive: Primitive| {
+            plainly(&report(action, result, steps(primitive)))
+        };
+        assert_eq!(
+            said("quarantine", Outcome::Ok, Primitive::RemoveEntry),
+            Some(MOVED_TO_QUARANTINE)
+        );
+        assert_eq!(
+            said("quarantine", Outcome::Ok, Primitive::NativeDisable),
+            Some("Switched off. Switch it back on undoes it.")
+        );
+        assert_eq!(
+            said("quarantine", Outcome::Ok, Primitive::NeutraliseInPlace),
+            Some("Switched the line off. Switch the line back on undoes it.")
+        );
+        assert_eq!(
+            said("fix", Outcome::Ok, Primitive::RemoveEntry),
+            Some("Taken out of its file. Restore undoes it.")
+        );
+        assert_eq!(
+            said("quarantine", Outcome::Failed, Primitive::MoveOut),
+            None
+        );
+        assert_eq!(said("trust", Outcome::Ok, Primitive::MoveOut), None);
+        let failed = report_view(
+            &report("quarantine", Outcome::Failed, steps(Primitive::MoveOut)),
+            "f",
+        );
+        assert!(
+            failed["message"]
+                .as_str()
+                .expect("a sentence")
+                .starts_with("Quarantined the skill 'x'.")
+        );
+    }
+
+    /// An action asked again on a Finding it was already taken on says only
+    /// that, never "Nothing was done" with another Finding's reason.
+    #[test]
+    fn a_repeat_says_it_is_already_done() {
+        let already =
+            ClientError::Request(RequestError::new(ALREADY, "it is already in quarantine"));
+        assert_eq!(refusal(&already), "It is already in quarantine.");
+        assert_eq!(refusal_view(&already)["done"], false);
     }
 
     #[test]

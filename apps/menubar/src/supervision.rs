@@ -10,6 +10,7 @@
 //! it needs a real, signed bundle and is checked by hand (`docs/hand-checks.md`).
 
 use std::fmt;
+use std::time::{Duration, Instant};
 
 use crate::popover::Off;
 
@@ -168,6 +169,40 @@ pub fn start_daemon(services: &dyn Services) -> Result<(), String> {
     match services.start_agent() {
         Ok(()) => Ok(()),
         Err(_) => restart_daemon(services),
+    }
+}
+
+/// How often **Start it** asks whether the daemon it started answers yet.
+pub const START_POLL: Duration = Duration::from_millis(250);
+
+/// **Start it**, answered once the daemon it started answers, so the button
+/// shows that it is starting until then: launchd is asked as
+/// [`start_daemon`] asks it, then `answers` every [`START_POLL`] until it
+/// says yes or `patience` has run out. True when the daemon answered.
+pub fn start_and_wait(
+    services: &dyn Services,
+    answers: impl Fn() -> bool,
+    patience: Duration,
+) -> Result<bool, String> {
+    start_daemon(services)?;
+    let until = Instant::now() + patience;
+    loop {
+        if answers() {
+            return Ok(true);
+        }
+        if Instant::now() >= until {
+            return Ok(false);
+        }
+        std::thread::sleep(START_POLL);
+    }
+}
+
+/// What **Start it** says once it is answered: whether the daemon it started
+/// answers yet.
+pub fn started_line(answered: bool) -> &'static str {
+    match answered {
+        true => "AgentSweep is running.",
+        false => "AgentSweep was started but has not answered yet.",
     }
 }
 
@@ -680,6 +715,43 @@ pub(crate) mod tests {
         let services = Recorded::with(ServiceState::Enabled, ServiceState::Enabled);
         start_daemon(&services).expect("a start");
         assert_eq!(services.calls(), vec!["start agent"]);
+    }
+
+    /// Start it is answered once the daemon it started answers, and no
+    /// later than its patience allows; a start that was refused is not
+    /// waited for.
+    #[test]
+    fn start_it_is_answered_once_the_daemon_answers() {
+        let services = Recorded::with(ServiceState::Enabled, ServiceState::Enabled);
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let answers = || asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 2;
+        assert_eq!(
+            start_and_wait(&services, answers, Duration::from_secs(30)),
+            Ok(true)
+        );
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(services.calls(), vec!["start agent"]);
+
+        let silent = Recorded::with(ServiceState::Enabled, ServiceState::Enabled);
+        let began = Instant::now();
+        assert_eq!(
+            start_and_wait(&silent, || false, Duration::from_millis(300)),
+            Ok(false)
+        );
+        assert!(began.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            started_line(false),
+            "AgentSweep was started but has not answered yet."
+        );
+
+        assert!(
+            start_and_wait(
+                &Unsupervised,
+                || panic!("not asked"),
+                Duration::from_secs(1)
+            )
+            .is_err()
+        );
     }
 
     /// A job launchd no longer holds is registered again, which loads it.

@@ -23,8 +23,6 @@
 //! daemon, which is the only writer of the settings and the only process
 //! that touches the Keychain; the app never calls an engine.
 
-use std::sync::Mutex;
-
 use agentsweep_core::apple::AppleAvailability;
 use agentsweep_core::keychain::ClaudeKey;
 use agentsweep_core::ollama::OllamaPresence;
@@ -493,16 +491,9 @@ pub fn turn_on_claude(asking: &Asking, typed: Option<String>) -> Result<EngineSt
     Ok(state)
 }
 
-/// The last press of "I agree, turn it on" and what it came to. The window
-/// names every press. The webview delivers one press twice when it takes the
-/// first delivery of a command for lost and sends it again by its other
-/// route, although the first one reached the app; that same press is
-/// answered with what it came to and hands nothing over again. A delivery
-/// that arrives while the press is still under way waits for it.
-#[derive(Debug, Default)]
-pub struct Presses {
-    last: Mutex<Option<(String, Result<EngineState, String>)>>,
-}
+/// The last presses of "I agree, turn it on" and what each came to
+/// ([`crate::presses`]): one press hands the key over once.
+pub type Presses = crate::presses::Presses<Result<EngineState, String>>;
 
 impl Presses {
     /// [`turn_on_claude`] once per `press`: the same press asked again is
@@ -513,17 +504,11 @@ impl Presses {
         press: &str,
         typed: Option<String>,
     ) -> Result<EngineState, String> {
-        let mut last = self.last.lock().expect("the presses are not poisoned");
-        if let Some((seen, answer)) = last.as_ref()
-            && seen == press
-        {
-            if let Some(typed) = typed {
-                wipe(typed);
-            }
-            return answer.clone();
+        let mut typed = typed;
+        let answer = self.once(press, || turn_on_claude(asking, typed.take()));
+        if let Some(unsent) = typed {
+            wipe(unsent);
         }
-        let answer = turn_on_claude(asking, typed);
-        *last = Some((press.to_string(), answer.clone()));
         answer
     }
 }

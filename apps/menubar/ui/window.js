@@ -1068,6 +1068,35 @@ function renderGateSwitch(gate) {
   $("settings-gate").hidden = false;
 }
 
+// The Settings tab in sight, by the id of its panel (spec section 8.10). A
+// tab whose settings are all hidden, the AI check before the daemon answered,
+// is hidden too, and General shows in its place.
+let settingsTab = "settings-panel-general";
+
+function renderSettingsTabs() {
+  const tabs = [...$("settings-tabs").querySelectorAll("[role=tab]")];
+  for (const tab of tabs) {
+    const settings = [...$(tab.getAttribute("aria-controls")).querySelectorAll(".setting")];
+    tab.hidden = settings.every((setting) => setting.hidden);
+  }
+  if (!tabs.some((tab) => !tab.hidden && tab.getAttribute("aria-controls") === settingsTab)) {
+    settingsTab = "settings-panel-general";
+  }
+  for (const tab of tabs) {
+    const panel = tab.getAttribute("aria-controls");
+    tab.setAttribute("aria-selected", String(panel === settingsTab));
+    $(panel).hidden = panel !== settingsTab;
+  }
+}
+
+for (const tab of $("settings-tabs").querySelectorAll("[role=tab]")) {
+  tab.addEventListener("click", () => {
+    settingsTab = tab.getAttribute("aria-controls");
+    renderSettingsTabs();
+    pane("settings").scrollTop = 0;
+  });
+}
+
 function render(list) {
   view = list;
   takePosture(list.posture);
@@ -1077,6 +1106,7 @@ function render(list) {
   renderSettings(list.settings);
   renderAiCheck(list.settings.aiCheck);
   renderGateSwitch(list.settings.gate);
+  renderSettingsTabs();
   actionsWait = list.actionsWait;
   $("actions-wait").hidden = actionsWait === null;
   $("actions-wait").textContent = actionsWait === null ? "" : actionsWait;

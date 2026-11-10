@@ -483,7 +483,31 @@ dialog {
   margin-left: 6px;
 }
 
-/* The Settings pane (spec section 8.10): one block per setting. */
+/* The Settings pane (spec section 8.10): tabs, one block per setting. The
+   tabs stay in sight while a tab scrolls, over the pane's top padding. */
+
+.tabs {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 8px 0 14px;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.tabs [role="tab"] {
+  border-color: transparent;
+  background: transparent;
+}
+
+.tabs [role="tab"][aria-selected="true"] {
+  background: var(--selected);
+  font-weight: 600;
+}
 
 .setting {
   max-width: 620px;

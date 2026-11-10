@@ -269,6 +269,9 @@ struct Shell {
     onboarding: Mutex<Option<Wizard>>,
     /// The answers held for the daemon since onboarding.
     handover: Mutex<Handover>,
+    /// The last press of "I agree, turn it on", so one press hands the
+    /// Claude API key over once.
+    presses: Arc<ai_check::Presses>,
     /// The app updater: when the next check is due and the update that is
     /// ready to install at quit.
     updates: Arc<Updates<Ready>>,
@@ -712,12 +715,40 @@ async fn change_engine(app: AppHandle, change: Value) -> Result<String, String> 
 }
 
 /// "I agree, turn it on": the typed key, if any, goes to the daemon once and
-/// is wiped here; then the Claude engine is turned on.
+/// is wiped here; then the Claude engine is turned on. Claude shows as
+/// selected at once; the daemon's answer settles it. The window names the
+/// press, so the same press delivered twice hands nothing over again.
 #[tauri::command]
-async fn turn_on_claude(app: AppHandle, key: Option<String>) -> Result<String, String> {
-    let asking = Arc::clone(&app.state::<Shell>().asking);
-    let state = off_main(move || ai_check::turn_on_claude(&asking, key)).await?;
-    Ok(take_engine(&app, &state))
+async fn turn_on_claude(
+    app: AppHandle,
+    key: Option<String>,
+    press: String,
+) -> Result<String, String> {
+    choosing(&app, Some(JudgementEngine::Claude));
+    let shell = app.state::<Shell>();
+    let asking = Arc::clone(&shell.asking);
+    let presses = Arc::clone(&shell.presses);
+    match off_main(move || presses.turn_on_claude(&asking, &press, key)).await {
+        Ok(state) => Ok(take_engine(&app, &state)),
+        Err(refused) => {
+            choosing(&app, None);
+            Err(refused)
+        }
+    }
+}
+
+/// Shows `engine` as selected in the AI check until the daemon answers, or
+/// the engine the daemon holds again.
+fn choosing(app: &AppHandle, engine: Option<JudgementEngine>) {
+    let follow = app
+        .state::<Shell>()
+        .frame
+        .lock()
+        .expect("the frame is not poisoned")
+        .choosing(engine);
+    if follow != Follow::Nothing {
+        render(app);
+    }
 }
 
 /// Removes the Claude API key, which turns the Claude engine off.
@@ -1561,6 +1592,7 @@ pub fn run(start: Start) {
         asking: Arc::new(Asking::new(socket.clone())),
         onboarding: Mutex::new(None),
         handover: Mutex::new(Handover::default()),
+        presses: Arc::new(ai_check::Presses::default()),
         updates: Arc::new(Updates::new()),
     };
 

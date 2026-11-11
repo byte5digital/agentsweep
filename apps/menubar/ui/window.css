@@ -13,6 +13,8 @@
   --clear: #2e9d4f;
   --sidebar: #ececee;
   --selected: #dcdce0;
+  --main-bg: #1d1d1f;
+  --main-fg: #ffffff;
   color-scheme: light dark;
 }
 
@@ -25,6 +27,8 @@
     --rule: #3a3a3c;
     --sidebar: #252528;
     --selected: #3a3a3e;
+    --main-bg: #f5f5f7;
+    --main-fg: #1d1d1f;
   }
 }
 
@@ -252,6 +256,15 @@ button:disabled {
 
 button.primary {
   border-color: var(--threat);
+}
+
+/* The main button of a Simple Finding: its first action inside What to do,
+   filled; the others stay plain (spec section 8.4, layout B). */
+button.main {
+  background: var(--main-bg);
+  border-color: var(--main-bg);
+  color: var(--main-fg);
+  font-weight: 600;
 }
 
 .card {

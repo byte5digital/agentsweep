@@ -190,3 +190,49 @@ fn the_overview_has_four_tiles_that_open_their_lists() {
     let gate = function(&script, "renderGateLines");
     assert!(gate.contains("tilesOpen.has(\"gate\")"));
 }
+
+/// The first action inside What to do of a Simple Finding is the main
+/// button, filled with the window's own colour pair in both themes; on an
+/// Exposure with its one-click fix, Take this setting out comes first. The
+/// Developer card styles no button as the main one.
+#[test]
+fn a_simple_finding_has_one_main_button() {
+    let script = ui("window.js");
+    let card = function(&script, "renderSimpleCard");
+    let order = positions(
+        card,
+        &[
+            "renderActions(card, mainFirst(card))",
+            "actions.querySelector(\"button\")?.classList.add(\"main\");",
+            "todo.append(actions)",
+        ],
+    );
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+    let first = function(&script, "mainFirst");
+    assert!(first.contains("!action.technical"), "{first}");
+    assert!(first.contains("action.command === \"fix\""), "{first}");
+
+    for name in ["renderDeveloperCard", "renderFolderCard", "renderActions"] {
+        let other = function(&script, name);
+        assert!(!other.contains("\"main\""), "{name} styles a main button");
+    }
+
+    let css = ui("window.css");
+    let rule = css.find("button.main {").expect("the main button");
+    let rule = &css[rule..rule + css[rule..].find('}').expect("its end")];
+    assert!(rule.contains("background: var(--main-bg);"), "{rule}");
+    assert!(rule.contains("border-color: var(--main-bg);"), "{rule}");
+    assert!(rule.contains("color: var(--main-fg);"), "{rule}");
+    // Later than the hover rule, so a hovered main button stays filled.
+    assert!(css.find("button:hover {") < css.find("button.main {"));
+
+    // The pair is set for the light theme and again for the dark one.
+    let dark = css
+        .find("@media (prefers-color-scheme: dark)")
+        .expect("the dark theme");
+    for token in ["--main-bg:", "--main-fg:"] {
+        let light = css.find(token).expect(token);
+        assert!(light < dark, "{token} in the light theme");
+        assert!(css[dark..].contains(token), "{token} in the dark theme");
+    }
+}

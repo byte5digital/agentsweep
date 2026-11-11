@@ -366,6 +366,15 @@ function renderFold(key, label, inner) {
   return fold;
 }
 
+// The buttons a Simple Finding shows in sight, the one to press first at
+// the front: the one-click fix of an Exposure ahead of Keep it as it is,
+// otherwise the order the app offers them in (spec section 8.4, layout B).
+function mainFirst(card) {
+  const shown = card.actions.filter((action) => !action.technical);
+  const fix = shown.filter((action) => action.command === "fix");
+  return [...fix, ...shown.filter((action) => action.command !== "fix")];
+}
+
 // One of the three parts: its small label and its sentence.
 function renderPart(label, text) {
   const part = el("div", "part");
@@ -411,7 +420,7 @@ function renderSimpleCard(card, details = card.id, again = () => render(view)) {
   node.append(head);
   const box = el("div", "parts");
   box.append(renderPart("What it is", parts.what), renderPart("Why it matters", parts.why));
-  const actions = renderActions(card);
+  const actions = renderActions(card, mainFirst(card));
   if (simple.admin) {
     const copy = el("button", "", "Copy a message for your admin");
     copy.type = "button";
@@ -430,6 +439,9 @@ function renderSimpleCard(card, details = card.id, again = () => render(view)) {
     });
     actions.append(copy);
   }
+  // The first button is the main one, filled; the others stay plain. A
+  // pressed Finding shows its working line instead, with no button.
+  actions.querySelector("button")?.classList.add("main");
   if (parts.todo) {
     const todo = renderPart("What to do", parts.todo);
     todo.classList.add("todo");

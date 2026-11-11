@@ -869,48 +869,57 @@ const ACTIVITY_COLUMNS = [
   ["receiptId", "Receipt id"],
 ];
 
+// One Activity line: its moment, its sentence and its unverified mark, and
+// in the Developer Posture the record's technical columns beside it.
+function renderActivityLine(line) {
+  const item = el("li");
+  if (line.sequence !== null) {
+    item.dataset.sequence = String(line.sequence);
+  }
+  const head = el("p");
+  head.append(el("span", "when", when(line.at)));
+  head.append(el("span", "", line.line));
+  if (line.mark !== null) {
+    head.append(el("span", "chip", line.mark));
+  }
+  item.append(head);
+  if (line.technical !== null) {
+    const table = el("table", "technical");
+    for (const [key, label] of ACTIVITY_COLUMNS) {
+      if (line.technical[key] === null) {
+        continue;
+      }
+      const tr = el("tr");
+      tr.append(el("th", "", label));
+      tr.append(el("td", "", line.technical[key]));
+      table.append(tr);
+    }
+    item.append(table);
+  }
+  return item;
+}
+
 // The Activity pane (spec section 8.1): the daemon's lines, newest first,
-// each with its moment and its unverified mark, and in the Developer Posture
-// the record's technical columns beside it.
+// the newest 500 at first and 500 more with each Show older. The list keeps
+// its nodes while its lines stay the same (keep.js), so a stream event does
+// not build it again.
 function renderActivity(activity, loaded) {
   const node = pane("activity");
   node.querySelector(".empty").hidden = !loaded || !activity.empty;
-  const items = activity.lines.map((line) => {
-    const item = el("li");
-    if (line.sequence !== null) {
-      item.dataset.sequence = String(line.sequence);
-    }
-    const head = el("p");
-    head.append(el("span", "when", when(line.at)));
-    head.append(el("span", "", line.line));
-    if (line.mark !== null) {
-      head.append(el("span", "chip", line.mark));
-    }
-    item.append(head);
-    if (line.technical !== null) {
-      const table = el("table", "technical");
-      for (const [key, label] of ACTIVITY_COLUMNS) {
-        if (line.technical[key] === null) {
-          continue;
-        }
-        const tr = el("tr");
-        tr.append(el("th", "", label));
-        tr.append(el("td", "", line.technical[key]));
-        table.append(tr);
-      }
-      item.append(table);
-    }
-    return item;
-  });
-  $("activity-lines").replaceChildren(...items);
+  const list = $("activity-lines");
+  keep(list, JSON.stringify(activity.lines), () => activity.lines.map(renderActivityLine));
+  $("activity-older").hidden = !activity.older;
   $("activity-note").hidden = activity.note === null;
   $("activity-note").textContent = activity.note ?? "";
   $("activity-ai-check").textContent = activity.aiCheck ?? "";
   $("activity-ai-check").hidden = (activity.aiCheck ?? null) === null;
+  for (const marked of list.querySelectorAll("[data-focus]")) {
+    delete marked.dataset.focus;
+  }
   if (activityFocus !== null) {
     // The first record at or after the one asked for, which is the oldest
     // line still at or past it in a list that runs newest first.
-    const at = items
+    const at = [...list.children]
       .filter((item) => item.dataset.sequence !== undefined && Number(item.dataset.sequence) >= activityFocus)
       .pop();
     if (at) {
@@ -933,6 +942,11 @@ function showActivityAt(sequence) {
     render(view);
   }
 }
+
+// Show older: the app answers with the view holding the next 500 lines.
+$("activity-older").addEventListener("click", async () => {
+  render(await invoke("show_older"));
+});
 
 // The Settings pane (spec section 8.10). Every choice is sent to the daemon
 // through the app, and the pane shows the answer the app sends back with the

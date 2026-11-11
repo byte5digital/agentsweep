@@ -2,14 +2,17 @@
 //! (spec sections 8.1, 8.2 and 8.4): the Threat Findings come first and the
 //! Ambiguous Items wait below them in a section closed by default, one line
 //! each; a title in the list beside a Finding is never cut, and the project
-//! or Agent stands under it; and the Settings controls keep their nodes
-//! through a render, so a click on one is never swallowed.
+//! or Agent stands under it; the Settings controls keep their nodes
+//! through a render, so a click on one is never swallowed; and the Activity
+//! list keeps its nodes too, with **Show older** under it.
 //!
 //! The suite runs no webview, so this reads the files as they ship. That the
 //! frame carries 25 Findings with their place and 90 Ambiguous Items with a
 //! one-line Score is the frame's own test
-//! (`twenty_five_findings_and_ninety_ambiguous_items`); the rendered result
-//! is a hand check in both Postures.
+//! (`twenty_five_findings_and_ninety_ambiguous_items`), and that 2,000
+//! Activity lines reach the window 500 at a time is
+//! `two_thousand_activity_lines_reach_the_window_500_at_a_time`; the
+//! rendered result is a hand check in both Postures.
 
 use std::path::Path;
 
@@ -148,4 +151,49 @@ fn the_settings_controls_are_kept_through_a_render() {
     assert!(settings.contains("settingsAnswered"));
     assert!(gate.contains("JSON.stringify([gate, settingsAnswered])"));
     assert!(gate.contains("settingsAnswered += 1;"));
+}
+
+/// The Activity pane lists the lines the frame sends, the newest 500 at
+/// first, through `keep`, so a stream event's render does not build the
+/// list again; **Show older** under it asks the app for the next 500 and
+/// shows only while older lines wait.
+#[test]
+fn the_activity_pane_is_kept_and_shows_older_lines_on_request() {
+    let page = ui("window.html");
+    let start = page
+        .find("<section class=\"pane\" data-pane=\"activity\"")
+        .expect("the Activity pane");
+    let end = start + page[start..].find("</section>").expect("its end");
+    let pane = &page[start..end];
+    let list = pane.find("id=\"activity-lines\"").expect("the list");
+    let older = pane
+        .find("<button type=\"button\" id=\"activity-older\" hidden>Show older</button>")
+        .expect("Show older");
+    assert!(list < older, "Show older stands under the list");
+
+    let script = ui("window.js");
+    let render = function(&script, "renderActivity");
+    assert!(
+        render.contains("const list = $(\"activity-lines\");"),
+        "{render}"
+    );
+    assert!(
+        render.contains("keep(list, JSON.stringify(activity.lines),"),
+        "{render}"
+    );
+    assert!(!render.contains("replaceChildren"), "{render}");
+    assert!(
+        render.contains("$(\"activity-older\").hidden = !activity.older;"),
+        "{render}"
+    );
+    assert!(script.contains("render(await invoke(\"show_older\"))"));
+
+    let app = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app.rs"),
+    )
+    .expect("the app");
+    assert!(
+        app.contains("            show_older,\n"),
+        "the command is registered"
+    );
 }

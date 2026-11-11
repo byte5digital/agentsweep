@@ -28,6 +28,8 @@
 //! - `findings`: the Findings window's view as it stands: the list, the
 //!   sidebar with its counts, the Overview, the two Finding panes and the
 //!   Posture.
+//! - `show_older`: **Show older** on the Activity pane, answered with the
+//!   Findings window's view holding the next 500 lines.
 //! - `folder`: the Scan a folder dialog's view, for a window that just
 //!   loaded.
 //! - `quarantine`, `restore`, `trust`, `acknowledge`, `fix`, `re_enable`,
@@ -428,6 +430,14 @@ async fn answer_records(app: AppHandle, button: Button, press: String) -> Result
                 (frame.health().clone(), frame.activity().clone())
             };
             let pressed = integrity::press(button, &health, &activity, &*shell.asking)?;
+            if let Some(sequence) = pressed.focus {
+                let value = {
+                    let mut frame = shell.frame.lock().expect("the frame is not poisoned");
+                    frame.show_record(sequence);
+                    frame.to_value()
+                };
+                let _ = app.emit(FINDINGS_EVENT, value);
+            }
             show_window(&app);
             let _ = app.emit(ACTIVITY_AT_EVENT, pressed.focus);
             Ok(pressed.line)
@@ -492,6 +502,15 @@ async fn findings(app: AppHandle) -> Result<Value, String> {
         .lock()
         .expect("the frame is not poisoned")
         .to_value())
+}
+
+/// **Show older** on the Activity pane: the window's view with the next 500
+/// lines in it.
+#[tauri::command]
+fn show_older(shell: tauri::State<'_, Shell>) -> Value {
+    let mut frame = shell.frame.lock().expect("the frame is not poisoned");
+    frame.show_older();
+    frame.to_value()
 }
 
 /// The last Folder Scan's view.
@@ -1834,6 +1853,7 @@ pub fn run(start: Start) {
             quit,
             open_window,
             findings,
+            show_older,
             folder,
             quarantine,
             restore,

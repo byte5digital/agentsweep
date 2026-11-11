@@ -211,6 +211,17 @@ impl Frame {
         &self.activity
     }
 
+    /// **Show older** on the Activity pane: the next 500 lines show too.
+    pub fn show_older(&mut self) {
+        self.activity.show_older();
+    }
+
+    /// Opens the Activity pane far enough to show the record with this
+    /// sequence, or the first one after it.
+    pub fn show_record(&mut self, sequence: u64) {
+        self.activity.show_record(sequence);
+    }
+
     /// Takes every choice, the Posture among them, from a `settings` answer
     /// or a `settings-changed` event, and says whether the window needs to
     /// be sent again.
@@ -958,6 +969,58 @@ mod tests {
             rule_pack: 1,
             engine: String::new(),
         }
+    }
+
+    /// With 2,000 Activity lines the window is sent the newest 500 and
+    /// **Show older** adds the next 500; the integrity flows open as many
+    /// pages as the record they show needs.
+    #[test]
+    fn two_thousand_activity_lines_reach_the_window_500_at_a_time() {
+        use agentsweep_ipc::protocol::ActivityLine;
+        let mut status = status();
+        status.activity = (1..=2000)
+            .map(|n| ActivityLine {
+                sequence: Some(n),
+                recorded_at: Timestamp::from_unix_ms(1_790_000_000_000 + n as i64 * 1000),
+                line: format!("record {n}"),
+                ..ActivityLine::default()
+            })
+            .collect();
+        let mut frame = Frame::new();
+        frame.load(&status);
+        let shown = |frame: &Frame| {
+            let activity = frame.to_value()["activity"].clone();
+            let lines = activity["lines"].as_array().expect("lines").clone();
+            (
+                lines.len(),
+                lines.last().map(|it| it["line"].clone()),
+                activity["older"].clone(),
+            )
+        };
+        assert_eq!(
+            shown(&frame),
+            (500, Some(Value::from("record 1501")), Value::from(true))
+        );
+        // The window is sent no more for 2,000 lines than for the newest
+        // 500 alone, so a long Event Log renders as fast as a short one.
+        let mut newest = Frame::new();
+        status.activity.drain(..1500);
+        newest.load(&status);
+        assert_eq!(
+            frame.to_value()["activity"]["lines"],
+            newest.to_value()["activity"]["lines"]
+        );
+        frame.show_older();
+        assert_eq!(
+            shown(&frame),
+            (1000, Some(Value::from("record 1001")), Value::from(true))
+        );
+        frame.show_record(2);
+        assert_eq!(
+            shown(&frame),
+            (2000, Some(Value::from("record 1")), Value::from(false))
+        );
+        assert_eq!(frame.activity().lines().len(), 2000);
     }
 
     /// The window carries the Overview; the Developer summary line shows only

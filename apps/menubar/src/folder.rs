@@ -172,13 +172,22 @@ pub fn result_view(result: &FolderScanResult, posture: Posture) -> Value {
 /// 72, and no actions, since nothing was recorded to act on. Two body lines
 /// of the Simple wording speak of what AgentSweep did to an Item it watches,
 /// and nothing was done to this one, so they are left out: why nothing
-/// happened by itself, and that git will show a change Restore undoes.
+/// happened by itself, and that git will show a change Restore undoes. The
+/// three parts of layout B lose the same notes under **More**, and **What
+/// to do**, since the dialog offers nothing; **Why it matters** is the
+/// Finding's own sentence where the Rule Pack gives no `why`.
 pub fn folder_card(one: &FolderFinding) -> Value {
     let finding = &one.finding;
     let mut simple = wording::simple(finding);
     simple
         .lines
         .retain(|line| !matches!(line.part, Part::WhyNothingHappened | Part::Project));
+    simple
+        .parts
+        .more
+        .retain(|line| !matches!(line.part, Part::WhyNothingHappened | Part::Project));
+    // Nothing was recorded, so nothing can be done from the dialog.
+    simple.parts.todo = String::new();
     simple.admin_message = None;
     let mut card = plain_card(finding);
     card["heuristics"] = Value::from(one.heuristics.clone());
@@ -302,6 +311,14 @@ mod tests {
         assert!(!parts.contains(&"why"), "{parts:?}");
         assert!(!parts.contains(&"project"), "{parts:?}");
         assert_eq!(card["simple"]["admin"], false);
+        // The three parts: the thing named, why it matters from the
+        // Finding's own sentence, nothing to do and no note under More.
+        let three = &card["simple"]["parts"];
+        assert_eq!(three["name"], "The project file 'CLAUDE.md'");
+        assert_eq!(three["why"], finding.plain.as_str());
+        assert_eq!(three["todo"], "");
+        assert_eq!(three["more"], json!([]));
+        assert!(!simple.parts.todo.is_empty() && !simple.parts.more.is_empty());
     }
 
     #[test]

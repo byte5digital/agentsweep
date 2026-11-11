@@ -20,8 +20,17 @@
 //! progress line in the Developer Posture, which the window's frame fills in
 //! from the stream. The line for projects that Need Permission, with
 //! **Check now**, is [`crate::permission`]'s.
+//!
+//! The Simple Posture shows layout B of spec section 8.4: "Protection is
+//! on.", four count tiles (Need your decision, Worth fixing, Projects not
+//! checked with **Check now**, Projects without the check), one line naming
+//! the Agents watched beside the last check, and the Scan actions. The status
+//! sentence stays only for what the tiles do not say (a running Scan, the
+//! Rule Pack notices, the integrity rungs), and the Gate lines of the
+//! registration check stay too. Agent versions, Item counts and the Rule
+//! Pack's date are the Developer Posture's.
 
-use agentsweep_core::health::Health;
+use agentsweep_core::health::{Health, Rung};
 use agentsweep_core::overview::{AgentRecord, Overview};
 use agentsweep_core::settings::Posture;
 use agentsweep_core::state::ScanSummary;
@@ -87,14 +96,133 @@ pub struct OverviewView {
     /// "N projects not checked" with **Check now**, absent when no project
     /// Needs Permission and while Protection is off.
     pub permission: Option<PermissionView>,
+    /// False where the Simple Posture's tiles and watching line say what the
+    /// status sentence would: then the pane shows the Protection line in its
+    /// place. True in the Developer Posture and while Protection is off.
+    pub sentence_shown: bool,
+    /// "Protection is on.", in the Simple Posture while Protection is on.
+    pub protection: Option<String>,
+    /// The four count tiles of the Simple Posture, none in the Developer
+    /// Posture and while Protection is off.
+    pub tiles: Vec<Tile>,
+    /// "Watching Claude Code and Codex.", in the Simple Posture once the
+    /// Agents are known; the window adds the last check in local time.
+    pub watching: Option<String>,
+}
+
+/// The Protection line of the Simple Overview.
+pub const PROTECTION_ON: &str = "Protection is on.";
+
+/// One count tile of the Simple Overview (spec section 8.4, layout B). A
+/// tile opens its list: the two Finding tiles their pane, the two project
+/// tiles the projects they count.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Tile {
+    /// Which tile: `threats`, `exposures`, `permission` or `gate`.
+    pub tile: &'static str,
+    /// What it counts.
+    pub count: usize,
+    /// What it says under the count.
+    pub label: &'static str,
+    /// Red for open Threats, amber for open Exposures, none otherwise.
+    pub tone: Option<&'static str>,
+}
+
+impl Tile {
+    fn to_value(&self) -> Value {
+        json!({
+            "tile": self.tile,
+            "count": self.count,
+            "label": self.label,
+            "tone": self.tone,
+        })
+    }
+}
+
+/// The four tiles: Need your decision, Worth fixing, Projects not checked
+/// (with **Check now**) and Projects without the check, counted as the
+/// Health counts them.
+pub fn tiles(health: &Health) -> Vec<Tile> {
+    let tone = |count: usize, tone: &'static str| (count > 0).then_some(tone);
+    vec![
+        Tile {
+            tile: "threats",
+            count: health.open_threats,
+            label: "Need your decision",
+            tone: tone(health.open_threats, "red"),
+        },
+        Tile {
+            tile: "exposures",
+            count: health.open_exposures,
+            label: "Worth fixing",
+            tone: tone(health.open_exposures, "amber"),
+        },
+        Tile {
+            tile: "permission",
+            count: health.projects_need_permission,
+            label: match health.projects_need_permission {
+                1 => "Project not checked",
+                _ => "Projects not checked",
+            },
+            tone: None,
+        },
+        Tile {
+            tile: "gate",
+            count: health.projects_gate_off,
+            label: match health.projects_gate_off {
+                1 => "Project without the check",
+                _ => "Projects without the check",
+            },
+            tone: None,
+        },
+    ]
+}
+
+/// The Agents AgentSweep watches, on one line: those installed on this Mac,
+/// by name. None before the first Full Scan named any Agent.
+pub fn watching(overview: &Overview) -> Option<String> {
+    if overview.agents.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = overview
+        .agents
+        .iter()
+        .filter(|record| record.installed)
+        .map(|record| match record.display_name.is_empty() {
+            true => record.agent.as_str(),
+            false => record.display_name.as_str(),
+        })
+        .collect();
+    Some(match names.as_slice() {
+        [] => "No agent found to watch.".to_string(),
+        [one] => format!("Watching {one}."),
+        [init @ .., last] => format!("Watching {} and {last}.", init.join(", ")),
+    })
+}
+
+/// True for the rungs whose sentence the Simple Overview still says beside
+/// its tiles: what the tiles and the watching line do not carry.
+fn said_beside_the_tiles(rung: Rung) -> bool {
+    matches!(
+        rung,
+        Rung::RecordsTampered
+            | Rung::StateReset
+            | Rung::CheckingNow
+            | Rung::IgnoredPack
+            | Rung::FeedUnreachable
+    )
 }
 
 impl OverviewView {
     /// The value the window receives under `overview`.
     pub fn to_value(&self) -> Value {
+        let no_banner = self.banner.is_none();
         json!({
             "off": self.off,
-            "sentence": self.banner.is_none().then_some(self.sentence.as_str()),
+            "sentence": (no_banner && self.sentence_shown).then_some(self.sentence.as_str()),
+            "protection": self.protection.as_deref().filter(|_| no_banner),
+            "tiles": self.tiles.iter().map(Tile::to_value).collect::<Vec<_>>(),
+            "watching": self.watching,
             "banner": self.banner.as_ref().map(Shown::to_value),
             "agents": self
                 .agents
@@ -168,28 +296,54 @@ pub fn view(
             ai_check: None,
             cap: None,
             permission: None,
+            sentence_shown: true,
+            protection: None,
+            tiles: Vec::new(),
+            watching: None,
         };
     }
     let sentence = health.headline_in(posture);
+    let simple = posture == Posture::Simple;
     OverviewView {
         off: false,
-        gate_lines: gate::health_lines(health, posture)
-            .into_iter()
-            .filter(|line| *line != sentence)
-            .collect(),
+        // The Simple tile counts the projects that switched the check off;
+        // every other Gate line is said, the headline's too, since the
+        // Simple pane says no Gate headline of its own.
+        gate_lines: match simple {
+            true => health
+                .gate_lines
+                .iter()
+                .map(|line| line.wording(posture))
+                .collect(),
+            false => gate::health_lines(health, posture)
+                .into_iter()
+                .filter(|line| *line != sentence)
+                .collect(),
+        },
         gate_off: gate::projects_off(overview, posture),
+        sentence_shown: !simple || said_beside_the_tiles(health.rung()),
         sentence,
-        agents: overview
-            .agents
-            .iter()
-            .map(|record| AgentLine {
-                agent: record.agent.clone(),
-                installed: record.installed,
-                line: agent_line(record, posture),
-            })
-            .collect(),
+        // Versions and Item counts are the Developer Posture's.
+        agents: match simple {
+            true => Vec::new(),
+            false => overview
+                .agents
+                .iter()
+                .map(|record| AgentLine {
+                    agent: record.agent.clone(),
+                    installed: record.installed,
+                    line: agent_line(record, posture),
+                })
+                .collect(),
+        },
         last_check: health.last_full_scan.map(|at| at.to_string()),
-        rules_updated: rules_updated(health, posture),
+        rules_updated: rules_updated(health, posture).filter(|_| !simple),
+        protection: simple.then(|| PROTECTION_ON.to_string()),
+        tiles: match simple {
+            true => tiles(health),
+            false => Vec::new(),
+        },
+        watching: watching(overview).filter(|_| simple),
         actions: true,
         scanning: scan.running,
         progress: match scan.running {
@@ -370,30 +524,114 @@ mod tests {
             .collect()
     }
 
+    /// Layout B: the Protection line in place of the sentence the tiles
+    /// say, four tiles, the watching line and the Scan actions; no Agent
+    /// version, no Item count, no Rule Pack date and no summary.
     #[test]
-    fn the_simple_overview_has_the_sentence_the_agents_and_no_summary() {
-        let status = status();
+    fn the_simple_overview_has_the_protection_line_four_tiles_and_the_watching_line() {
+        let mut status = status();
+        status.health.open_exposures = 2;
+        status.health.projects_gate_off = 1;
         let view = of_status(&status, Posture::Simple);
         assert!(!view.off);
-        assert_eq!(view.sentence, status.health.headline());
+        assert_eq!(view.sentence, status.health.headline(), "the popover's");
+        assert!(!view.sentence_shown, "the tiles say it");
+        assert_eq!(view.protection.as_deref(), Some("Protection is on."));
+        let shown: Vec<(&str, usize, &str, Option<&str>)> = view
+            .tiles
+            .iter()
+            .map(|tile| (tile.tile, tile.count, tile.label, tile.tone))
+            .collect();
         assert_eq!(
-            view.sentence, "1 thing needs your decision: 1 Threat.",
-            "the popover's sentence"
-        );
-        assert_eq!(
-            lines(&view),
+            shown,
             vec![
-                "Claude Code 2.1.3: 2 projects, 41 things checked.",
-                "Codex, version unknown: 2 projects, 41 things checked.",
+                ("threats", 1, "Need your decision", Some("red")),
+                ("exposures", 2, "Worth fixing", Some("amber")),
+                ("permission", 0, "Projects not checked", None),
+                ("gate", 1, "Project without the check", None),
             ]
         );
-        assert_eq!(view.last_check.as_deref(), Some("2026-10-15T08:00:00.812Z"));
         assert_eq!(
-            view.rules_updated.as_deref(),
-            Some("Rules updated 2026-10-01.")
+            view.watching.as_deref(),
+            Some("Watching Claude Code and Codex.")
         );
+        assert_eq!(view.last_check.as_deref(), Some("2026-10-15T08:00:00.812Z"));
+        assert!(
+            view.agents.is_empty(),
+            "versions and counts are Developer only"
+        );
+        assert_eq!(view.rules_updated, None, "the date is Developer only");
         assert!(view.actions);
         assert_eq!(view.summary, None, "the summary is the Developer Posture's");
+
+        let value = view.to_value();
+        assert!(value["sentence"].is_null());
+        assert_eq!(value["protection"], "Protection is on.");
+        assert_eq!(value["tiles"][0]["label"], "Need your decision");
+        assert_eq!(value["tiles"][1]["tone"], "amber");
+        assert!(value["tiles"][2]["tone"].is_null());
+        assert_eq!(value["watching"], "Watching Claude Code and Codex.");
+        assert_eq!(value["agents"], json!([]));
+        assert!(value["rulesUpdated"].is_null());
+    }
+
+    /// The Developer Overview keeps its sentence, its Agent lines and the
+    /// date, and has no Protection line, no tile and no watching line.
+    #[test]
+    fn the_developer_overview_has_no_tiles() {
+        let view = of_status(&status(), Posture::Developer);
+        assert!(view.sentence_shown);
+        assert_eq!(view.protection, None);
+        assert!(view.tiles.is_empty());
+        assert_eq!(view.watching, None);
+        let value = view.to_value();
+        assert_eq!(value["sentence"], "1 thing needs your decision: 1 Threat.");
+        assert!(value["protection"].is_null());
+        assert_eq!(value["tiles"], json!([]));
+    }
+
+    /// What the tiles do not say keeps its sentence beside them: a running
+    /// Scan, the Rule Pack notices. A banner replaces both lines.
+    #[test]
+    fn the_simple_overview_keeps_the_sentences_the_tiles_do_not_say() {
+        let mut status = status();
+        status.health.scanning = true;
+        let view = of_status(&status, Posture::Simple);
+        assert!(view.sentence_shown);
+        assert_eq!(view.to_value()["sentence"], "Checking now.");
+        assert_eq!(view.to_value()["protection"], "Protection is on.");
+
+        status.health.scanning = false;
+        status.health.open_threats = 0;
+        let view = of_status(&status, Posture::Simple);
+        assert!(!view.sentence_shown, "all clear is the Protection line");
+
+        let mut banner = view.clone();
+        banner.banner = banner::choose(&Health::unreachable("gone"), &Daemon::Off)
+            .map(|banner| banner.shown(Posture::Simple));
+        assert!(banner.banner.is_some());
+        assert!(banner.to_value()["protection"].is_null());
+        assert!(banner.to_value()["sentence"].is_null());
+    }
+
+    #[test]
+    fn the_watching_line_names_the_installed_agents() {
+        let mut overview = status().overview;
+        assert_eq!(
+            watching(&overview).as_deref(),
+            Some("Watching Claude Code and Codex.")
+        );
+        overview.agents[1].installed = false;
+        assert_eq!(
+            watching(&overview).as_deref(),
+            Some("Watching Claude Code.")
+        );
+        overview.agents[0].installed = false;
+        assert_eq!(
+            watching(&overview).as_deref(),
+            Some("No agent found to watch.")
+        );
+        assert_eq!(watching(&Overview::default()), None);
     }
 
     #[test]
@@ -429,20 +667,20 @@ mod tests {
         assert!(summary_line(&judged).ends_with("Rule Pack 3, engine ollama."));
     }
 
-    /// Both Postures name the same Agents in the same order; only the wording
-    /// moves.
+    /// Both Postures name the same Agents: the Developer Posture one line
+    /// each, the Simple Posture on the watching line; the sentence and the
+    /// last check are the same.
     #[test]
-    fn both_postures_list_the_same_agents() {
+    fn both_postures_name_the_same_agents() {
         let status = status();
         let simple = of_status(&status, Posture::Simple);
         let developer = of_status(&status, Posture::Developer);
-        let ids = |view: &OverviewView| -> Vec<(String, bool)> {
-            view.agents
-                .iter()
-                .map(|agent| (agent.agent.clone(), agent.installed))
-                .collect()
-        };
-        assert_eq!(ids(&simple), ids(&developer));
+        let watching = simple.watching.expect("the watching line");
+        for agent in &developer.agents {
+            let name = agent.line.split([',', ' ']).next().unwrap_or_default();
+            assert!(watching.contains(name), "{watching} names {name}");
+        }
+        assert_eq!(developer.agents.len(), 2);
         assert_eq!(simple.sentence, developer.sentence);
         assert_eq!(simple.last_check, developer.last_check);
     }
@@ -659,11 +897,10 @@ mod tests {
         let simple = of_status(&status, Posture::Simple);
         assert_eq!(
             simple.gate_lines,
-            [
-                "2 projects switched off the check.",
-                "The check could not be added to Claude Code."
-            ]
+            ["The check could not be added to Claude Code."],
+            "the projects are counted on their tile"
         );
+        assert_eq!(simple.tiles[3].count, 2);
         let developer = of_status(&status, Posture::Developer);
         assert_eq!(
             developer.gate_lines,

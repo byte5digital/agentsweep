@@ -730,6 +730,36 @@ fn the_simple_posture_words_the_findings_a_real_daemon_sends() {
     );
     assert_eq!(bypass["simple"]["chip"], "amber");
 
+    // The three parts of layout B, from the facts the daemon sent: the
+    // thing named, why it matters in the Rule's own why, what to do; the
+    // setting named by what it does and its key in the technical details
+    // alone.
+    let parts = &skill["simple"]["parts"];
+    assert_eq!(parts["name"], "The skill 'setup'");
+    assert_eq!(
+        parts["what"],
+        "A skill in Claude Code. Claude Code uses it each time it starts."
+    );
+    assert!(
+        parts["why"]
+            .as_str()
+            .is_some_and(|why| !why.is_empty() && why != skill["plain"]),
+        "the Rule's why: {parts}"
+    );
+    assert!(
+        parts["todo"]
+            .as_str()
+            .is_some_and(|todo| todo.starts_with("Quarantine it"))
+    );
+    let parts = &bypass["simple"]["parts"];
+    assert_eq!(parts["name"], "A Claude Code setting");
+    assert_eq!(
+        parts["what"],
+        "Your own setting that decides when Claude Code asks before acting. Not an attack."
+    );
+    assert_eq!(parts["todo"], "Take it out. Claude Code will ask again.");
+    assert!(!parts.to_string().contains("permissions"), "{parts}");
+
     // The Exposure shows its Rule's how-to with the file by its name, and
     // the Developer Posture names the same file by its path; the Threat has
     // no how-to and offers Quarantine instead.
@@ -791,25 +821,26 @@ fn the_overview_follows_scan_now_from_the_stream() {
     frame.load(&status);
     frame.settings(&asking.settings().expect("the settings"));
 
-    // The Simple Overview: the popover's sentence, both Agents, the date of
-    // the bundled pack, both Scan actions and no summary line.
+    // The Simple Overview: the Protection line, the four tiles counting
+    // what the Health counts, the Agent watched, both Scan actions; no
+    // Agent line, no date and no summary line.
     let simple = frame.overview();
     assert!(!simple.off && simple.actions);
     assert_eq!(simple.sentence, status.health.headline());
-    let lines: Vec<&str> = simple.agents.iter().map(|a| a.line.as_str()).collect();
-    assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(
-        lines[0].starts_with("Claude Code, version unknown: "),
-        "{lines:?}"
-    );
-    assert_eq!(lines[1], "Codex is not installed.");
+    assert_eq!(simple.protection.as_deref(), Some("Protection is on."));
+    let counts: Vec<usize> = simple.tiles.iter().map(|tile| tile.count).collect();
     assert_eq!(
-        simple.rules_updated,
-        Some(format!(
-            "Rules updated {}.",
-            Manifest::bundled().released_on()
-        ))
+        counts,
+        vec![
+            status.health.open_threats,
+            status.health.open_exposures,
+            0,
+            0
+        ]
     );
+    assert_eq!(simple.watching.as_deref(), Some("Watching Claude Code."));
+    assert!(simple.agents.is_empty());
+    assert_eq!(simple.rules_updated, None);
     assert_eq!(
         simple.last_check,
         status.health.last_full_scan.map(|at| at.to_string())
@@ -827,6 +858,28 @@ fn the_overview_follows_scan_now_from_the_stream() {
     following.until_frame(&mut frame, &asking, "the Developer Posture", |frame| {
         frame.posture() == Posture::Developer
     });
+    // The Developer Overview: both Agents on a line each and the date of the
+    // bundled pack.
+    let developer = frame.overview();
+    let lines: Vec<&str> = developer.agents.iter().map(|a| a.line.as_str()).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines[0].starts_with("Claude Code, version unknown: "),
+        "{lines:?}"
+    );
+    assert_eq!(lines[1], "Codex is not installed.");
+    assert!(
+        developer
+            .rules_updated
+            .as_deref()
+            .is_some_and(|line| line.starts_with(&format!(
+                "Rules updated {} (Rule Pack ",
+                Manifest::bundled().released_on()
+            ))),
+        "{:?}",
+        developer.rules_updated
+    );
+    assert!(developer.tiles.is_empty() && developer.protection.is_none());
     let before = frame.overview().summary.expect("the last Scan on one line");
     assert!(before.starts_with("Last "), "{before}");
     assert!(
@@ -886,14 +939,15 @@ fn the_overview_shows_only_protection_off_until_the_daemon_answers() {
     let _daemon = sandbox.start();
     following.until_frame(&mut frame, &asking, "the Overview back", |frame| {
         let shown = frame.overview();
-        !shown.off && shown.actions && shown.agents.len() == 2
+        !shown.off && shown.actions && shown.watching.is_some()
     });
     let shown = frame.overview();
     assert_eq!(
         shown.sentence,
         asking.status().expect("a status").health.headline()
     );
-    assert!(shown.rules_updated.is_some());
+    assert_eq!(shown.watching.as_deref(), Some("Watching Claude Code."));
+    assert_eq!(shown.tiles.len(), 4);
 }
 
 /// Needs Permission against a real daemon (spec sections 8.6 and 9.7): a

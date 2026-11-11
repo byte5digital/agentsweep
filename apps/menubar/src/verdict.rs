@@ -107,6 +107,20 @@ pub fn ai_block(verdict: &Verdict<'_>, posture: Posture) -> Option<String> {
     }
 }
 
+/// The AI explanation of a Verdict as the Simple Posture folds it (spec
+/// section 8.4, layout B): the engine by name and the contained reason, or
+/// None wherever [`ai_block`] shows nothing.
+pub fn explained(verdict: &Verdict<'_>) -> Option<(String, String)> {
+    if verdict.said != Said::Malicious {
+        return None;
+    }
+    let reason = contain_reason(verdict.reason);
+    match reason.is_empty() {
+        true => None,
+        false => Some((engine_name(verdict.engine).to_string(), reason)),
+    }
+}
+
 /// The "checked by <engine>" note of an Item a benign Verdict moved to
 /// Clear, in the Developer Posture only.
 pub fn checked_by(item: &CheckedItem, posture: Posture) -> Option<String> {

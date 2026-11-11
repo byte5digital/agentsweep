@@ -4,11 +4,13 @@
 // folder dialog, and invokes the app's commands; every decision about what
 // is listed, counted and offered was made by the daemon and the app. Which
 // pane and which Finding are selected is the window's own. Everything is
-// written with textContent, never as markup. In the Simple Posture a Finding reads as the
-// app worded it (spec section 8.4); in the Developer Posture it reads as
-// `<Kind> · <name>` with its chips, the same body lines and the technical
-// table shown always, and the Threat Findings pane lists the Ambiguous Items
-// beneath the Findings (spec sections 4.3 and 8.2).
+// written with textContent, never as markup. In the Simple Posture a
+// Finding reads as the app worded it, in the three parts of layout B, and
+// the Overview shows the Protection line and four count tiles (spec section
+// 8.4); in the Developer Posture a Finding reads as `<Kind> · <name>` with
+// its chips, the body lines and the technical table shown always, and the
+// Threat Findings pane lists the Ambiguous Items beneath the Findings (spec
+// sections 4.3 and 8.2).
 //
 // The action buttons are never disabled while a Scan runs (spec sections
 // 6.4 and 6.6). A press is taken at once: from the click until the daemon
@@ -199,24 +201,34 @@ async function reportFalseAlarm(target, issue) {
   return invoke("open_false_alarm_report", { target });
 }
 
-// A Finding's detail header: its title and, where it names a Rule, a
-// Heuristic or a Verdict, Report false positive (spec section 8.8).
+// Report false positive, where a Finding names a Rule, a Heuristic or a
+// Verdict (spec section 8.8), or null.
+function renderReport(card) {
+  if (!card.report) {
+    return null;
+  }
+  const report = el("button", "link", card.report);
+  report.type = "button";
+  report.addEventListener("click", async () => {
+    try {
+      const said = await reportFalseAlarm(card.id, null);
+      if (said !== null) {
+        showResult({ message: said, lines: [], details: [], choices: [], conflict: false }, card);
+      }
+    } catch (why) {
+      showFailure(why, card);
+    }
+  });
+  return report;
+}
+
+// A Finding's detail header in the Developer Posture: its title and Report
+// false positive beside it.
 function renderHeader(card, title) {
   const header = el("div", "card-header");
   header.append(el("p", "title", title));
-  if (card.report) {
-    const report = el("button", "link", card.report);
-    report.type = "button";
-    report.addEventListener("click", async () => {
-      try {
-        const said = await reportFalseAlarm(card.id, null);
-        if (said !== null) {
-          showResult({ message: said, lines: [], details: [], choices: [], conflict: false }, card);
-        }
-      } catch (why) {
-        showFailure(why, card);
-      }
-    });
+  const report = renderReport(card);
+  if (report) {
     header.append(report);
   }
   return header;
@@ -266,36 +278,26 @@ function renderWorking() {
   return line;
 }
 
-// A Folder Scan's Finding in the Posture's wording: the Simple verdict title
-// with its Severity word and the technical details one click away, or the
-// Developer heading with its chips and the technical table shown always. It
-// recorded nothing, so it offers no action.
+// A Folder Scan's Finding in the Posture's wording: the Simple three parts
+// with the technical details one click away, or the Developer heading with
+// its chips and the technical table shown always. It recorded nothing, so
+// it offers no action.
 function renderFolderCard(card) {
+  if (!isDeveloper()) {
+    return renderSimpleCard(card, `folder ${card.id}`, () => renderFolder(folderView));
+  }
   const node = el("article", "card");
   node.dataset.category = card.category;
-  if (isDeveloper()) {
-    node.append(el("p", "title", card.developer.title));
-    const chips = el("div", "chips");
-    for (const chip of card.developer.chips) {
-      const span = el("span", "chip", chip.text);
-      span.dataset.fact = chip.fact;
-      chips.append(span);
-    }
-    node.append(chips);
-    renderLines(node, card.simple.lines);
-    node.append(renderTechnical(card));
-    return node;
-  }
-  node.append(el("p", "title", card.simple.title));
+  node.append(el("p", "title", card.developer.title));
   const chips = el("div", "chips");
-  chips.append(el("span", `chip ${card.simple.chip}`, card.simple.severity));
+  for (const chip of card.developer.chips) {
+    const span = el("span", "chip", chip.text);
+    span.dataset.fact = chip.fact;
+    chips.append(span);
+  }
   node.append(chips);
   renderLines(node, card.simple.lines);
-  const key = `folder ${card.id}`;
-  node.append(renderToggle(key, () => renderFolder(folderView)));
-  if (detailsOpen.has(key)) {
-    node.append(renderTechnical(card));
-  }
+  node.append(renderTechnical(card));
   return node;
 }
 
@@ -342,18 +344,73 @@ function renderActions(card, actions = card.actions.filter((action) => !action.t
   return node;
 }
 
-// One Finding in the Simple Posture: the verdict title, the Severity word on
-// its chip, the body in its fixed order, the actions, and the technical
-// details one click away. No id, path, hash or Score is rendered here.
-function renderSimpleCard(card) {
+// The folds the user opened on a Simple Finding (More, AI explanation and
+// Show me how to fix this), by the Finding and the fold. A fold is a native
+// disclosure; this remembers it, so a card built again opens as it was.
+const foldsOpen = new Set();
+
+// One fold, closed until the user opens it.
+function renderFold(key, label, inner) {
+  const fold = el("details", "fold");
+  fold.open = foldsOpen.has(key);
+  fold.addEventListener("toggle", () => {
+    if (fold.open) {
+      foldsOpen.add(key);
+    } else {
+      foldsOpen.delete(key);
+    }
+  });
+  const body = el("div", "inner");
+  body.append(...inner);
+  fold.append(el("summary", "", label), body);
+  return fold;
+}
+
+// One of the three parts: its small label and its sentence.
+function renderPart(label, text) {
+  const part = el("div", "part");
+  part.append(el("span", "part-label", label), el("p", "", text));
+  return part;
+}
+
+// What folds under More: the further signs as a list, the notes as muted
+// lines.
+function renderMore(lines) {
+  const shown = [];
+  let list = null;
+  for (const line of lines) {
+    if (line.part === "heuristic") {
+      if (list === null) {
+        list = el("ul", "heuristics");
+        shown.push(list);
+      }
+      list.append(el("li", "", line.text));
+      continue;
+    }
+    list = null;
+    shown.push(el("p", "muted", line.text));
+  }
+  return shown;
+}
+
+// One Finding in the Simple Posture, in the three parts of layout B (spec
+// section 8.4): the Severity chip beside the title that names the thing;
+// What it is, Why it matters, and What to do with the buttons inside it;
+// the how-to of an Exposure, the further signs and notes under More and the
+// AI explanation each folded; Show technical details and Report false
+// positive as links. No id, path, hash or Score is rendered here. A Folder
+// Scan's Finding offers nothing, so it has no What to do; its technical
+// details are kept under their own key.
+function renderSimpleCard(card, details = card.id, again = () => render(view)) {
   const simple = card.simple;
+  const parts = simple.parts;
   const node = el("article", "card");
   node.dataset.category = card.category;
-  node.append(renderHeader(card, simple.title));
-  const chips = el("div", "chips");
-  chips.append(el("span", `chip ${simple.chip}`, simple.severity));
-  node.append(chips);
-  renderLines(node, simple.lines);
+  const head = el("div", "head");
+  head.append(el("span", `chip ${simple.chip}`, simple.severity), el("p", "title", parts.name));
+  node.append(head);
+  const box = el("div", "parts");
+  box.append(renderPart("What it is", parts.what), renderPart("Why it matters", parts.why));
   const actions = renderActions(card);
   if (simple.admin) {
     const copy = el("button", "", "Copy a message for your admin");
@@ -373,14 +430,42 @@ function renderSimpleCard(card) {
     });
     actions.append(copy);
   }
-  const howTo = document.createDocumentFragment();
-  addHowTo(card, howTo, actions);
-  if (actions.childElementCount > 0) {
-    node.append(actions);
+  if (parts.todo) {
+    const todo = renderPart("What to do", parts.todo);
+    todo.classList.add("todo");
+    if (actions.childElementCount > 0) {
+      todo.append(actions);
+    }
+    box.append(todo);
   }
-  node.append(howTo);
-  node.append(renderToggle(card.id));
-  if (detailsOpen.has(card.id)) {
+  node.append(box);
+  if (card.howTo) {
+    const howTo = card.howTo;
+    node.append(
+      renderFold(`${details} how-to`, howTo.label, [
+        el("p", "", howTo.steps),
+        el("p", "muted", `The file: ${howTo.file}`),
+        renderOpenFile(card),
+      ]),
+    );
+  }
+  if (parts.more.length > 0) {
+    node.append(renderFold(`${details} more`, "More", renderMore(parts.more)));
+  }
+  if (parts.ai) {
+    // The engine's text, set as plain text, never markup.
+    const ai = el("p", "ai");
+    ai.append(el("span", "from", parts.ai.from), document.createTextNode(parts.ai.text));
+    node.append(renderFold(`${details} ai`, "AI explanation", [ai]));
+  }
+  const links = el("div", "links");
+  links.append(renderToggle(details, again));
+  const report = renderReport(card);
+  if (report) {
+    links.append(report);
+  }
+  node.append(links);
+  if (detailsOpen.has(details)) {
     node.append(renderTechnical(card));
   }
   return node;
@@ -450,7 +535,7 @@ function renderDeveloperCard(card) {
   return node;
 }
 
-// The Exposure Findings whose how-to is open, by id.
+// The Exposure Findings whose how-to is open in the Developer Posture, by id.
 const howToOpen = new Set();
 
 // Show me how to fix this on an Exposure, put first among its buttons, and
@@ -481,7 +566,13 @@ function addHowTo(card, node, actions) {
   const section = el("section", "how-to");
   section.append(el("p", "", howTo.steps));
   section.append(el("p", "muted", `The file: ${howTo.file}`));
-  const file = el("button", "", howTo.open);
+  section.append(renderOpenFile(card));
+  node.append(section);
+}
+
+// Open the file under a how-to, which names only the Finding.
+function renderOpenFile(card) {
+  const file = el("button", "", card.howTo.open);
   file.type = "button";
   file.addEventListener("click", async () => {
     try {
@@ -501,8 +592,7 @@ function addHowTo(card, node, actions) {
   });
   const buttons = el("div", "actions");
   buttons.append(file);
-  section.append(buttons);
-  node.append(section);
+  return buttons;
 }
 
 // The Show technical details toggle of one Finding.
@@ -668,8 +758,9 @@ function paneOf(card) {
 }
 
 // One entry of the Quarantine pane: the Finding's card with, under its
-// chips, who stopped it and when, the withdrawn Rule line, the fixed version
-// line and, in the Developer Posture only, the Receipt id.
+// chips (in the Simple Posture its title), who stopped it and when, the
+// withdrawn Rule line, the fixed version line and, in the Developer Posture
+// only, the Receipt id.
 function renderQuarantineEntry(card) {
   const node = renderFinding(card);
   const lines = el("div", "quarantine-lines");
@@ -684,7 +775,7 @@ function renderQuarantineEntry(card) {
   if (isDeveloper() && card.receiptId) {
     lines.append(el("p", "id", `Receipt ${card.receiptId}`));
   }
-  node.querySelector(".chips").after(lines);
+  (node.querySelector(".chips") ?? node.querySelector(".head")).after(lines);
   return node;
 }
 
@@ -779,18 +870,44 @@ function when(text) {
   return moment.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
+// A moment as the Simple Overview's watching line says it: "today, 09:12",
+// or the date and the time on another day.
+function lastCheck(text) {
+  const moment = new Date(text);
+  if (Number.isNaN(moment.getTime())) {
+    return text;
+  }
+  const time = moment.toLocaleTimeString(undefined, { timeStyle: "short" });
+  if (moment.toDateString() === new Date().toDateString()) {
+    return `today, ${time}`;
+  }
+  return `${moment.toLocaleDateString(undefined, { dateStyle: "medium" })}, ${time}`;
+}
+
 // What "Scan now" answered, shown until the stream says more.
 let scanAnswer = "";
 
+// The project tiles the user opened on the Simple Overview: each shows the
+// projects it counts beneath the tiles.
+const tilesOpen = new Set();
+
 // The Overview pane (spec section 8.1). With Protection off it shows the
-// sentence alone and offers neither Scan action (spec section 6.2).
+// sentence alone and offers neither Scan action (spec section 6.2). The
+// Simple Posture shows layout B (spec section 8.4): the Protection line,
+// the four tiles and one line naming the Agents watched with the last
+// check; the Developer Posture the sentence, one line per Agent, the last
+// check and the date of the rules.
 function renderOverview(overview) {
-  // A banner replaces the sentence (spec section 8.6).
+  // A banner replaces the sentence and the Protection line (spec section
+  // 8.6).
   renderBanner($("overview-banner"), overview.banner);
+  $("overview-protection").hidden = (overview.protection ?? null) === null;
+  $("overview-protection").textContent = overview.protection ?? "";
   $("overview-sentence").hidden = overview.sentence === null;
   $("overview-sentence").textContent = overview.sentence ?? "";
   $("overview-body").hidden = overview.off;
   $("overview-scan").hidden = !overview.actions;
+  const tiled = renderTiles(overview);
   const agents = overview.agents.map((agent) => {
     const item = el("li", "", agent.line);
     item.dataset.agent = agent.agent;
@@ -798,9 +915,18 @@ function renderOverview(overview) {
     return item;
   });
   $("overview-agents").replaceChildren(...agents);
-  $("overview-last-check").textContent = overview.lastCheck
-    ? `Last check: ${when(overview.lastCheck)}`
-    : "Nothing checked yet.";
+  if (tiled) {
+    const checked = overview.lastCheck
+      ? `Last check ${lastCheck(overview.lastCheck)}.`
+      : "Nothing checked yet.";
+    $("overview-last-check").textContent = [overview.watching, checked]
+      .filter(Boolean)
+      .join(" ");
+  } else {
+    $("overview-last-check").textContent = overview.lastCheck
+      ? `Last check: ${when(overview.lastCheck)}`
+      : "Nothing checked yet.";
+  }
   $("overview-rules").textContent = overview.rulesUpdated ?? "";
   $("overview-rules").hidden = overview.rulesUpdated === null;
   if (overview.scan.running) {
@@ -814,16 +940,50 @@ function renderOverview(overview) {
   $("overview-ai-check").hidden = (overview.aiCheck ?? null) === null;
   $("overview-cap").textContent = overview.cap ?? "";
   $("overview-cap").hidden = (overview.cap ?? null) === null;
-  renderGateLines(overview.gate);
-  renderPermission(overview.permission);
+  renderGateLines(overview.gate, tiled);
+  renderPermission(overview.permission, tiled);
+}
+
+// The four count tiles of the Simple Overview, from the frame: the count,
+// the label and the tone each. A Finding tile opens its pane; a project tile
+// opens the projects it counts and has nothing to open at zero. Check now
+// stands on the tile of the projects not checked. The tiles are the page's
+// own nodes, filled in place, so a render never swallows a click on them.
+// Answers true when the tiles are shown.
+function renderTiles(overview) {
+  const tiles = overview.tiles ?? [];
+  $("overview-tiles").hidden = tiles.length === 0;
+  for (const tile of tiles) {
+    const node = $("overview-tiles").querySelector(`[data-tile="${tile.tile}"]`);
+    node.dataset.tone = tile.tone ?? "";
+    node.querySelector(".n").textContent = String(tile.count);
+    node.querySelector(".label").textContent = tile.label;
+    if (tile.tile === "permission" || tile.tile === "gate") {
+      if (tile.count === 0) {
+        tilesOpen.delete(tile.tile);
+      }
+      const open = node.querySelector(".open");
+      open.disabled = tile.count === 0;
+      open.setAttribute("aria-expanded", String(tilesOpen.has(tile.tile)));
+    }
+  }
+  const permission = overview.permission ?? null;
+  $("tile-check-now").hidden = tiles.length === 0 || permission === null;
+  if (permission !== null) {
+    $("tile-check-now").textContent = permission.button;
+    $("tile-check-now").disabled = !permission.enabled;
+  }
+  return tiles.length > 0;
 }
 
 // The Gate on the Overview (spec sections 7.6, 8.1 and 8.6): the Health
 // lines the sentence does not say, and "Gate off in this project" for each
-// project that switched the check off. Shown, never fought: no button.
-function renderGateLines(gate) {
+// project that switched the check off; under the tiles, those projects show
+// once their tile is opened. Shown, never fought: no button.
+function renderGateLines(gate, tiled) {
   const lines = gate.lines.map((line) => el("p", "muted", line));
-  const projects = gate.projects.map((entry) => {
+  const listed = !tiled || tilesOpen.has("gate") ? gate.projects : [];
+  const projects = listed.map((entry) => {
     const row = el("p", "gate-off");
     row.append(el("span", "project", entry.project), el("span", "muted", entry.line));
     return row;
@@ -835,12 +995,20 @@ function renderGateLines(gate) {
 // "N projects not checked" with Check now, for projects that Need
 // Permission (spec section 8.6). The button stays disabled until the daemon
 // answers; after an answer the link to System Settings shows while projects
-// still Need Permission.
-function renderPermission(permission) {
-  $("overview-permission").hidden = permission === null;
+// still Need Permission. Under the tiles, the tile says the line and holds
+// Check now, and the projects show once the tile is opened; the link and an
+// answer show either way.
+function renderPermission(permission, tiled) {
+  const opened = tiled && tilesOpen.has("permission");
+  $("overview-permission").hidden =
+    permission === null ||
+    (tiled && !opened && permission.privacy === null && $("permission-answer").hidden);
   if (permission === null) {
     return;
   }
+  $("permission-line").hidden = tiled;
+  $("check-now").hidden = tiled;
+  $("permission-projects").hidden = tiled && !opened;
   $("permission-line").textContent = permission.line;
   $("permission-projects").replaceChildren(
     ...permission.projects.map((project) => el("li", "", project)),
@@ -1340,17 +1508,40 @@ $("scan-now").addEventListener("click", async () => {
 });
 // Check now sends check-now once per press; the button says "Checking…"
 // and waits until the daemon answers, and the stream shows the projects once
-// they are checked.
-$("check-now").addEventListener("click", async () => {
-  $("check-now").disabled = true;
+// they are checked. The Simple Overview's tile carries its own button for
+// the same request.
+async function checkNow(button) {
+  button.disabled = true;
   $("permission-answer").hidden = true;
   try {
     await invoke("check_now", { press: nextPress() });
   } catch (why) {
     $("permission-answer").textContent = String(why);
     $("permission-answer").hidden = false;
+    $("overview-permission").hidden = false;
   }
-});
+}
+$("check-now").addEventListener("click", () => checkNow($("check-now")));
+$("tile-check-now").addEventListener("click", () => checkNow($("tile-check-now")));
+// A Finding tile opens its pane; a project tile opens or closes the
+// projects it counts.
+for (const tile of $("overview-tiles").querySelectorAll(".tile")) {
+  tile.querySelector(".open").addEventListener("click", () => {
+    const name = tile.dataset.tile;
+    if (name === "threats" || name === "exposures") {
+      select(name);
+      return;
+    }
+    if (tilesOpen.has(name)) {
+      tilesOpen.delete(name);
+    } else {
+      tilesOpen.add(name);
+    }
+    if (view) {
+      render(view);
+    }
+  });
+}
 $("open-privacy").addEventListener("click", () =>
   invoke("open_privacy").catch((why) => {
     $("permission-answer").textContent = String(why);

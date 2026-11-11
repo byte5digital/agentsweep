@@ -1023,8 +1023,9 @@ mod tests {
         assert_eq!(frame.activity().lines().len(), 2000);
     }
 
-    /// The window carries the Overview; the Developer summary line shows only
-    /// in the Developer Posture and the Agent lines in both.
+    /// The window carries the Overview: the Simple Posture its Protection
+    /// line, four tiles and the watching line, the Developer Posture the
+    /// sentence, the Agent lines and the summary line.
     #[test]
     fn the_frame_carries_the_overview_in_each_posture() {
         let mut status = status();
@@ -1033,21 +1034,45 @@ mod tests {
         let mut frame = Frame::new();
         frame.load(&status);
         let simple = frame.to_value()["overview"].clone();
-        assert_eq!(simple["sentence"], status.health.headline());
+        assert_eq!(simple["sentence"], Value::Null, "the tiles say it");
+        assert_eq!(simple["protection"], "Protection is on.");
+        let tiles: Vec<(&str, u64)> = simple["tiles"]
+            .as_array()
+            .expect("the tiles")
+            .iter()
+            .map(|tile| {
+                (
+                    tile["label"].as_str().expect("a label"),
+                    tile["count"].as_u64().expect("a count"),
+                )
+            })
+            .collect();
         assert_eq!(
-            simple["agents"][0]["line"],
-            "Claude Code 2.1.3: 1 project, 7 things checked."
+            tiles,
+            vec![
+                ("Need your decision", 2),
+                ("Worth fixing", 1),
+                ("Projects not checked", 0),
+                ("Projects without the check", 0),
+            ]
         );
+        assert_eq!(simple["watching"], "Watching Claude Code.");
+        assert_eq!(simple["agents"], json!([]), "no version, no Item count");
+        assert_eq!(simple["rulesUpdated"], Value::Null);
         assert_eq!(simple["summary"], Value::Null);
         assert_eq!(simple["actions"], true);
 
         frame.settings(&settings(Posture::Developer));
         let developer = frame.to_value()["overview"].clone();
+        assert_eq!(developer["sentence"], status.health.headline());
         assert_eq!(
             developer["agents"][0]["line"],
             "Claude Code 2.1.3: 1 project, 7 Items."
         );
         assert_eq!(developer["summary"], summary_line(&finished()));
+        assert_eq!(developer["tiles"], json!([]));
+        assert_eq!(developer["protection"], Value::Null);
+        assert_eq!(developer["watching"], Value::Null);
     }
 
     /// The Agents, the progress and the last Scan follow the stream, and the
@@ -1242,7 +1267,8 @@ mod tests {
         frame.load(&status);
         let shown = frame.overview();
         assert!(!shown.off && shown.actions);
-        assert_eq!(shown.agents.len(), 1);
+        assert_eq!(shown.watching.as_deref(), Some("Watching Claude Code."));
+        assert_eq!(shown.tiles.len(), 4);
 
         // Off on the stream itself does what the link's view does.
         let gone = StateEvent::HealthChanged {

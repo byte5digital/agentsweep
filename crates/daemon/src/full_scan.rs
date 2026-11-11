@@ -914,6 +914,7 @@ fn facts(
         .map(|placed| {
             let item = items.get(&placed.finding.item_id).copied();
             let mut facts = FindingFacts::of(&placed.finding, item);
+            facts.setting_plain = setting_plain(&placed.finding.item_id);
             if facts.score > 0 || !facts.heuristics.is_empty() {
                 facts.bands = Some(bands);
             }
@@ -921,6 +922,7 @@ fn facts(
                 && let Some(meta) = pack.metas().find(|meta| meta.id == id)
             {
                 facts.phrase = meta.phrase.clone();
+                facts.why = meta.why.clone();
                 // The how-to behind Show me how to fix this belongs to an
                 // Exposure, and travels with the Rule Pack in force.
                 if placed.finding.category == Category::Exposure {
@@ -951,6 +953,27 @@ fn facts(
             (placed.id.clone(), facts)
         })
         .collect()
+}
+
+/// What the setting an Item id names does, in plain words, as the Surface
+/// Adapter of its Agent describes it; empty for an Item that is no setting
+/// and for a key the adapter does not describe. Read off the id, so a setting
+/// in the quarantine store is named too.
+pub(crate) fn setting_plain(item_id: &ItemId) -> String {
+    let segment = format!("/{}/", Kind::SettingsEntry.id_segment());
+    if !item_id.as_str().contains(&segment) {
+        return String::new();
+    }
+    let Some((agent, key_path)) = agentsweep_core::finding_facts::setting_key_path(item_id) else {
+        return String::new();
+    };
+    match agent {
+        "claude-code" => agentsweep_adapter_claude_code::settings::plain_name(&key_path),
+        "codex" => agentsweep_adapter_codex::settings::plain_name(&key_path),
+        _ => None,
+    }
+    .unwrap_or_default()
+    .to_string()
 }
 
 /// The stopped Finding one Receipt stands for, built from the Event Log and

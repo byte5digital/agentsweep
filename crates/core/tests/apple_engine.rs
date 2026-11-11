@@ -208,6 +208,7 @@ fn fired_at(text: &str, needle: &str) -> FiredHeuristic {
         weight: 3,
         title: "Heuristic 530".to_string(),
         plain: "A download is piped into a shell.".to_string(),
+        why: String::new(),
         severity: Severity::Critical,
         sensitive: false,
         reviewer_directed: false,

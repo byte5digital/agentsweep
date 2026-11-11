@@ -1081,6 +1081,7 @@ impl Daemon {
             receipt_id: String::new(),
         };
         let mut facts = FindingFacts::of(&finding, Some(item));
+        facts.setting_plain = crate::full_scan::setting_plain(&item.id);
         facts.judgement_engine = engine.to_string();
         facts.judgement_model = model.to_string();
         if let Verdict::Malicious { reason, .. } = verdict {
@@ -1164,6 +1165,7 @@ mod tests {
                 weight: 3,
                 title: "Override phrasing".to_string(),
                 plain: "It talks the Agent out of its rules.".to_string(),
+                why: String::new(),
                 severity: Severity::Medium,
                 sensitive: false,
                 reviewer_directed: false,

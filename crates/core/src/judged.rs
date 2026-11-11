@@ -294,6 +294,7 @@ mod tests {
             weight: 1,
             title: format!("Heuristic {id}"),
             plain: format!("Heuristic {id} fired."),
+            why: format!("Heuristic {id} matters."),
             severity,
             sensitive: false,
             reviewer_directed: false,

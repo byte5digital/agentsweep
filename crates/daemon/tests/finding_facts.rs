@@ -389,6 +389,12 @@ fn a_finding_in_an_untrusted_project_names_its_scope_root_and_activation() {
     // The Simple Posture's title is built from the phrase of the Rule in
     // force, which the daemon reads off the Rule Pack.
     assert_eq!(planted.facts.phrase, "downloads and runs hidden code");
+    // Why it matters is the Rule's own sentence, from the same pack.
+    assert_eq!(
+        planted.facts.why,
+        "It downloads hidden code and runs it on your Mac."
+    );
+    assert_eq!(planted.facts.setting_plain, "", "a file is no setting");
     assert_eq!(planted.facts.plugin, "");
     assert!(
         planted.facts.path.ends_with("CLAUDE.md"),
@@ -511,6 +517,79 @@ fn a_suspicious_finding_lists_its_heuristics_and_redacts_the_sensitive_one() {
         exposure.facts.path
     );
     assert_eq!(suspicious.facts.fix, "", "a Threat offers no how-to");
+
+    // Why it matters: the Exposure's own sentence, and for the Score the
+    // sentence of the strongest Heuristic that fired, by Weight.
+    let why_of = |id: i64| {
+        pack.metas()
+            .find(|meta| meta.id == id)
+            .map(|meta| meta.why.clone())
+            .expect("a Rule of the bundled pack")
+    };
+    assert_eq!(exposure.facts.why, why_of(exposure.rule_id));
+    let strongest = suspicious
+        .facts
+        .heuristics
+        .iter()
+        .map(|line| line.weight)
+        .max()
+        .expect("lines");
+    let candidates: Vec<String> = suspicious
+        .facts
+        .heuristics
+        .iter()
+        .filter(|line| line.weight == strongest)
+        .map(|line| why_of(line.id))
+        .collect();
+    assert!(
+        candidates.contains(&suspicious.facts.why),
+        "{} is not the why of a Heuristic of Weight {strongest}: {candidates:?}",
+        suspicious.facts.why
+    );
+}
+
+/// A setting is named by what it does, from the Surface Adapter of its Agent,
+/// and carries the `why` of the Rule behind it: Claude Code's
+/// `permissions.allow` and Codex's `approval_policy`.
+#[test]
+fn a_setting_finding_carries_its_plain_name_and_why() {
+    let sandbox = Sandbox::empty("setting-names");
+    std::fs::write(
+        sandbox.home.join(".claude/settings.json"),
+        r#"{"permissions": {"allow": ["Bash"]}}"#,
+    )
+    .expect("user settings");
+    std::fs::create_dir_all(sandbox.home.join(".codex")).expect("an installed Codex");
+    std::fs::write(
+        sandbox.home.join(".codex/config.toml"),
+        "approval_policy = \"never\"\n",
+    )
+    .expect("a Codex layer");
+
+    let _daemon = sandbox.start();
+    let status = sandbox.status();
+
+    let allow = finding_on(&status, "/permissions/allow/0");
+    assert_eq!(allow.rule_id, 18);
+    assert_eq!(
+        allow.facts.setting_plain,
+        "lets Claude Code run commands without asking"
+    );
+    assert_eq!(
+        allow.facts.why,
+        "Your agent can run any command on your Mac without asking."
+    );
+
+    let approvals = finding_on(&status, "/approval_policy");
+    assert_eq!(approvals.rule_id, 19);
+    assert_eq!(
+        approvals.facts.setting_plain,
+        "decides when Codex asks before acting"
+    );
+    assert_eq!(
+        approvals.facts.why,
+        "Your agent can do dangerous things without asking you first."
+    );
 }
 
 /// User settings with one environment variable and an HTTP hook that sends a

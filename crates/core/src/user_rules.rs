@@ -255,8 +255,8 @@ mod tests {
     /// does not load, and the refusal names the key it lacks.
     #[test]
     fn a_user_rule_without_a_why_is_refused_and_names_the_key() {
-        let older = a_user_rule(9008, "2", "", "threat", "high")
-            .replace("    why = \"It is mine.\"\n", "");
+        let older =
+            a_user_rule(9008, "2", "", "threat", "high").replace("    why = \"It is mine.\"\n", "");
         assert!(!older.contains("why"), "{older}");
         let (_temporary, directory) = written(&[("older.yar", older)]);
         let problem = UserRules::read(&directory)

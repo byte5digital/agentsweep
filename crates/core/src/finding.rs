@@ -221,6 +221,9 @@ pub struct FiredHeuristic {
     pub title: String,
     /// The one sentence the Simple Posture shows.
     pub plain: String,
+    /// Why it matters to the user, in one short sentence: the Heuristic's
+    /// `why` meta key.
+    pub why: String,
     /// How bad it is if true.
     pub severity: Severity,
     /// True when matches can land on sensitive fields.

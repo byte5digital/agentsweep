@@ -141,6 +141,105 @@ pub static EXECUTING_OR_REDIRECTING_KEYS: &[DeclaredKey] = &[
 /// what the Agent wrote itself.
 pub static AGENT_WRITTEN_KEYS: &[&str] = &["hooks.state", "projects"];
 
+/// What each declared key does, in the plain words the Simple Posture names a
+/// setting by instead of its key (spec section 8.4). A pattern is a dotted
+/// key path whose `*` stands for any one segment; it names the key and
+/// everything below it, and the longest pattern that fits wins. Every
+/// declared key that can be an Item has one, and so does every key a Rule or
+/// Heuristic asks about.
+pub static PLAIN_NAMES: &[(&str, &str)] = &[
+    ("notify", "runs a program after every Codex turn"),
+    (
+        "desktop.custom_file_handlers",
+        "runs a program when Codex opens a file",
+    ),
+    ("model_providers", "sets where Codex sends your work"),
+    (
+        "model_providers.*.base_url",
+        "sends Codex's traffic to another server",
+    ),
+    ("model_providers.*.env_key", "gives Codex a login key"),
+    (
+        "model_providers.*.auth",
+        "runs a program that hands Codex a login key",
+    ),
+    (
+        "model_provider",
+        "picks the service Codex sends your work to",
+    ),
+    ("openai_base_url", "sends Codex's traffic to another server"),
+    (
+        "chatgpt_base_url",
+        "sends Codex's account traffic to another server",
+    ),
+    ("otel", "sends Codex's usage reports somewhere"),
+    ("approval_policy", "decides when Codex asks before acting"),
+    ("approvals_reviewer", "decides who approves what Codex does"),
+    ("sandbox_mode", "decides what Codex's commands may touch"),
+    (
+        "sandbox_workspace_write",
+        "decides where Codex's commands may write",
+    ),
+    (
+        "default_permissions",
+        "sets what Codex may do without asking",
+    ),
+    ("permissions", "sets what Codex may do without asking"),
+    (
+        "shell_environment_policy",
+        "sets the values every Codex command can read",
+    ),
+    ("features", "turns a Codex feature on or off"),
+    ("features.hooks", "can switch off your checks"),
+    ("plugins", "turns on a plugin in Codex"),
+    ("marketplaces", "adds a place Codex gets plugins from"),
+    ("skills.config", "changes how Codex uses a skill"),
+    (
+        "skills.bundled.enabled",
+        "turns Codex's built-in skills on or off",
+    ),
+    (
+        "skills.include_instructions",
+        "decides whether skills add instructions to Codex",
+    ),
+    ("agents", "sets up a helper assistant for Codex"),
+    (
+        "model_instructions_file",
+        "replaces Codex's own instructions with a file",
+    ),
+    (
+        "developer_instructions",
+        "adds standing instructions to Codex",
+    ),
+    ("compact_prompt", "changes how Codex sums up a long chat"),
+    (
+        "experimental_compact_prompt_file",
+        "changes how Codex sums up a long chat",
+    ),
+    (
+        "project_doc_fallback_filenames",
+        "decides which project files Codex reads as instructions",
+    ),
+    (
+        "project_root_markers",
+        "decides where Codex thinks a project starts",
+    ),
+    (
+        "allow_managed_hooks_only",
+        "lets only your organisation's checks run",
+    ),
+    (
+        "ignore_user_and_project_exec_policy_rules",
+        "sets aside your own limits on Codex's commands",
+    ),
+];
+
+/// What the key at a dotted path does, in plain words, or none for a key
+/// this adapter does not describe.
+pub fn plain_name(key_path: &str) -> Option<&'static str> {
+    agentsweep_core::finding_facts::setting_plain_name(PLAIN_NAMES, key_path)
+}
+
 /// One config key found in one document.
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -247,6 +346,44 @@ mod tests {
     use super::*;
     use crate::document::Document;
     use serde_json::json;
+
+    /// Every declared key that can be an Item, and every key a Rule or
+    /// Heuristic of the bundled pack asks about, has a plain name: a few
+    /// words, no em-dash, no key.
+    #[test]
+    fn every_declared_and_every_ruled_key_has_a_plain_name() {
+        for declared in EXECUTING_OR_REDIRECTING_KEYS {
+            if declared.agent_record {
+                continue;
+            }
+            assert!(plain_name(declared.path).is_some(), "{}", declared.path);
+        }
+        for (key_path, expected) in [
+            ("approval_policy", "decides when Codex asks before acting"),
+            ("sandbox_mode", "decides what Codex's commands may touch"),
+            ("features.hooks", "can switch off your checks"),
+            ("features.web_search", "turns a Codex feature on or off"),
+            ("notify.0", "runs a program after every Codex turn"),
+            (
+                "model_providers.corp.auth.command",
+                "runs a program that hands Codex a login key",
+            ),
+            (
+                "model_providers.corp.base_url",
+                "sends Codex's traffic to another server",
+            ),
+            ("model_providers.corp.env_key", "gives Codex a login key"),
+            ("openai_base_url", "sends Codex's traffic to another server"),
+        ] {
+            assert_eq!(plain_name(key_path), Some(expected), "{key_path}");
+        }
+        for (pattern, plain) in PLAIN_NAMES {
+            assert!(plain.split_whitespace().count() <= 10, "{pattern}: {plain}");
+            assert!(!plain.contains('\u{2014}'), "{pattern}");
+            assert!(!plain.contains(pattern), "{pattern} names itself");
+        }
+        assert_eq!(plain_name("projects./src/demo.trust_level"), None);
+    }
 
     fn document(value: Value) -> Document {
         Document::inline(

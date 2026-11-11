@@ -23,3 +23,5 @@ toml = { version = "1.1.6", default-features = false, features = ["parse", "serd
 # The repository the Rule tests point at is written by this builder, never by
 # a version control binary.
 agentsweep-adapter-workspace = { workspace = true, features = ["testing"] }
+# A temporary folder a test makes removes itself, also when the test fails.
+tempfile = "3.27.0"

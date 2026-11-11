@@ -14,6 +14,10 @@
 //! touches the real home, the real data directory, the documented socket or
 //! the login Keychain.
 
+#[path = "support/started.rs"]
+mod started;
+use started::Started;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -174,6 +178,8 @@ struct Sandbox {
     keys: SharedKey,
     calendar: Arc<MovedCalendar>,
     engine: Arc<Metered>,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -198,6 +204,7 @@ impl Sandbox {
         ));
         let _ = std::fs::remove_file(&socket);
         let sandbox = Sandbox {
+            started: Started::default(),
             home: root.join("home"),
             root,
             socket,
@@ -292,6 +299,7 @@ impl Sandbox {
         .expect("an open daemon");
         let running = service::start_with(&self.options(), daemon).expect("a daemon");
         let background = running.serve_in_the_background();
+        self.started.follow(background.daemon());
         wait_until("the first Full Scan", || {
             let daemon = background.daemon();
             !daemon.health().scanning && daemon.status().scan.is_some()
@@ -327,6 +335,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
     }

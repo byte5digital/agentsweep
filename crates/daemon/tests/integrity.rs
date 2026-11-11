@@ -7,6 +7,10 @@
 //! Nothing touches the real home, the real data directory, the documented
 //! socket or the login Keychain.
 
+#[path = "support/started.rs"]
+mod started;
+use started::Started;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -63,6 +67,8 @@ struct Sandbox {
     root: PathBuf,
     home: PathBuf,
     socket: PathBuf,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -84,7 +90,12 @@ impl Sandbox {
         let home = root.join("home");
         std::fs::write(home.join(".claude.json"), b"{\n  \"projects\": {}\n}\n")
             .expect("a registry");
-        Sandbox { home, root, socket }
+        Sandbox {
+            home,
+            root,
+            socket,
+            started: Started::default(),
+        }
     }
 
     fn plant(&self, name: &str) -> PathBuf {
@@ -115,6 +126,7 @@ impl Sandbox {
                 .expect("an open daemon");
         let running = service::start_with(&options, daemon).expect("a listening daemon");
         let background = running.serve_in_the_background();
+        self.started.follow(background.daemon());
         wait_for_a_scan(background.daemon());
         background
     }
@@ -163,6 +175,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
     }

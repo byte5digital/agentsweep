@@ -357,12 +357,14 @@ mod tests {
         }
     }
 
-    fn ground(name: &str) -> (PathBuf, Ground) {
-        let root = std::env::temp_dir().join(format!(
-            "agentsweep-benign-plant-{name}-{}",
-            std::process::id()
-        ));
-        let ground = Ground::fresh(&root).expect("a fresh machine");
+    /// A fresh machine in a temporary folder, removed when the guard goes out
+    /// of scope, also when the test fails.
+    fn ground(name: &str) -> (tempfile::TempDir, Ground) {
+        let root = tempfile::Builder::new()
+            .prefix(&format!("agentsweep-benign-plant-{name}-"))
+            .tempdir()
+            .expect("a temporary folder");
+        let ground = Ground::fresh(root.path()).expect("a fresh machine");
         (root, ground)
     }
 
@@ -394,7 +396,7 @@ mod tests {
 
     #[test]
     fn a_skill_lands_where_its_agent_reads_skills() {
-        let (root, mut ground) = ground("skills");
+        let (_root, mut ground) = ground("skills");
         let files = content(&[("SKILL.md", "---\nname: demo\n---\n")]);
         ground
             .plant(
@@ -410,12 +412,11 @@ mod tests {
             "{}",
             machine.home.display()
         );
-        fs::remove_dir_all(&root).expect("the machine goes away");
     }
 
     #[test]
     fn a_plugin_lands_in_the_install_cache_with_the_registry_entry_that_finds_it() {
-        let (root, mut ground) = ground("plugins");
+        let (_root, mut ground) = ground("plugins");
         let files = content(&[
             (
                 "notes/.claude-plugin/plugin.json",
@@ -447,12 +448,11 @@ mod tests {
             registry["plugins"]["notes@demo-marketplace"][0]["installPath"],
             Value::String(install.display().to_string())
         );
-        fs::remove_dir_all(&root).expect("the machine goes away");
     }
 
     #[test]
     fn a_marketplace_clone_is_registered_with_the_repository_it_came_from() {
-        let (root, mut ground) = ground("marketplace");
+        let (_root, mut ground) = ground("marketplace");
         let files = content(&[(".claude-plugin/marketplace.json", "{\"name\":\"demo\"}")]);
         ground
             .plant(
@@ -470,12 +470,11 @@ mod tests {
         )
         .expect("the registry is JSON");
         assert_eq!(known["demo"]["source"]["repo"], "anthropics/demo");
-        fs::remove_dir_all(&root).expect("the machine goes away");
     }
 
     #[test]
     fn an_instruction_file_becomes_a_project_root_named_the_way_its_agent_names_it() {
-        let (root, mut ground) = ground("instruction");
+        let (_root, mut ground) = ground("instruction");
         ground
             .plant(
                 &source("bun"),
@@ -497,6 +496,5 @@ mod tests {
         assert_eq!(machine.project_roots.len(), 2);
         assert!(machine.project_roots[0].join("CLAUDE.md").is_file());
         assert!(machine.project_roots[1].join("AGENTS.md").is_file());
-        fs::remove_dir_all(&root).expect("the machine goes away");
     }
 }

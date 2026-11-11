@@ -10,6 +10,10 @@
 //! would render is the view the app sends it. Finder is never asked either:
 //! Reveal in Finder hands its path to a Finder that only records it.
 
+#[path = "../../../crates/daemon/tests/support/started.rs"]
+mod started;
+use started::Started;
+
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -87,6 +91,8 @@ struct Sandbox {
     root: PathBuf,
     home: PathBuf,
     socket: PathBuf,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -112,7 +118,12 @@ impl Sandbox {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_file(&socket);
-        Sandbox { root, home, socket }
+        Sandbox {
+            root,
+            home,
+            socket,
+            started: Started::default(),
+        }
     }
 
     fn start(&self) -> Background {
@@ -143,6 +154,7 @@ impl Sandbox {
         .expect("an open daemon");
         let running = service::start_with(&options, daemon).expect("a listening daemon");
         let background = running.serve_in_the_background();
+        self.started.follow(background.daemon());
         wait_for_a_scan(background.daemon());
         background
     }
@@ -154,6 +166,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
     }

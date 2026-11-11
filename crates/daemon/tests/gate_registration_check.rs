@@ -12,6 +12,10 @@
 //! yet recorded as notified (spec section 6.7): a Scan that raises no Finding
 //! notifies nobody, which is how "no notification" is checked here.
 
+#[path = "support/started.rs"]
+mod started;
+use started::Started;
+
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -48,6 +52,8 @@ const CLI: &str = "/Applications/AgentSweep.app/Contents/MacOS/agentsweep";
 struct Sandbox {
     root: PathBuf,
     keys: MemoryKeySource,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -62,6 +68,7 @@ impl Sandbox {
         std::fs::create_dir_all(root.join("home/.codex")).expect("an installed Codex");
         std::fs::create_dir_all(root.join("data")).expect("a data directory");
         Sandbox {
+            started: Started::default(),
             root,
             keys: MemoryKeySource::empty(),
         }
@@ -199,6 +206,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         // A test that took write permission away gives it back, so the
         // sandbox can go.
         for directory in ["home/.claude", "home/.codex"] {
@@ -821,6 +829,7 @@ fn the_daemon_carries_the_line_in_health_until_a_check_passes() {
         },
     )
     .expect("an open daemon");
+    sandbox.started.follow(&daemon);
     // Asks for a Full Scan and waits until one that started after the last
     // has finished.
     let full_scan = || {

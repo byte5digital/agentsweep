@@ -9,6 +9,10 @@
 //! and signed with the development keys, which a test build pins in place of
 //! the release keys a shipped daemon pins.
 
+#[path = "support/started.rs"]
+mod started;
+use started::Started;
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -420,6 +424,8 @@ struct Sandbox {
     socket: PathBuf,
     keys: SharedKey,
     clock: Clock,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -439,6 +445,7 @@ impl Sandbox {
         ));
         let _ = std::fs::remove_file(&socket);
         Sandbox {
+            started: Started::default(),
             home: root.join("home"),
             root,
             socket,
@@ -527,6 +534,7 @@ impl Sandbox {
         .expect("an open daemon");
         let running = service::start_with(&options, daemon).expect("a listening daemon");
         let background = running.serve_in_the_background();
+        self.started.follow(background.daemon());
         wait_for_a_scan(background.daemon());
         background
     }
@@ -542,6 +550,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
     }

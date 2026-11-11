@@ -286,9 +286,11 @@ mod tests {
     /// trusted checkout carries a directory below it.
     #[test]
     fn a_trusted_checkout_carries_a_directory_inside_it() {
-        let root =
-            std::env::temp_dir().join(format!("agentsweep-codex-registry-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-codex-registry-")
+            .tempdir()
+            .expect("a temporary folder");
+        let root = temporary.path().to_path_buf();
         fs::create_dir_all(root.join("checkout/.git")).expect("a fake checkout");
         fs::create_dir_all(root.join("checkout/packages/app")).expect("a fake package");
 
@@ -304,14 +306,15 @@ mod tests {
             registry.trusted(&host, &root.join("checkout/packages/app")),
             Some(true)
         );
-        fs::remove_dir_all(&root).expect("the fake checkout goes away");
     }
 
     #[test]
     fn a_session_log_names_a_root_codex_knows_without_a_trust_entry() {
-        let root =
-            std::env::temp_dir().join(format!("agentsweep-codex-sessions-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-codex-sessions-")
+            .tempdir()
+            .expect("a temporary folder");
+        let root = temporary.path().to_path_buf();
         let sessions = root.join(".codex/sessions/2026/09/22");
         fs::create_dir_all(&sessions).expect("a fake session directory");
         fs::write(
@@ -327,6 +330,5 @@ mod tests {
         assert!(registry.has_sessions(Path::new("/src/seen")));
         assert!(registry.knows(&host, Path::new("/src/seen")));
         assert_eq!(registry.roots(), [PathBuf::from("/src/seen")]);
-        fs::remove_dir_all(&root).expect("the fake session directory goes away");
     }
 }

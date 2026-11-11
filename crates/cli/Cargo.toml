@@ -50,3 +50,5 @@ serde_json = { version = "1.0.151", optional = true }
 # The repository the Folder Scan tests point at is written by this builder,
 # never by a git binary.
 agentsweep-adapter-workspace = { workspace = true, features = ["testing"] }
+# A temporary folder a test makes removes itself, also when the test fails.
+tempfile = "3.27.0"

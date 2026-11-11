@@ -547,12 +547,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_link_resolves_one_level_against_the_directory_it_sits_in() {
-        let root = std::env::temp_dir().join(format!(
-            "agentsweep-host-link-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&root);
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-host-link-")
+            .tempdir()
+            .expect("a temporary folder");
+        let root = temporary.path().to_path_buf();
         let shared = root.join(".agents/skills/notes");
         fs::create_dir_all(&shared).expect("a shared skill directory");
         fs::create_dir_all(root.join(".claude/skills")).expect("a skills directory");
@@ -562,8 +561,6 @@ mod tests {
         let host = Host::new(root.clone(), Vec::new());
         assert_eq!(host.link_target(&link), Some(shared));
         assert_eq!(host.link_target(&root.join(".agents/skills/notes")), None);
-
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

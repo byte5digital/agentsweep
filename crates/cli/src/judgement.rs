@@ -427,12 +427,11 @@ mod tests {
     /// Scans a temporary folder holding the odd file and asks a scripted
     /// engine, through every check, under `cap`.
     fn judged(name: &str, script: Vec<Result<String, EngineError>>, cap: usize) -> (String, u8) {
-        let root = std::env::temp_dir().join(format!(
-            "agentsweep-cli-judgement-{name}-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).expect("a temporary folder");
+        let temporary = tempfile::Builder::new()
+            .prefix(&format!("agentsweep-cli-judgement-{name}-"))
+            .tempdir()
+            .expect("a temporary folder");
+        let root = temporary.path().to_path_buf();
         fs::write(root.join("CLAUDE.md"), ODD).expect("an odd instruction file");
 
         let (scanned, enumeration, mut report) = folder_scan_with_items(&root).expect("a scan");
@@ -449,7 +448,6 @@ mod tests {
         );
         let judgement = judge_the_folder(&enumeration, &mut report, &judge, &mut asker, cap);
         let rendered = render_with(&scanned, &report, &judgement);
-        fs::remove_dir_all(&root).expect("the temporary folder goes away");
         (rendered, exit_code(&report))
     }
 
@@ -515,12 +513,11 @@ mod tests {
             "{lured}"
         );
 
-        let root = std::env::temp_dir().join(format!(
-            "agentsweep-cli-judgement-benign-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).expect("a temporary folder");
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-cli-judgement-benign-")
+            .tempdir()
+            .expect("a temporary folder");
+        let root = temporary.path().to_path_buf();
         fs::write(root.join("CLAUDE.md"), ODD).expect("an odd instruction file");
         let (scanned, enumeration, mut report) = folder_scan_with_items(&root).expect("a scan");
         let judge = Judge::new(
@@ -535,7 +532,6 @@ mod tests {
         ));
         let judgement = judge_the_folder(&enumeration, &mut report, &judge, &mut asker, 25);
         let benign = render_with(&scanned, &report, &judgement);
-        fs::remove_dir_all(&root).expect("the temporary folder goes away");
         assert!(
             benign.contains(&format!("benign, from Claude claude-sonnet-5: {BENIGN}")),
             "{benign}"

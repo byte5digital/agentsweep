@@ -117,10 +117,11 @@ cp -R target/debug/bundle/macos/AgentSweep.app ~/agentsweep-hand-check/
 - [ ] Once the work in hand is finished (about ten seconds when nothing was in hand) the old pid is gone and a new one runs; `~/Library/Logs/AgentSweep/daemon.log` says the bundle was replaced and the daemon exited with status 75.
 - [ ] `agentsweep --version` from the new bundle and the new daemon's first log line show the new version.
 - [ ] Opening the new app does not report "AgentSweep is updating." for more than a moment.
+- [ ] The old app, if it kept running through the swap, says "AgentSweep was updated. Reopen it." in the popover and on the Overview, once, and the daemon log shows no further version refusals from it. **Reopen** quits it and opens the new app, whose popover follows the Health.
 
 A rebuilt daemon has a new code signature, so on this step macOS may ask whether the new `agentsweepd` may read the Keychain item the old one wrote; allow it. A notarized release keeps its designated requirement across versions and asks nothing.
 
-Seams in the suite: `bundle_watch::tests` (the decision on a temporary bundle) and `link::tests::a_version_mismatch_restarts_the_daemon_once`.
+Seams in the suite: `bundle_watch::tests` (the decision on a temporary bundle), `link::tests::a_version_mismatch_restarts_the_daemon_once`, `link::tests::an_older_app_says_to_reopen_once_and_stops_retrying` and `updater::tests::reopen_starts_the_app_anew_from_its_bundle`.
 
 ## 5. A bundle that is gone stops the daemon for good
 

@@ -21,6 +21,10 @@
 //!   `scan_again_trusting_nothing`: the integrity banners' buttons, each the
 //!   daemon's matching request; the window then opens on Activity at the
 //!   break point or at the restart record ([`crate::integrity`]).
+//! - `reopen`: **Reopen** on "AgentSweep was updated. Reopen it.", which an
+//!   app older than its daemon shows: starts a new copy of the app from its
+//!   bundle, which holds the new version, and quits this one
+//!   ([`updater::reopen`]).
 //! - `quit`: quits the app. Protection stays on: the daemon is a launch agent
 //!   of its own and does not go with the app.
 //! - `open_window`: opens the Findings window, which makes the app a regular
@@ -87,7 +91,7 @@
 //!   ([`crate::first_check`]).
 //!
 //! Every command that asks the daemon to do something (the actions, Scan
-//! now, Check now, Start it, Turn on protection, the integrity buttons and
+//! now, Check now, Start it, Turn on protection, Reopen, the integrity buttons and
 //! "I agree, turn it on") takes the `press` the window named it with, and is carried out once
 //! per press however often the webview delivers it ([`crate::presses`]).
 //!
@@ -468,6 +472,25 @@ async fn show_what_changed(app: AppHandle, press: String) -> Result<String, Stri
 #[tauri::command]
 async fn scan_again_trusting_nothing(app: AppHandle, press: String) -> Result<String, String> {
     answer_records(app, Button::ScanAgainTrustingNothing, press).await
+}
+
+/// **Reopen**: starts a new copy of the app from its bundle, which an update
+/// replaced while this copy kept running, and quits this one, once per
+/// press. The bundle holds the new version already, so no update this copy
+/// downloaded may be installed over it at the quit.
+#[tauri::command]
+async fn reopen(app: AppHandle, press: String) -> Result<String, String> {
+    let lines = Arc::clone(&app.state::<Shell>().lines);
+    off_main(move || {
+        lines.once(&press, || {
+            let executable = std::env::current_exe().map_err(|_| updater::COULD_NOT_REOPEN)?;
+            updater::reopen(&executable, open)?;
+            app.state::<Shell>().updates.forget();
+            app.exit(0);
+            Ok(String::new())
+        })
+    })
+    .await
 }
 
 /// Quits the app and nothing else.
@@ -1846,6 +1869,7 @@ pub fn run(start: Start) {
             open_login_items,
             start_daemon,
             turn_on_protection,
+            reopen,
             start_fresh_record,
             look_at_records,
             show_what_changed,

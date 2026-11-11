@@ -219,6 +219,25 @@ pub fn into_popover(mut view: serde_json::Value, line: Option<&'static str>) -> 
     view
 }
 
+/// What **Reopen** says when it cannot start the app anew.
+pub const COULD_NOT_REOPEN: &str = "AgentSweep could not reopen. Quit it and open it again.";
+
+/// **Reopen**, on an app older than its daemon: starts a new copy of the app
+/// from the bundle `executable` runs out of, which an update replaced while
+/// this one kept running, by handing `open` the arguments of macOS's `open`
+/// (`-n` and the bundle, so a new copy starts beside this one). The caller
+/// quits this copy once it answered Ok (spec section 9.5).
+pub fn reopen(
+    executable: &std::path::Path,
+    open: impl FnOnce(&[std::ffi::OsString]) -> bool,
+) -> Result<(), String> {
+    let bundle = crate::uninstall::bundle_of(executable).ok_or(COULD_NOT_REOPEN)?;
+    match open(&["-n".into(), bundle.into_os_string()]) {
+        true => Ok(()),
+        false => Err(COULD_NOT_REOPEN.to_string()),
+    }
+}
+
 /// An update the plugin downloaded and verified.
 pub struct Ready {
     update: tauri_plugin_updater::Update,
@@ -313,6 +332,51 @@ mod tests {
     use super::*;
 
     use std::cell::{Cell, RefCell};
+
+    /// **Reopen** starts a new copy of the app from the bundle this one runs
+    /// out of, which an update has replaced: `open -n` on the bundle, so
+    /// macOS starts the new version beside this process rather than bring
+    /// this one to the front.
+    #[test]
+    fn reopen_starts_the_app_anew_from_its_bundle() {
+        let asked = RefCell::new(Vec::new());
+        let answer = reopen(
+            std::path::Path::new("/Applications/AgentSweep.app/Contents/MacOS/agentsweep-menubar"),
+            |arguments: &[std::ffi::OsString]| {
+                asked.borrow_mut().push(arguments.to_vec());
+                true
+            },
+        );
+        assert_eq!(answer, Ok(()));
+        assert_eq!(
+            asked.into_inner(),
+            vec![vec![
+                std::ffi::OsString::from("-n"),
+                std::ffi::OsString::from("/Applications/AgentSweep.app"),
+            ]]
+        );
+    }
+
+    /// Outside a bundle there is nothing to reopen from, and an `open` that
+    /// fails is said; either way the app keeps running.
+    #[test]
+    fn reopen_says_when_it_cannot_start_the_app() {
+        let asked = Cell::new(0);
+        let answer = reopen(
+            std::path::Path::new("/tmp/target/debug/agentsweep-menubar"),
+            |_: &[std::ffi::OsString]| {
+                asked.set(asked.get() + 1);
+                true
+            },
+        );
+        assert_eq!(answer, Err(COULD_NOT_REOPEN.to_string()));
+        assert_eq!(asked.get(), 0);
+        let answer = reopen(
+            std::path::Path::new("/Applications/AgentSweep.app/Contents/MacOS/agentsweep-menubar"),
+            |_: &[std::ffi::OsString]| false,
+        );
+        assert_eq!(answer, Err(COULD_NOT_REOPEN.to_string()));
+    }
 
     /// The copy in memory.
     #[derive(Default)]

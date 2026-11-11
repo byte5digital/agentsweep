@@ -20,6 +20,11 @@
 //!   stands only while its rung holds the headline: an open Threat outranks
 //!   it, and it is a note meanwhile (the owner's decision of 2026-10-14).
 //!
+//! One more banner stands outside the Health: an app older than its daemon,
+//! whose bundle an update replaced while it kept running, says "AgentSweep
+//! was updated. Reopen it." with **Reopen** (spec section 9.5); the link
+//! chooses it from the handshake ([`crate::link`]).
+//!
 //! The Developer Posture adds one line to two of them: the LaunchAgent label
 //! to "Not watching right now", and that a reset cannot rule out tampering
 //! to the key missing banner (ADR 0003). The Protection off banner carries
@@ -64,6 +69,14 @@ pub enum Banner {
     ChainBroken,
     /// The key the records are checked with is missing.
     KeyMissing,
+    /// The app is older than the daemon: its bundle was updated while it
+    /// kept running, so it asks to be reopened.
+    Reopen {
+        /// The app's version.
+        app: String,
+        /// The daemon's version.
+        daemon: String,
+    },
 }
 
 /// The colour a banner is shown in.
@@ -103,6 +116,9 @@ pub enum Button {
     ShowWhatChanged,
     /// "Scan again, trusting nothing": the acknowledge-chain-broken request.
     ScanAgainTrustingNothing,
+    /// "Reopen": starts the app anew from its updated bundle and quits this
+    /// one.
+    Reopen,
 }
 
 impl Button {
@@ -116,6 +132,7 @@ impl Button {
             Button::LookAtRecords => "Look at the records",
             Button::ShowWhatChanged => "Show what changed",
             Button::ScanAgainTrustingNothing => "Scan again, trusting nothing",
+            Button::Reopen => "Reopen",
         }
     }
 
@@ -129,6 +146,7 @@ impl Button {
             Button::LookAtRecords => "look_at_records",
             Button::ShowWhatChanged => "show_what_changed",
             Button::ScanAgainTrustingNothing => "scan_again_trusting_nothing",
+            Button::Reopen => "reopen",
         }
     }
 
@@ -136,6 +154,7 @@ impl Button {
     pub fn working(self) -> &'static str {
         match self {
             Button::StartIt | Button::TurnOnProtection => STARTING,
+            Button::Reopen => REOPENING,
             _ => crate::findings::WORKING,
         }
     }
@@ -201,6 +220,12 @@ pub const NOT_WATCHING: &str = "Not watching right now";
 /// Protection off from a click on **Turn on protection**, until the daemon
 /// answers.
 pub const STARTING: &str = "Starting AgentSweep…";
+
+/// The title of the banner of an app older than its daemon.
+pub const REOPEN: &str = "AgentSweep was updated. Reopen it.";
+
+/// What that banner says from a click on **Reopen** until the app quits.
+pub const REOPENING: &str = "Reopening…";
 
 /// The title of the key missing banner.
 pub const KEY_MISSING: &str = "AgentSweep cannot check its own records.";
@@ -311,6 +336,13 @@ impl Banner {
                        and nothing is stopped automatically until you answer.",
                 developer: None,
                 buttons: vec![Button::ShowWhatChanged, Button::ScanAgainTrustingNothing],
+            },
+            Banner::Reopen { app, daemon } => Shown {
+                tone: Tone::Amber,
+                title: REOPEN,
+                body: "",
+                developer: only(format!("App {app}, daemon {daemon}.")),
+                buttons: vec![Button::Reopen],
             },
         }
     }
@@ -535,6 +567,36 @@ mod tests {
         }
     }
 
+    /// An app older than its daemon says that AgentSweep was updated, in the
+    /// popover and the window alike, with **Reopen**; the Developer Posture
+    /// adds the two versions.
+    #[test]
+    fn an_older_app_says_to_reopen() {
+        let banner = Banner::Reopen {
+            app: "0.1.0".to_string(),
+            daemon: "0.2.0".to_string(),
+        };
+        for posture in [Posture::Simple, Posture::Developer] {
+            let shown = banner.shown(posture);
+            assert_eq!(shown.title, "AgentSweep was updated. Reopen it.");
+            assert_eq!(shown.body, "");
+            assert_eq!(shown.tone, Tone::Amber);
+            assert_eq!(shown.buttons, vec![Button::Reopen]);
+            assert_eq!(banner.in_popover(posture), shown);
+        }
+        assert_eq!(banner.shown(Posture::Simple).developer, None);
+        assert_eq!(
+            banner.shown(Posture::Developer).developer.as_deref(),
+            Some("App 0.1.0, daemon 0.2.0.")
+        );
+        let value = banner.shown(Posture::Simple).to_value();
+        assert_eq!(value["buttons"][0]["label"], "Reopen");
+        assert_eq!(value["buttons"][0]["command"], "reopen");
+        assert_eq!(value["buttons"][0]["working"], REOPENING);
+        assert!(!Button::Reopen.opens_activity());
+        assert!(!banner.is_integrity());
+    }
+
     #[test]
     fn no_banner_carries_an_em_dash() {
         for banner in [
@@ -549,6 +611,10 @@ mod tests {
             Banner::NotWatching,
             Banner::KeyMissing,
             Banner::ChainBroken,
+            Banner::Reopen {
+                app: "0.1.0".to_string(),
+                daemon: "0.2.0".to_string(),
+            },
         ] {
             for posture in [Posture::Simple, Posture::Developer] {
                 for shown in [banner.shown(posture), banner.in_popover(posture)] {

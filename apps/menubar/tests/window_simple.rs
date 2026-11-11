@@ -165,10 +165,16 @@ fn the_overview_has_four_tiles_that_open_their_lists() {
 
     let script = ui("window.js");
     let tiles = function(&script, "renderTiles");
-    assert!(!tiles.contains("replaceChildren"), "filled in place: {tiles}");
+    assert!(
+        !tiles.contains("replaceChildren"),
+        "filled in place: {tiles}"
+    );
     assert!(tiles.contains("tile.label") && tiles.contains("tile.count"));
     assert!(tiles.contains("$(\"tile-check-now\").disabled = !permission.enabled;"));
-    assert!(script.contains("select(name);"), "a Finding tile opens its pane");
+    assert!(
+        script.contains("select(name);"),
+        "a Finding tile opens its pane"
+    );
     assert!(script.contains("tilesOpen.add(name);"));
     assert!(
         script.contains("$(\"tile-check-now\").addEventListener(\"click\", () => checkNow("),

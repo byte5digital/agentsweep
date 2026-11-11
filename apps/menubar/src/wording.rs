@@ -12,6 +12,15 @@
 //! key, a hook's event), never the locator itself. Sensitive values never
 //! reach this module in the first place; the daemon redacts them.
 //!
+//! The Simple window reads a Finding in the three parts of layout B
+//! ([`Parts`]): a title that names the thing beside the Severity chip, then
+//! **What it is**, **Why it matters** (the `why` of the Rule or of the
+//! strongest Heuristic, else the Finding's own sentence) and **What to do**,
+//! one short sentence each, with the further signs and short notes folded
+//! under **More** and the AI explanation folded apart. The verdict title and
+//! the body lines stay for the list beside the detail, the Developer Posture
+//! and the notifications.
+//!
 //! The technical table that **Show technical details** opens is here too,
 //! because it is the same table for both Postures: the Simple Posture opens it
 //! for one Finding, the Developer Posture shows it always.
@@ -27,8 +36,10 @@ use agentsweep_core::settings::Posture;
 use agentsweep_core::state::RecordedFinding;
 use serde_json::{Value, json};
 
-use crate::findings::probation;
-use crate::verdict::{Verdict, ai_block};
+use agentsweep_ipc::protocol::{Offer, offers};
+
+use crate::findings::{neutralised_in_place, probation};
+use crate::verdict::{Verdict, ai_block, explained};
 
 /// The colour of the Severity chip: red for a Threat, amber for an Exposure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,6 +131,69 @@ pub struct Wording {
     /// What the setting the Finding is about does, in plain words, which
     /// names a setting in place of its key. Empty for any other kind.
     pub setting: String,
+    /// The Finding in the three parts of layout B (spec section 8.4).
+    pub parts: Parts,
+}
+
+/// One Finding in the three parts of the Simple Posture's layout B (spec
+/// section 8.4): a title that names the thing, **What it is**, **Why it
+/// matters** and **What to do**, with the further signs and notes folded
+/// under **More** and the AI explanation folded apart.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Parts {
+    /// The thing, named: "The skill 'pdf-tidy'", "A Claude Code setting".
+    pub name: String,
+    /// Its kind, where it is and whether the Agent would use it.
+    pub what: String,
+    /// Why it matters, in one short sentence.
+    pub why: String,
+    /// What to do, in one short sentence; the buttons stand under it. Empty
+    /// where nothing can be done, as on a Folder Scan.
+    pub todo: String,
+    /// What folds under **More**: the further signs, the note on why nothing
+    /// happened by itself, the project note and the Drift context line.
+    pub more: Vec<Line>,
+    /// What folds under **AI explanation**, on a malicious Verdict only.
+    pub ai: Option<Explanation>,
+}
+
+/// The AI explanation of a malicious Verdict, as it folds.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Explanation {
+    /// "From Apple on-device".
+    pub from: String,
+    /// The engine's contained reason, plain text.
+    pub text: String,
+}
+
+impl Parts {
+    /// Every string the three parts show.
+    pub fn strings(&self) -> Vec<&str> {
+        let mut strings = vec![
+            self.name.as_str(),
+            self.what.as_str(),
+            self.why.as_str(),
+            self.todo.as_str(),
+        ];
+        strings.extend(self.more.iter().map(|line| line.text.as_str()));
+        if let Some(ai) = &self.ai {
+            strings.extend([ai.from.as_str(), ai.text.as_str()]);
+        }
+        strings.retain(|text| !text.is_empty());
+        strings
+    }
+
+    /// The value the window receives.
+    pub fn to_value(&self) -> Value {
+        json!({
+            "name": self.name,
+            "what": self.what,
+            "why": self.why,
+            "todo": self.todo,
+            "more": lines_value(&self.more),
+            "ai": self.ai.as_ref().map(|ai| json!({ "from": ai.from, "text": ai.text })),
+        })
+    }
 }
 
 impl Wording {
@@ -134,6 +208,7 @@ impl Wording {
                 .into_iter()
                 .filter(|text| !text.is_empty()),
         );
+        strings.extend(self.parts.strings());
         strings
     }
 
@@ -148,6 +223,7 @@ impl Wording {
             "admin": self.admin_message.is_some(),
             "why": self.why,
             "setting": self.setting,
+            "parts": self.parts.to_value(),
         })
     }
 }
@@ -182,6 +258,49 @@ pub const WHY_MANAGED: &str = "This is controlled by whoever administers this Ma
 pub const WHY_EXPOSURE: &str =
     "This is your own setup, not an attack, so AgentSweep never moves it.";
 
+/// The short notes the Simple Posture folds under **More** (layout B of spec
+/// section 8.4), in place of the long ones the Developer Posture keeps: on a
+/// Probation Rule Finding.
+pub const SHORT_PROBATION: &str = "This check is new, so AgentSweep asks first.";
+/// On a T2 or T3 Finding.
+pub const SHORT_UNSURE: &str = "AgentSweep is not certain, so it asks you.";
+/// On a project's git settings.
+pub const SHORT_NEVER_AUTO_GIT: &str = "AgentSweep never changes git settings by itself.";
+/// On a project's env file.
+pub const SHORT_NEVER_AUTO_ENV: &str = "AgentSweep never changes env files by itself.";
+/// On an Item that keeps coming back.
+pub const SHORT_KEEPS_COMING_BACK: &str =
+    "AgentSweep removed it three times in the last hour. Something put it back each time.";
+/// On a Managed Item.
+pub const SHORT_MANAGED: &str = "AgentSweep can see it but cannot change it.";
+/// On an Exposure.
+pub const SHORT_EXPOSURE: &str = "AgentSweep never moves your own setup.";
+/// On a Project Scope Item.
+pub const SHORT_PROJECT: &str = "Git will show the change. Restore undoes it.";
+
+/// What to do on a Threat a Rule is certain of.
+pub const TODO_QUARANTINE: &str = "Quarantine it. You can restore it later.";
+/// What to do on a T2 or T3 Threat, which carries the doubt.
+pub const TODO_UNSURE: &str = "Quarantine it unless you know it.";
+/// What to do on a Drift question.
+pub const TODO_DRIFT: &str = "Keep it if it was you. If not, remove it.";
+/// What to do on a never-auto kind.
+pub const TODO_SWITCH_LINE: &str = "Switch the line off. You can switch it back on.";
+/// What to do where the Quarantine is the Agent's own switch.
+pub const TODO_SWITCH: &str = "Switch it off. You can switch it back on.";
+/// What to do on a Managed Item.
+pub const TODO_MANAGED: &str = "Ask whoever manages this Mac about it.";
+/// What to do on an Exposure without a one-click fix.
+pub const TODO_EXPOSURE: &str = "Fix it, or keep it if you meant it.";
+/// What to do on an Item in quarantine.
+pub const TODO_STOPPED: &str = "Nothing to do. Restore it only if you trust it.";
+/// What to do on a line or an Item switched off.
+pub const TODO_STOPPED_SWITCH: &str = "Switch it back on only if you trust it.";
+/// What to do on an Item in quarantine with a clean newer version.
+pub const TODO_RE_ENABLE: &str = "A clean newer version is out. Re-enable it.";
+/// What to do on a Finding that offers nothing.
+pub const TODO_NOTHING: &str = "Nothing to do. AgentSweep checks it again next time.";
+
 /// The Severity as the Simple Posture says it.
 pub fn severity_word(severity: Severity) -> &'static str {
     match severity {
@@ -215,6 +334,7 @@ pub fn simple(finding: &RecordedFinding) -> Wording {
             Kind::SettingsEntry => finding.facts.setting_plain.clone(),
             _ => String::new(),
         },
+        parts: parts(finding, &named),
     }
 }
 
@@ -564,6 +684,238 @@ pub(crate) fn capitalised(text: &str) -> String {
     }
 }
 
+/// The Finding in the three parts of layout B (spec section 8.4).
+fn parts(finding: &RecordedFinding, named: &Named) -> Parts {
+    let why = why_it_matters(finding);
+    let mut more = folded(finding, named);
+    // A sign that already says why it matters is not said twice.
+    more.retain(|line| line.part != Part::Heuristic || line.text != why);
+    Parts {
+        name: name_title(named),
+        what: what_it_is(finding, named),
+        todo: what_to_do(finding, named),
+        why,
+        more,
+        ai: Verdict::of(finding)
+            .and_then(|verdict| explained(&verdict))
+            .map(|(engine, text)| Explanation {
+                from: format!("From {engine}"),
+                text,
+            }),
+    }
+}
+
+/// The title that names the thing: the Item as a sentence names it, and a
+/// setting by its Agent or its project, never by its key.
+fn name_title(named: &Named) -> String {
+    if named.kind != Kind::SettingsEntry {
+        return named.item_first();
+    }
+    match (named.project && !named.project_name.is_empty(), named.agent) {
+        (true, _) => format!("A setting in {}", named.project_name),
+        (false, Some(agent)) => format!("A {agent} setting"),
+        (false, None) => "A setting".to_string(),
+    }
+}
+
+/// A kind as **What it is** says it, with its article.
+fn thing(kind: Kind) -> (&'static str, &'static str) {
+    match kind {
+        Kind::InstructionFile => ("a", "file of instructions"),
+        Kind::Skill => ("a", "skill"),
+        Kind::Plugin => ("a", "plugin"),
+        Kind::Marketplace => ("a", "plugin source"),
+        Kind::McpServer => ("a", "helper program"),
+        Kind::Hook => ("an", "automatic command"),
+        Kind::SettingsEntry => ("a", "setting"),
+        Kind::ExecPolicy => ("a", "list of command rules"),
+        Kind::Subagent => ("a", "helper agent"),
+        Kind::Workflow => ("a", "workflow"),
+        Kind::RepositoryMetadata => ("the", "git settings"),
+        Kind::EnvFile => ("an", "env file"),
+        Kind::Generic => ("a", "file"),
+    }
+}
+
+/// **What it is**: the kind and where it is, for a setting what it does,
+/// then whether the Agent would use it. An Exposure says it is the user's
+/// own instead, a Drift question what changed, a Managed Item who controls
+/// it.
+fn what_it_is(finding: &RecordedFinding, named: &Named) -> String {
+    let exposure = finding.category == Category::Exposure;
+    let managed = managed(finding);
+    let (article, noun) = thing(named.kind);
+    let setting = match named.kind {
+        Kind::SettingsEntry => finding.facts.setting_plain.as_str(),
+        _ => "",
+    };
+    let place = if !named.plugin.is_empty() {
+        format!(" from the plugin '{}'", named.plugin)
+    } else if named.project && !named.project_name.is_empty() {
+        match named.kind {
+            Kind::RepositoryMetadata => format!(" of the project {}", named.project_name),
+            _ => format!(" in the project {}", named.project_name),
+        }
+    } else if managed || !setting.is_empty() {
+        String::new()
+    } else {
+        named
+            .agent
+            .map(|agent| format!(" in {agent}"))
+            .unwrap_or_default()
+    };
+    let that = match setting {
+        "" => String::new(),
+        plain => format!(" that {plain}"),
+    };
+    let opener = match exposure {
+        true => format!("your own {noun}"),
+        false => format!("{article} {noun}"),
+    };
+    let first = capitalised(&format!("{opener}{place}{that}."));
+    let second = if finding.source == "drift" {
+        drift_line(&finding.drift)
+    } else if exposure {
+        Some("Not an attack.".to_string())
+    } else if managed {
+        Some("Whoever manages this Mac controls it.".to_string())
+    } else {
+        uses(finding, named)
+    };
+    match second {
+        Some(second) => format!("{first} {second}"),
+        None => first,
+    }
+}
+
+/// Whether the Agent would use the Item, in one short sentence: in
+/// quarantine, active, or planted in a project the Agent does not trust
+/// yet. Any other Activation says nothing.
+fn uses(finding: &RecordedFinding, named: &Named) -> Option<String> {
+    let it = match named.kind {
+        Kind::RepositoryMetadata => "them",
+        _ => "it",
+    };
+    let agent = named.agent_or("your agent");
+    if finding.state == FindingState::Stopped {
+        let how = match (neutralised_in_place(named.kind), finding.switched) {
+            (true, _) => "The line is switched off",
+            (false, true) => "It is switched off",
+            (false, false) => "It is in quarantine",
+        };
+        return Some(format!("{how}, so {agent} cannot use {it}."));
+    }
+    match (
+        finding.facts.activation.as_str(),
+        finding.facts.inactive_reason.as_str(),
+    ) {
+        ("active", _) => Some(match named.project {
+            true => format!(
+                "{} uses {it} when you open that project.",
+                capitalised(agent)
+            ),
+            false => format!("{} uses {it} each time it starts.", capitalised(agent)),
+        }),
+        ("inactive", "untrusted_project") => Some(format!(
+            "It does nothing until {agent} trusts that project."
+        )),
+        _ => None,
+    }
+}
+
+/// **Why it matters**: the `why` of the Rule or of the strongest Heuristic;
+/// where the Rule Pack gives none, as on a Folder Scan, the Finding's own
+/// sentence, or else its first Heuristic's.
+fn why_it_matters(finding: &RecordedFinding) -> String {
+    [finding.facts.why.as_str(), finding.plain.as_str()]
+        .into_iter()
+        .chain(finding.facts.heuristics.iter().map(|h| h.plain.as_str()))
+        .map(str::trim)
+        .find(|text| !text.is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// **What to do**, one short sentence per case.
+fn what_to_do(finding: &RecordedFinding, named: &Named) -> String {
+    let offered = offers(finding);
+    let switch = neutralised_in_place(named.kind) || finding.switched;
+    let todo = match finding.state {
+        FindingState::Stopped if offered.contains(&Offer::ReEnable) => TODO_RE_ENABLE,
+        FindingState::Stopped if switch => TODO_STOPPED_SWITCH,
+        FindingState::Stopped => TODO_STOPPED,
+        FindingState::Trusted => "Nothing to do. You trusted this version.",
+        FindingState::Acknowledged | FindingState::Gone => "Nothing to do.",
+        FindingState::Open if offered.is_empty() => TODO_NOTHING,
+        FindingState::Open if finding.source == "keeps coming back" => {
+            return format!(
+                "Close all {} windows, then quarantine it again.",
+                named.agent_or("agent")
+            );
+        }
+        FindingState::Open if managed(finding) => TODO_MANAGED,
+        FindingState::Open if finding.source == "drift" => TODO_DRIFT,
+        FindingState::Open if finding.category == Category::Exposure => {
+            if offered.contains(&Offer::Fix) {
+                return format!(
+                    "Take it out. {} will ask again.",
+                    capitalised(named.agent_or("your agent"))
+                );
+            }
+            TODO_EXPOSURE
+        }
+        FindingState::Open if neutralised_in_place(named.kind) => TODO_SWITCH_LINE,
+        FindingState::Open if finding.switched => TODO_SWITCH,
+        FindingState::Open if rated(finding) => TODO_UNSURE,
+        FindingState::Open => TODO_QUARANTINE,
+    };
+    todo.to_string()
+}
+
+/// True for a Finding a Score or a Verdict raised, T2 or T3.
+fn rated(finding: &RecordedFinding) -> bool {
+    finding.source.starts_with("score") || finding.tier == Tier::AiJudgement
+}
+
+/// What folds under **More**: the further signs (the fired Heuristics of a
+/// rated Finding, the "Also noticed" line under a Probation Rule), the short
+/// note on why nothing happened by itself, the project note, and the Drift
+/// context line of a Finding that carries Drift as context; a Drift
+/// question says what changed in **What it is**.
+fn folded(finding: &RecordedFinding, named: &Named) -> Vec<Line> {
+    let mut lines: Vec<Line> = body(finding, named, Posture::Simple)
+        .into_iter()
+        .filter(|line| matches!(line.part, Part::Heuristic | Part::AlsoNoticed))
+        .collect();
+    let note = match finding.facts.why_nothing_happened {
+        _ if !finding.is_open() => None,
+        None => None,
+        Some(WhyNothingHappened::Probation) => Some(SHORT_PROBATION),
+        Some(WhyNothingHappened::HeuristicOrAi) => Some(SHORT_UNSURE),
+        Some(WhyNothingHappened::NeverAuto) => Some(match named.kind {
+            Kind::EnvFile => SHORT_NEVER_AUTO_ENV,
+            _ => SHORT_NEVER_AUTO_GIT,
+        }),
+        Some(WhyNothingHappened::KeepsComingBack) => Some(SHORT_KEEPS_COMING_BACK),
+        Some(WhyNothingHappened::Managed) => Some(SHORT_MANAGED),
+        Some(WhyNothingHappened::Exposure) => Some(SHORT_EXPOSURE),
+    };
+    let line = |part: Part, text: &str| Line {
+        part,
+        text: text.to_string(),
+    };
+    lines.extend(note.map(|text| line(Part::WhyNothingHappened, text)));
+    if named.project {
+        lines.push(line(Part::Project, SHORT_PROJECT));
+    }
+    if finding.source != "drift"
+        && let Some(text) = drift_line(&finding.drift)
+    {
+        lines.push(line(Part::Drift, &text));
+    }
+    lines
+}
+
 /// The technical table of one Finding: what **Show technical details** opens
 /// in the Simple Posture and what the Developer Posture shows always. Ids,
 /// paths, hashes, Scores and the redacted excerpts belong here and only here.
@@ -747,6 +1099,306 @@ mod tests {
         skill.facts.setting_plain = "not a setting".to_string();
         assert_eq!(simple(&skill).setting, "");
         assert_eq!(simple(&skill).why, "", "the Rule Pack gives the why");
+    }
+
+    const PDF_TIDY: &str =
+        "claude-code/project:/Users/me/code/invoice-app/skill/.claude/skills/pdf-tidy";
+    const ALLOW: &str =
+        "claude-code/user/settings-entry/~/.claude/settings.json#/permissions/allow/0";
+    const HOOKS_OFF: &str = "claude-code/project:/Users/me/code/invoice-app/settings-entry/.claude/settings.json#/disableAllHooks";
+
+    /// A Finding in the project invoice-app.
+    fn in_invoice_app(item: &str, kind: Kind, source: &str, category: Category) -> RecordedFinding {
+        let mut case = finding(item, kind, source, category);
+        case.facts.project_root = "/Users/me/code/invoice-app".to_string();
+        case
+    }
+
+    fn more(parts: &Parts) -> Vec<(Part, &str)> {
+        parts
+            .more
+            .iter()
+            .map(|line| (line.part, line.text.as_str()))
+            .collect()
+    }
+
+    /// Mock-up B, the Threat: a Probation Rule on a skill a project brought.
+    /// The title names the thing, the three parts say what it is, why it
+    /// matters and what to do, and the rest folds under More.
+    #[test]
+    fn a_threat_reads_in_three_parts() {
+        let mut tidy = in_invoice_app(PDF_TIDY, Kind::Skill, "rule 0001", Category::Threat);
+        tidy.severity = Severity::Critical;
+        tidy.facts.why = "It downloads hidden code and runs it on your Mac.".to_string();
+        tidy.facts.why_nothing_happened = Some(WhyNothingHappened::Probation);
+        tidy.facts.heuristics = vec![heuristic(534, "This file carries encoded text.", "")];
+        let wording = simple(&tidy);
+        let parts = &wording.parts;
+        assert_eq!(parts.name, "The skill 'pdf-tidy'");
+        assert_eq!(wording.severity, "Dangerous");
+        assert_eq!(
+            parts.what,
+            "A skill in the project invoice-app. Claude Code uses it when you open that project."
+        );
+        assert_eq!(
+            parts.why,
+            "It downloads hidden code and runs it on your Mac."
+        );
+        assert_eq!(parts.todo, "Quarantine it. You can restore it later.");
+        assert_eq!(
+            more(parts),
+            vec![
+                (
+                    Part::AlsoNoticed,
+                    "Also noticed: This file carries encoded text."
+                ),
+                (Part::WhyNothingHappened, SHORT_PROBATION),
+                (Part::Project, SHORT_PROJECT),
+            ]
+        );
+        assert_eq!(parts.ai, None);
+        let value = wording.to_value();
+        assert_eq!(value["parts"]["name"], "The skill 'pdf-tidy'");
+        assert_eq!(value["parts"]["todo"], parts.todo.as_str());
+        assert_eq!(value["parts"]["more"][1]["part"], "why");
+        assert!(value["parts"]["ai"].is_null());
+    }
+
+    /// Mock-up B, the Exposure: the user's own setting, named by what it
+    /// does, with the one-click fix.
+    #[test]
+    fn an_exposure_reads_in_three_parts_with_its_setting_named_by_what_it_does() {
+        let mut allow = finding(ALLOW, Kind::SettingsEntry, "rule 0018", Category::Exposure);
+        allow.severity = Severity::Medium;
+        allow.facts.why =
+            "Claude Code can run any command on your Mac without asking you.".to_string();
+        allow.facts.setting_plain = "lets Claude Code run commands without asking".to_string();
+        allow.facts.why_nothing_happened = Some(WhyNothingHappened::Exposure);
+        let wording = simple(&allow);
+        let parts = &wording.parts;
+        assert_eq!(parts.name, "A Claude Code setting");
+        assert_eq!(wording.severity, "Worth fixing");
+        assert_eq!(
+            parts.what,
+            "Your own setting that lets Claude Code run commands without asking. Not an attack."
+        );
+        assert_eq!(
+            parts.why,
+            "Claude Code can run any command on your Mac without asking you."
+        );
+        assert_eq!(parts.todo, "Take it out. Claude Code will ask again.");
+        assert_eq!(
+            more(parts),
+            vec![(Part::WhyNothingHappened, SHORT_EXPOSURE)]
+        );
+        for text in parts.strings() {
+            assert!(
+                !text.contains("permissions"),
+                "the key stays technical: {text}"
+            );
+        }
+
+        // An Exposure with no one-click fix points at the how-to.
+        let mut secret = finding(GITHUB, Kind::McpServer, "rule 0010", Category::Exposure);
+        secret.facts.why = "Anyone who reads the file has your password.".to_string();
+        let parts = simple(&secret).parts;
+        assert_eq!(parts.name, "The MCP server 'github'");
+        assert_eq!(
+            parts.what,
+            "Your own helper program in Claude Code. Not an attack."
+        );
+        assert_eq!(parts.todo, "Fix it, or keep it if you meant it.");
+    }
+
+    /// Mock-up B, the score Finding: a setting a project brought, several
+    /// Heuristics behind it; why it matters is the strongest one's, the
+    /// signs fold under More, and what to do carries the doubt.
+    #[test]
+    fn a_score_finding_reads_in_three_parts_and_folds_its_signs() {
+        let mut off = in_invoice_app(HOOKS_OFF, Kind::SettingsEntry, "score 6", Category::Threat);
+        off.facts.why = "It can switch off your checks, AgentSweep's included.".to_string();
+        off.facts.setting_plain = "can switch off your checks".to_string();
+        off.facts.why_nothing_happened = Some(WhyNothingHappened::HeuristicOrAi);
+        off.facts.heuristics = vec![
+            heuristic(551, "It decides whether your checks may run.", ""),
+            heuristic(560, "It came with the project, not from you.", ""),
+        ];
+        let parts = simple(&off).parts;
+        assert_eq!(parts.name, "A setting in invoice-app");
+        assert_eq!(
+            parts.what,
+            "A setting in the project invoice-app that can switch off your checks. Claude Code \
+             uses it when you open that project."
+        );
+        assert_eq!(
+            parts.why,
+            "It can switch off your checks, AgentSweep's included."
+        );
+        assert_eq!(parts.todo, "Quarantine it unless you know it.");
+        assert_eq!(
+            more(&parts),
+            vec![
+                (Part::Heuristic, "It decides whether your checks may run."),
+                (Part::Heuristic, "It came with the project, not from you."),
+                (Part::WhyNothingHappened, SHORT_UNSURE),
+                (Part::Project, SHORT_PROJECT),
+            ]
+        );
+    }
+
+    /// Mock-up B, the AI Finding: the AI explanation folds under its own
+    /// name, the engine named, never under More.
+    #[test]
+    fn an_ai_finding_folds_its_explanation_apart() {
+        let mut judged = finding(NOTES_SYNC, Kind::McpServer, "score 3", Category::Threat);
+        judged.tier = Tier::AiJudgement;
+        judged.facts.why = "It may send your notes to a stranger's server.".to_string();
+        judged.facts.judgement_engine = "apple".to_string();
+        judged.facts.judgement_model = "base".to_string();
+        judged.facts.judgement_reason = "The server sends each note to a bare address.".to_string();
+        judged.facts.heuristics = vec![heuristic(540, "It talks to a server with no name.", "")];
+        let wording = simple(&judged);
+        let parts = &wording.parts;
+        assert_eq!(parts.name, "The MCP server 'notes-sync'");
+        assert_eq!(
+            parts.what,
+            "A helper program in Codex. Codex uses it each time it starts."
+        );
+        assert_eq!(parts.why, "It may send your notes to a stranger's server.");
+        assert_eq!(parts.todo, "Quarantine it unless you know it.");
+        assert_eq!(
+            parts.ai,
+            Some(Explanation {
+                from: "From Apple on-device".to_string(),
+                text: "The server sends each note to a bare address.".to_string(),
+            })
+        );
+        assert!(more(parts).iter().all(|(part, _)| *part != Part::Ai));
+        assert_eq!(
+            wording.to_value()["parts"]["ai"]["from"],
+            "From Apple on-device"
+        );
+        judged.facts.judgement_reason = String::new();
+        assert_eq!(simple(&judged).parts.ai, None, "no reason, no fold");
+    }
+
+    /// The What to do sentence of every case, one short sentence each.
+    #[test]
+    fn each_case_has_its_what_to_do() {
+        let todo = |finding: &RecordedFinding| simple(finding).parts.todo;
+
+        let mut moved = drift(MCP_X, Kind::McpServer, "changed");
+        moved.drift = "changed since your last Scan on 2026-10-01".to_string();
+        assert_eq!(todo(&moved), TODO_DRIFT);
+        assert_eq!(
+            simple(&moved).parts.what,
+            "A helper program in Claude Code. Changed since your last Scan on 2026-10-01."
+        );
+        assert!(
+            more(&simple(&moved).parts).is_empty(),
+            "the change stands in What it is"
+        );
+
+        for (item, kind) in [(GIT, Kind::RepositoryMetadata), (ENV, Kind::EnvFile)] {
+            assert_eq!(
+                todo(&finding(item, kind, "rule 0009", Category::Threat)),
+                TODO_SWITCH_LINE
+            );
+        }
+        let mut switched = finding(PDF_HELPER, Kind::Skill, "rule 0001", Category::Threat);
+        switched.switched = true;
+        assert_eq!(todo(&switched), TODO_SWITCH);
+
+        let mut managed = managed();
+        managed.facts.setting_plain = "sends Claude Code's traffic to another server".to_string();
+        assert_eq!(todo(&managed), TODO_MANAGED);
+        assert_eq!(
+            simple(&managed).parts.what,
+            "A setting that sends Claude Code's traffic to another server. Whoever manages this \
+             Mac controls it."
+        );
+
+        let back = finding(HOOK, Kind::Hook, "keeps coming back", Category::Threat);
+        assert_eq!(
+            todo(&back),
+            "Close all Claude Code windows, then quarantine it again."
+        );
+
+        let mut stopped = finding(PDF_HELPER, Kind::Skill, "rule 0001", Category::Threat);
+        stopped.state = FindingState::Stopped;
+        assert_eq!(todo(&stopped), TODO_STOPPED);
+        assert_eq!(
+            simple(&stopped).parts.what,
+            "A skill in Claude Code. It is in quarantine, so Claude Code cannot use it."
+        );
+        assert_eq!(simple(&stopped).parts.name, "The skill 'pdf-helper'");
+        stopped.fixed_version = "1.2.1".to_string();
+        assert_eq!(todo(&stopped), TODO_RE_ENABLE);
+
+        let problem = finding(
+            PDF_HELPER,
+            Kind::Skill,
+            "problem unreadable",
+            Category::Exposure,
+        );
+        let mut problem = problem;
+        problem.content_hash = String::new();
+        assert_eq!(todo(&problem), TODO_NOTHING);
+    }
+
+    /// Where the Rule Pack gives no why, as on a Folder Scan's Finding, Why
+    /// it matters is the Finding's own sentence.
+    #[test]
+    fn why_it_matters_falls_back_to_the_plain_sentence() {
+        let mut planted = finding(PDF_HELPER, Kind::Skill, "rule 0001", Category::Threat);
+        planted.plain = "This file hides instructions to the agent.".to_string();
+        assert_eq!(
+            simple(&planted).parts.why,
+            "This file hides instructions to the agent."
+        );
+        let mut rated = finding(SHIPIT_SKILL, Kind::Skill, "score 5", Category::Threat);
+        rated.plain = String::new();
+        rated.facts.plugin = "shipit".to_string();
+        rated.facts.heuristics = vec![
+            heuristic(521, "It asks the agent to keep a secret.", ""),
+            heuristic(522, "It hides text.", ""),
+        ];
+        let parts = simple(&rated).parts;
+        assert_eq!(parts.why, "It asks the agent to keep a secret.");
+        assert_eq!(
+            more(&parts),
+            vec![(Part::Heuristic, "It hides text.")],
+            "a sign is said once"
+        );
+        assert_eq!(parts.name, "The skill from the plugin 'shipit'");
+    }
+
+    /// The Activation and dormant cases in What it is.
+    #[test]
+    fn what_it_is_says_whether_the_agent_would_use_it() {
+        let user = finding(PDF_HELPER, Kind::Skill, "rule 0001", Category::Threat);
+        assert_eq!(
+            simple(&user).parts.what,
+            "A skill in Claude Code. Claude Code uses it each time it starts."
+        );
+        let mut dormant = in_invoice_app(PDF_TIDY, Kind::Skill, "rule 0001", Category::Threat);
+        dormant.facts.activation = "inactive".to_string();
+        dormant.facts.inactive_reason = "untrusted_project".to_string();
+        assert_eq!(
+            simple(&dormant).parts.what,
+            "A skill in the project invoice-app. It does nothing until Claude Code trusts that \
+             project."
+        );
+        let git = finding(GIT, Kind::RepositoryMetadata, "rule 0009", Category::Threat);
+        assert_eq!(
+            simple(&git).parts.what,
+            "The git settings of the project vendor-sdk. Your agent uses them when you open that \
+             project."
+        );
+        assert_eq!(
+            simple(&git).parts.name,
+            "The git settings of the project 'vendor-sdk'"
+        );
     }
 
     #[test]
@@ -1325,6 +1977,37 @@ mod tests {
             }
         }
         cases
+    }
+
+    /// The owner's rule for every text of layout B: as short and plain as
+    /// the mock-up. A title names the thing in a few words, What it is and
+    /// What to do are two short sentences at most, and AgentSweep's own notes
+    /// under More are one short line each, on every case.
+    #[test]
+    fn every_part_is_as_short_as_the_mock_up() {
+        let words = |text: &str| text.split_whitespace().count();
+        let sentences = |text: &str| text.matches(". ").count() + 1;
+        for case in every_case() {
+            let parts = simple(&case).parts;
+            let at = format!("{} {}", case.item_id.as_str(), case.source);
+            assert!(words(&parts.name) <= 8, "{at}: {}", parts.name);
+            assert!(
+                words(&parts.what) <= 24 && sentences(&parts.what) <= 2,
+                "{at}: {}",
+                parts.what
+            );
+            assert!(
+                (1..=10).contains(&words(&parts.todo)) && sentences(&parts.todo) <= 2,
+                "{at}: {}",
+                parts.todo
+            );
+            assert!(!parts.why.is_empty(), "{at}");
+            for line in &parts.more {
+                if matches!(line.part, Part::WhyNothingHappened | Part::Project) {
+                    assert!(words(&line.text) <= 16, "{at}: {}", line.text);
+                }
+            }
+        }
     }
 
     #[test]

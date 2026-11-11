@@ -496,3 +496,27 @@ fn a_turn_on_protection_delivered_twice_registers_once_and_the_daemon_answers() 
     assert!(answers.iter().all(|answer| answer == &answers[0]));
     assert!(asking.status().is_ok(), "the daemon answers");
 }
+
+/// Reopen starts the new app once per press, however often the webview
+/// delivers it, and every delivery gets the first answer.
+#[test]
+fn a_reopen_delivered_twice_starts_the_new_app_once() {
+    let started = AtomicUsize::new(0);
+    let presses = Presses::default();
+    let answers = delivered_twice(&presses, || {
+        agentsweep_menubar::updater::reopen(
+            std::path::Path::new("/Applications/AgentSweep.app/Contents/MacOS/agentsweep-menubar"),
+            |arguments| {
+                assert_eq!(arguments[0], "-n");
+                assert_eq!(arguments[1], "/Applications/AgentSweep.app");
+                started.fetch_add(1, Ordering::SeqCst);
+                true
+            },
+        )
+    });
+    assert_eq!(started.load(Ordering::SeqCst), 1, "started once");
+    assert!(
+        answers.iter().all(|answer| answer == &Ok(())),
+        "{answers:?}"
+    );
+}

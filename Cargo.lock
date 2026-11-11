@@ -27,6 +27,7 @@ dependencies = [
  "agentsweep-core",
  "agentsweep-ipc",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -45,6 +46,7 @@ dependencies = [
  "agentsweep-adapter-workspace",
  "agentsweep-core",
  "serde_json",
+ "tempfile",
  "toml 1.1.6+spec-1.1.0",
 ]
 

@@ -234,11 +234,11 @@ mod tests {
     /// The listing runs on a home of this test's own, never on the real one.
     #[test]
     fn the_listing_counts_what_it_found_by_scope_and_kind() {
-        let home = std::env::temp_dir().join(format!(
-            "agentsweep-developer-listing-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&home);
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-developer-listing-")
+            .tempdir()
+            .expect("a fake home");
+        let home = temporary.path().to_path_buf();
         fs::create_dir_all(home.join(".claude")).expect("a fake config directory");
         fs::write(
             home.join(".claude").join("settings.json"),
@@ -266,8 +266,6 @@ mod tests {
             !listed.contains("/opt/example/key"),
             "a value never reaches the listing: {listed}"
         );
-
-        fs::remove_dir_all(&home).expect("the fake home goes away");
     }
 
     /// The two managed layers Codex merges that v1 does not read are named,
@@ -275,11 +273,11 @@ mod tests {
     /// test's own, never the real one.
     #[test]
     fn the_listing_names_the_codex_layers_it_did_not_read() {
-        let home = std::env::temp_dir().join(format!(
-            "agentsweep-developer-not-read-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&home);
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-developer-not-read-")
+            .tempdir()
+            .expect("a fake home");
+        let home = temporary.path().to_path_buf();
         fs::create_dir_all(home.join(".codex")).expect("a fake Codex home");
         fs::write(
             home.join(".codex").join("config.toml"),
@@ -300,8 +298,6 @@ mod tests {
             !listed.contains("Claude Code not read"),
             "Claude Code names no layer it skips: {listed}"
         );
-
-        fs::remove_dir_all(&home).expect("the fake home goes away");
     }
 
     #[test]
@@ -316,9 +312,11 @@ mod tests {
     /// command itself never reaches the report.
     #[test]
     fn the_scan_reports_the_rules_that_fired_and_never_the_content() {
-        let home =
-            std::env::temp_dir().join(format!("agentsweep-developer-scan-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&home);
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-developer-scan-")
+            .tempdir()
+            .expect("a fake home");
+        let home = temporary.path().to_path_buf();
         let skill = home.join(".claude/skills/setup");
         fs::create_dir_all(&skill).expect("a fake skill folder");
         fs::write(
@@ -337,17 +335,17 @@ mod tests {
         assert!(report.contains("Nothing was recorded."), "{report}");
         assert!(!report.contains("curl"), "{report}");
         assert!(!report.contains("example.invalid"), "{report}");
-
-        fs::remove_dir_all(&home).expect("the fake home goes away");
     }
 
     /// A machine the Rule Pack is quiet on says so in the words the corpus
     /// report uses, so the two runs read the same.
     #[test]
     fn a_quiet_machine_reads_the_same_as_a_quiet_corpus() {
-        let home =
-            std::env::temp_dir().join(format!("agentsweep-developer-quiet-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&home);
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-developer-quiet-")
+            .tempdir()
+            .expect("a fake home");
+        let home = temporary.path().to_path_buf();
         let skill = home.join(".claude/skills/notes");
         fs::create_dir_all(&skill).expect("a fake skill folder");
         fs::write(
@@ -363,7 +361,5 @@ mod tests {
             report.contains("Every weight 3 Heuristic is at zero."),
             "{report}"
         );
-
-        fs::remove_dir_all(&home).expect("the fake home goes away");
     }
 }

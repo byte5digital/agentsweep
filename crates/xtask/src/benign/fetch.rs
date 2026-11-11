@@ -129,13 +129,11 @@ mod tests {
     /// second run offline-capable.
     #[test]
     fn a_cached_download_is_read_without_reaching_the_network() {
-        let directory = std::env::temp_dir().join(format!(
-            "agentsweep-benign-cache-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&directory);
-        fs::create_dir_all(&directory).expect("a cache directory");
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-benign-cache-")
+            .tempdir()
+            .expect("a cache directory");
+        let directory = temporary.path().to_path_buf();
         fs::write(directory.join("demo"), b"cached").expect("a cached download");
 
         let cache = Cache::at(directory.clone());
@@ -143,24 +141,21 @@ mod tests {
             .bytes("https://nothing.example.invalid/demo", "demo")
             .expect("the cache answers");
         assert_eq!(bytes, b"cached");
-
-        fs::remove_dir_all(&directory).expect("the cache goes away");
     }
 
     /// A host that does not resolve is the offline case, not a failing corpus.
     #[test]
     fn a_host_that_does_not_resolve_reads_as_offline() {
-        let directory = std::env::temp_dir().join(format!(
-            "agentsweep-benign-cache-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&directory);
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-benign-cache-")
+            .tempdir()
+            .expect("a temporary folder");
+        // A cache directory nothing has created yet.
+        let directory = temporary.path().join("cache");
         let cache = Cache::at(directory.clone());
         let problem = cache
             .bytes("https://corpus.example.invalid/nothing", "nothing")
             .expect_err("nothing answers");
         assert!(matches!(problem, Problem::Offline(_)), "{problem:?}");
-        let _ = fs::remove_dir_all(&directory);
     }
 }

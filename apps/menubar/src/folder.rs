@@ -413,7 +413,11 @@ mod tests {
 
     #[test]
     fn a_drop_on_disk_resolves_to_one_absolute_folder() {
-        let base = std::env::temp_dir().join(format!("agentsweep-drop-{}", std::process::id()));
+        let temporary = tempfile::Builder::new()
+            .prefix("agentsweep-drop-")
+            .tempdir()
+            .expect("a temporary folder");
+        let base = temporary.path().to_path_buf();
         let inside = base.join("project");
         std::fs::create_dir_all(&inside).expect("a temporary folder");
         std::fs::write(inside.join("CLAUDE.md"), b"# demo\n").expect("a file");
@@ -432,7 +436,6 @@ mod tests {
             Err(DropRefusal::Missing(_))
         ));
         assert_eq!(resolve_drop(&[]), Err(DropRefusal::Nothing));
-        std::fs::remove_dir_all(&base).expect("cleaned up");
     }
 
     #[test]

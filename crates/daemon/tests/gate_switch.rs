@@ -8,6 +8,10 @@
 //! login Keychain, and the command line interface the entries name is a path
 //! nothing runs.
 
+#[path = "support/started.rs"]
+mod started;
+use started::Started;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -105,6 +109,8 @@ impl KeySource for SharedKey {
 struct Sandbox {
     root: PathBuf,
     keys: SharedKey,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -119,6 +125,7 @@ impl Sandbox {
         std::fs::create_dir_all(root.join("home/.codex")).expect("an installed Codex");
         std::fs::create_dir_all(root.join("data")).expect("a data directory");
         let sandbox = Sandbox {
+            started: Started::default(),
             root,
             keys: SharedKey(Arc::new(MemoryKeySource::empty())),
         };
@@ -178,7 +185,7 @@ impl Sandbox {
     /// A daemon on this sandbox whose Full Scans verify the Gate under the
     /// test's command line interface path.
     fn open(&self) -> Arc<Daemon> {
-        Daemon::open_tuned(
+        let daemon = Daemon::open_tuned(
             &self.options(),
             Arc::new(SameUser),
             Box::new(self.keys.clone()),
@@ -187,7 +194,9 @@ impl Sandbox {
                 ..Tuning::default()
             },
         )
-        .expect("an open daemon")
+        .expect("an open daemon");
+        self.started.follow(&daemon);
+        daemon
     }
 
     /// The Gate events in the Event Log, in order: the action and the Item.
@@ -246,6 +255,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = set_mode(&self.root.join("home/.claude"), 0o755);
         let _ = std::fs::remove_file(self.socket());
         let _ = std::fs::remove_dir_all(&self.root);
@@ -479,6 +489,7 @@ fn the_gate_hooks_request_reads_and_sets_the_switch() {
     let daemon = sandbox.open();
     let running = service::start_with(&sandbox.options(), daemon).expect("a listening daemon");
     let background = running.serve_in_the_background();
+    sandbox.started.follow(background.daemon());
     let daemon = background.daemon();
     full_scan(daemon);
 

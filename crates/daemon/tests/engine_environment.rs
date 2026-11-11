@@ -6,6 +6,11 @@
 //! are set. The daemon runs against a temporary home, data directory and
 //! socket, with both keys held in the process; no Keychain item is touched.
 
+#[path = "support/started.rs"]
+mod started;
+use started::Started;
+
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use agentsweep_core::keychain::MemoryKeySource;
@@ -22,14 +27,19 @@ const ENVIRONMENT_KEY: &str = "sk-ant-api03-defanged-environment-0000-e9e9";
 
 #[test]
 fn ollama_host_and_anthropic_api_key_in_the_environment_change_nothing() {
-    let root = std::env::temp_dir().join(format!(
-        "agentsweep-engine-environment-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
+    let temporary = tempfile::Builder::new()
+        .prefix("agentsweep-engine-environment-")
+        .tempdir()
+        .expect("a temporary folder");
+    let root = temporary.path().to_path_buf();
     std::fs::create_dir_all(root.join("home")).expect("a fake home");
     let socket = std::env::temp_dir().join(format!("asv-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&socket);
+    let cleanup = Cleanup {
+        started: Started::default(),
+        socket: socket.clone(),
+        _temporary: temporary,
+    };
 
     // SAFETY: this binary runs this one test and no other thread reads the
     // environment while it is set.
@@ -53,6 +63,7 @@ fn ollama_host_and_anthropic_api_key_in_the_environment_change_nothing() {
     .expect("an open daemon");
     let running = service::start_with(&options, daemon).expect("a listening daemon");
     let background = running.serve_in_the_background();
+    cleanup.started.follow(background.daemon());
 
     let mut client = Client::connect_at(&socket, Role::App).expect("a connected client");
     let state = client.engine().expect("the engine state");
@@ -86,6 +97,19 @@ fn ollama_host_and_anthropic_api_key_in_the_environment_change_nothing() {
         std::env::remove_var("OLLAMA_HOST");
         std::env::remove_var("ANTHROPIC_API_KEY");
     }
-    let _ = std::fs::remove_file(&socket);
-    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Removes the test's socket and temporary folder once its daemon is done
+/// writing, also when the test fails.
+struct Cleanup {
+    started: Started,
+    socket: PathBuf,
+    _temporary: tempfile::TempDir,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        self.started.settle();
+        let _ = std::fs::remove_file(&self.socket);
+    }
 }

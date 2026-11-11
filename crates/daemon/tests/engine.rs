@@ -6,6 +6,10 @@
 //! (`KeySourceChoice::Memory`). No test reads, writes or deletes a Keychain
 //! item. The keys below are defanged stand-ins with the shape of a key.
 
+#[path = "support/started.rs"]
+mod started;
+use started::Started;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -86,6 +90,8 @@ struct Sandbox {
     root: PathBuf,
     socket: PathBuf,
     keys: SharedKey,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -106,6 +112,7 @@ impl Sandbox {
         ));
         let _ = std::fs::remove_file(&socket);
         Sandbox {
+            started: Started::default(),
             root,
             socket,
             keys: SharedKey(Arc::new(MemoryKeySource::empty())),
@@ -140,6 +147,7 @@ impl Sandbox {
             .expect("an open daemon");
         let running = service::start_with(&options, daemon).expect("a listening daemon");
         let background = running.serve_in_the_background();
+        self.started.follow(background.daemon());
         wait_for_a_scan(background.daemon());
         background
     }
@@ -167,6 +175,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
     }

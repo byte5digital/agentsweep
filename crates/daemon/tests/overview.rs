@@ -8,6 +8,10 @@
 //! Nothing touches the real home, the real data directory, the documented
 //! socket or the login Keychain.
 
+#[path = "support/started.rs"]
+mod started;
+use started::Started;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -67,6 +71,8 @@ struct Sandbox {
     home: PathBuf,
     socket: PathBuf,
     keys: SharedKey,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -87,6 +93,7 @@ impl Sandbox {
         ));
         let _ = std::fs::remove_file(&socket);
         let sandbox = Sandbox {
+            started: Started::default(),
             home: root.join("home"),
             root,
             socket,
@@ -152,7 +159,7 @@ impl Sandbox {
     }
 
     fn open(&self) -> Arc<Daemon> {
-        Daemon::open_tuned(
+        let daemon = Daemon::open_tuned(
             &self.options(),
             Arc::new(SameUser),
             Box::new(self.keys.clone()),
@@ -161,12 +168,15 @@ impl Sandbox {
                 ..Tuning::default()
             },
         )
-        .expect("an open daemon")
+        .expect("an open daemon");
+        self.started.follow(&daemon);
+        daemon
     }
 
     fn start(&self) -> Background {
         let running = service::start_with(&self.options(), self.open()).expect("a daemon");
         let background = running.serve_in_the_background();
+        self.started.follow(background.daemon());
         wait_for_a_scan(background.daemon());
         background
     }
@@ -201,6 +211,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
     }

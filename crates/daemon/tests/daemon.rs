@@ -5,6 +5,10 @@
 //! Nothing touches the real home, the real data directory, the documented
 //! socket or the login Keychain, which is the rule the whole suite runs under.
 
+#[path = "support/started.rs"]
+mod started;
+use started::Started;
+
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -72,6 +76,8 @@ struct Sandbox {
     root: PathBuf,
     socket: PathBuf,
     keys: SharedKey,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -113,6 +119,7 @@ impl Sandbox {
         ));
         let _ = std::fs::remove_file(&socket);
         Sandbox {
+            started: Started::default(),
             root,
             socket,
             keys: SharedKey::new(),
@@ -133,7 +140,10 @@ impl Sandbox {
 
     /// A daemon over this sandbox, holding the key every daemon of it shares.
     fn open(&self, options: &Options, check: Arc<dyn PeerCheck>) -> Arc<Daemon> {
-        Daemon::open_with(options, check, Box::new(self.keys.clone())).expect("an open daemon")
+        let daemon =
+            Daemon::open_with(options, check, Box::new(self.keys.clone())).expect("an open daemon");
+        self.started.follow(&daemon);
+        daemon
     }
 
     fn options(&self) -> Options {
@@ -163,6 +173,7 @@ impl Sandbox {
         let daemon = self.open(&options, check);
         let running = service::start_with(&options, daemon).expect("a listening daemon");
         let background = running.serve_in_the_background();
+        self.started.follow(background.daemon());
         wait_for_a_scan(background.daemon());
         background
     }
@@ -180,6 +191,7 @@ impl Sandbox {
         .expect("an open daemon");
         let running = service::start_with(&options, daemon).expect("a listening daemon");
         let background = running.serve_in_the_background();
+        self.started.follow(background.daemon());
         wait_for_a_scan(background.daemon());
         background
     }
@@ -204,6 +216,7 @@ fn quick() -> Tuning {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
     }

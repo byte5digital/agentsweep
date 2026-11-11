@@ -11,6 +11,10 @@
 //! key held in the process. The bundle is a path in the temporary directory,
 //! and the command line interface the entries name is a path nothing runs.
 
+#[path = "support/started.rs"]
+mod started;
+use started::Started;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -102,6 +106,8 @@ struct Sandbox {
     root: PathBuf,
     socket: PathBuf,
     keys: SharedKey,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -117,6 +123,7 @@ impl Sandbox {
         std::fs::create_dir_all(root.join("data")).expect("a data directory");
         std::fs::create_dir_all(root.join("Applications")).expect("an Applications folder");
         let sandbox = Sandbox {
+            started: Started::default(),
             socket: std::env::temp_dir().join(format!("asb-{}-{number}.sock", std::process::id())),
             root,
             keys: SharedKey(Arc::new(MemoryKeySource::empty())),
@@ -168,6 +175,7 @@ impl Sandbox {
             },
         )
         .expect("an open daemon");
+        self.started.follow(&daemon);
         full_scan(&daemon);
         assert_eq!(self.check(&ClaudeCode::new()), GateCheck::Registered);
         assert_eq!(self.check(&Codex::new()), GateCheck::Registered);
@@ -213,6 +221,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
     }

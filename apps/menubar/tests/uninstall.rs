@@ -7,6 +7,10 @@
 //! touches launchd, Login Items, the real Trash, the real home, the
 //! documented socket, the real data directory or the Keychain.
 
+#[path = "../../../crates/daemon/tests/support/started.rs"]
+mod started;
+use started::Started;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -142,6 +146,8 @@ struct Sandbox {
     root: PathBuf,
     socket: PathBuf,
     keys: SharedKey,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -170,6 +176,7 @@ impl Sandbox {
         ));
         let _ = std::fs::remove_file(&socket);
         Sandbox {
+            started: Started::default(),
             root,
             socket,
             keys: SharedKey(Arc::new(MemoryKeySource::empty())),
@@ -214,6 +221,7 @@ impl Sandbox {
         .expect("an open daemon");
         let running = service::start_with(&options, daemon).expect("a listening daemon");
         let background = running.serve_in_the_background();
+        self.started.follow(background.daemon());
         wait_for_a_scan(background.daemon());
         assert!(
             gate_in(&self.settings()),
@@ -252,6 +260,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
     }

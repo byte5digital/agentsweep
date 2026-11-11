@@ -6,6 +6,10 @@
 //! is a developer run, so it reaches no Rule Feed. Nothing touches the real
 //! home, the documented socket, the real data directory or the Keychain.
 
+#[path = "../../../crates/daemon/tests/support/started.rs"]
+mod started;
+use started::Started;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -34,6 +38,8 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 struct Sandbox {
     root: PathBuf,
     socket: PathBuf,
+    /// The daemons it started, which it waits for before its folder goes.
+    started: Started,
 }
 
 impl Sandbox {
@@ -57,7 +63,11 @@ impl Sandbox {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_file(&socket);
-        Sandbox { root, socket }
+        Sandbox {
+            root,
+            socket,
+            started: Started::default(),
+        }
     }
 
     fn settings_file(&self) -> PathBuf {
@@ -85,6 +95,7 @@ impl Sandbox {
         .expect("an open daemon");
         let running = service::start_with(&options, daemon).expect("a listening daemon");
         let background = running.serve_in_the_background();
+        self.started.follow(background.daemon());
         wait_for_a_scan(background.daemon());
         background
     }
@@ -96,6 +107,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        self.started.settle();
         let _ = std::fs::remove_file(&self.socket);
         let _ = std::fs::remove_dir_all(&self.root);
     }

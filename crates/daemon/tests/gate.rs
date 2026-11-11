@@ -5,7 +5,8 @@
 //! let its first Full Scan write the Gate facts, and then ask the Gate over the
 //! socket. Nothing touches the real home, the real data directory, the
 //! documented socket or the login Keychain. The daemon log of this test binary
-//! goes to a temporary directory, so a test can read what it says.
+//! goes to cargo's scratch directory for integration tests, so a test can read
+//! what it says.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -45,12 +46,14 @@ const AMBIGUOUS_SKILL: &str = include_str!(
 const CLI_DEADLINE: Duration = Duration::from_secs(2);
 
 /// The directory this test binary's daemon log is written to, set up once
-/// for every test in it.
+/// for every test in it. The log stays open until the process ends, so no
+/// test can remove it: it lives in the scratch directory cargo keeps for
+/// integration tests rather than in the per-user temporary directory.
 fn log_directory() -> &'static Path {
     static LOG: OnceLock<PathBuf> = OnceLock::new();
     LOG.get_or_init(|| {
-        let directory =
-            std::env::temp_dir().join(format!("agentsweep-gate-log-{}", std::process::id()));
+        let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("agentsweep-gate-log-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         agentsweep_daemon::log::start(Some(&directory)).expect("the daemon log");
         directory

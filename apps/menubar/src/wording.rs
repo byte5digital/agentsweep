@@ -113,6 +113,13 @@ pub struct Wording {
     /// The message **Copy a message for your admin** puts on the clipboard,
     /// present on a Managed Finding only.
     pub admin_message: Option<String>,
+    /// Why it matters, in one short sentence: the `why` of the Rule or of the
+    /// strongest Heuristic behind the Finding (spec section 8.4, layout B).
+    /// Empty where the Rule Pack gives none.
+    pub why: String,
+    /// What the setting the Finding is about does, in plain words, which
+    /// names a setting in place of its key. Empty for any other kind.
+    pub setting: String,
 }
 
 impl Wording {
@@ -122,6 +129,11 @@ impl Wording {
         strings.extend(self.lines.iter().map(|line| line.text.as_str()));
         strings.extend(Some(self.place.as_str()).filter(|place| !place.is_empty()));
         strings.extend(self.admin_message.as_deref());
+        strings.extend(
+            [self.why.as_str(), self.setting.as_str()]
+                .into_iter()
+                .filter(|text| !text.is_empty()),
+        );
         strings
     }
 
@@ -134,6 +146,8 @@ impl Wording {
             "lines": lines_value(&self.lines),
             "place": self.place,
             "admin": self.admin_message.is_some(),
+            "why": self.why,
+            "setting": self.setting,
         })
     }
 }
@@ -196,6 +210,11 @@ pub fn simple(finding: &RecordedFinding) -> Wording {
         lines: body(finding, &named, Posture::Simple),
         place: named.place(),
         admin_message: managed(finding).then(|| admin_message(finding, &named)),
+        why: finding.facts.why.clone(),
+        setting: match finding.kind {
+            Kind::SettingsEntry => finding.facts.setting_plain.clone(),
+            _ => String::new(),
+        },
     }
 }
 
@@ -699,6 +718,35 @@ mod tests {
 
     fn title_of(finding: &RecordedFinding) -> String {
         simple(finding).title
+    }
+
+    /// The Simple wording carries why the Finding matters and, for a
+    /// setting, what the setting does, as the daemon sent them; the window
+    /// receives both. A setting's plain name belongs to a setting only.
+    #[test]
+    fn the_wording_carries_why_and_what_a_setting_does() {
+        let setting =
+            "claude-code/user/settings-entry/~/.claude/settings.json#/permissions/allow/0";
+        let mut allow = finding(
+            setting,
+            Kind::SettingsEntry,
+            "rule 0018",
+            Category::Exposure,
+        );
+        allow.facts.why = "Your agent can run any command on your Mac without asking.".to_string();
+        allow.facts.setting_plain = "lets Claude Code run commands without asking".to_string();
+        let wording = simple(&allow);
+        assert_eq!(wording.why, allow.facts.why);
+        assert_eq!(wording.setting, allow.facts.setting_plain);
+        assert!(wording.strings().contains(&allow.facts.why.as_str()));
+        let value = wording.to_value();
+        assert_eq!(value["why"], allow.facts.why.as_str());
+        assert_eq!(value["setting"], allow.facts.setting_plain.as_str());
+
+        let mut skill = finding(PDF_HELPER, Kind::Skill, "rule 0001", Category::Threat);
+        skill.facts.setting_plain = "not a setting".to_string();
+        assert_eq!(simple(&skill).setting, "");
+        assert_eq!(simple(&skill).why, "", "the Rule Pack gives the why");
     }
 
     #[test]

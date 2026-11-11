@@ -270,6 +270,95 @@ pub enum Stale {
     CannotSpawn,
 }
 
+/// Which side of a version mismatch at the handshake is behind (spec section
+/// 9.5).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mismatch {
+    /// The app is older than the daemon: its bundle was replaced by an update
+    /// while this app kept running, and the daemon already runs the new
+    /// binary. Registering again would only start that daemon again, so the
+    /// app asks to be reopened from the new bundle.
+    OlderApp,
+    /// The app is newer than the daemon, or the two cannot be ordered: the
+    /// daemon is from an older bundle, and the app registers it again.
+    NewerApp,
+}
+
+/// Which side is behind, from the two versions a version refusal carries.
+/// Versions are ordered as semantic versions; one that does not read as
+/// such leaves the app on [`Mismatch::NewerApp`], what it did before it
+/// could tell.
+pub fn mismatch(app_version: &str, daemon_version: &str) -> Mismatch {
+    match (Version::parse(app_version), Version::parse(daemon_version)) {
+        (Some(app), Some(daemon)) if app < daemon => Mismatch::OlderApp,
+        _ => Mismatch::NewerApp,
+    }
+}
+
+/// A semantic version, as far as ordering two of them needs: the three
+/// numbers and the pre-release identifiers; build metadata is ignored.
+#[derive(Debug, Eq, PartialEq)]
+struct Version {
+    core: [u64; 3],
+    pre: Vec<Identifier>,
+}
+
+/// One pre-release identifier. A number orders before any text, as semantic
+/// versioning has it, which the order of the variants gives.
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Identifier {
+    Number(u64),
+    Text(String),
+}
+
+impl Version {
+    fn parse(text: &str) -> Option<Version> {
+        let text = text.split_once('+').map_or(text, |(version, _)| version);
+        let (core, pre) = match text.split_once('-') {
+            Some((core, pre)) => (core, Some(pre)),
+            None => (text, None),
+        };
+        let mut numbers = core.split('.').map(|part| part.parse::<u64>().ok());
+        let core = [numbers.next()??, numbers.next()??, numbers.next()??];
+        if numbers.next().is_some() {
+            return None;
+        }
+        let pre = match pre {
+            None => Vec::new(),
+            Some(pre) => pre
+                .split('.')
+                .map(|part| match part.parse::<u64>() {
+                    Ok(number) => Some(Identifier::Number(number)),
+                    Err(_) if !part.is_empty() => Some(Identifier::Text(part.to_string())),
+                    Err(_) => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        };
+        Some(Version { core, pre })
+    }
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Version) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        self.core
+            .cmp(&other.core)
+            // A release orders after its own pre-releases.
+            .then_with(|| match (self.pre.is_empty(), other.pre.is_empty()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                (false, false) => self.pre.cmp(&other.pre),
+            })
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Version) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Whether the daemon's job is stale, asked only while no daemon answers. An
 /// enabled registration is not trusted alone: a job registered by another
 /// bundle version, or one launchd cannot spawn, stays enabled and never runs.
@@ -647,6 +736,39 @@ pub(crate) mod tests {
         }
         fn open_login_items(&self) {
             let _ = self.call("open login items");
+        }
+    }
+
+    /// An app older than its daemon is the app whose bundle was replaced; a
+    /// newer one, or one the versions cannot order, registers the daemon
+    /// again as before.
+    #[test]
+    fn a_version_refusal_tells_an_older_app_from_a_newer_one() {
+        for (app, daemon) in [
+            ("0.1.0", "0.2.0"),
+            ("0.1.0", "0.1.1"),
+            ("0.9.0", "0.10.0"),
+            ("1.9.9", "2.0.0"),
+            ("1.0.0-beta.1", "1.0.0"),
+            ("1.0.0-beta.2", "1.0.0-beta.10"),
+            ("1.0.0-alpha", "1.0.0-alpha.1"),
+            ("1.0.0-2", "1.0.0-rc"),
+            ("0.1.0+build.5", "0.2.0"),
+        ] {
+            assert_eq!(mismatch(app, daemon), Mismatch::OlderApp, "{app} {daemon}");
+        }
+        for (app, daemon) in [
+            ("0.2.0", "0.1.0"),
+            ("0.10.0", "0.9.0"),
+            ("1.0.0", "1.0.0-rc.1"),
+            ("0.1.0+a", "0.1.0+b"),
+            ("garbage", "0.2.0"),
+            ("0.1.0", "0.2"),
+            ("0.1.0", "0.2.0.1"),
+            ("0.1.0", "0.2.0-"),
+            ("", ""),
+        ] {
+            assert_eq!(mismatch(app, daemon), Mismatch::NewerApp, "{app} {daemon}");
         }
     }
 

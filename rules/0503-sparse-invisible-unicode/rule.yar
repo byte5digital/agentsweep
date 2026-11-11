@@ -11,6 +11,7 @@ rule as_0503_sparse_invisible_unicode {
     status      = "stable"
     plain       = "This file contains a character nobody can see, which may change what the agent reads."
     phrase      = "contains a character nobody can see"
+    why         = "It may give your agent an order you cannot see."
     description = "One zero-width character, one basic variation selector, one private-use code point, or a bidirectional control in a file that does carry right-to-left script. Each of these has an honest use: emoji joiners, the text and emoji presentation selectors, icon fonts in a prompt theme, and Arabic or Hebrew prose. Runs of them do not, and are rule 0003's. This is weight 1 because on its own it is a detail of how the file was written, and only worth reading together with whatever else fired."
     references  = "https://embracethered.com/blog/posts/2024/hiding-and-finding-text-with-unicode-tags/ https://trojansource.codes/ https://snyk.io/articles/defending-against-glassworm/"
     sensitive   = false

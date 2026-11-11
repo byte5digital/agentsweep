@@ -132,7 +132,7 @@ mod tests {
             "rule as_{id:04}_mine {{\n  meta:\n    id = {id}\n    title = \"Mine\"\n\
              \x20   tier = {tier}\n    category = \"{category}\"\n    severity = \"{severity}\"\n\
 {extra}\x20   class = 1\n    kinds = \"InstructionFile\"\n    status = \"stable\"\n\
-             \x20   plain = \"Mine.\"\n    phrase = \"is mine\"\n    fix = \"Mine.\"\n    description = \"Mine.\"\n    references = \"none\"\n\
+             \x20   plain = \"Mine.\"\n    phrase = \"is mine\"\n    why = \"It is mine.\"\n    fix = \"Mine.\"\n    description = \"Mine.\"\n    references = \"none\"\n\
              \x20   sensitive = false\n  strings:\n    $m = \"MINE-{id}\"\n  condition:\n    $m\n}}\n"
         )
     }
@@ -248,6 +248,23 @@ mod tests {
             .expect_err("a broken rule does not load")
             .to_string();
         assert!(problem.contains("did not compile"), "{problem}");
+    }
+
+    /// A user rule written before `why` was required is held to the same
+    /// contract as the bundled pack, as one written before `phrase` was: it
+    /// does not load, and the refusal names the key it lacks.
+    #[test]
+    fn a_user_rule_without_a_why_is_refused_and_names_the_key() {
+        let older = a_user_rule(9008, "2", "", "threat", "high")
+            .replace("    why = \"It is mine.\"\n", "");
+        assert!(!older.contains("why"), "{older}");
+        let (_temporary, directory) = written(&[("older.yar", older)]);
+        let problem = UserRules::read(&directory)
+            .expect("the rules are read")
+            .compile()
+            .expect_err("a user rule without a why does not load")
+            .to_string();
+        assert!(problem.contains("`why` is missing"), "{problem}");
     }
 
     #[test]

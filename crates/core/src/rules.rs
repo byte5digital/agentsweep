@@ -132,6 +132,10 @@ pub struct RuleMeta {
     /// instructions"). Where it holds `{item}`, the kind and name stand there
     /// instead of in front of it.
     pub phrase: String,
+    /// Why it matters to the user, in one short sentence of plain words: what
+    /// could happen to them ("It downloads hidden code and runs it on your
+    /// Mac."). The Simple Posture's "Why it matters" line (spec section 8.4).
+    pub why: String,
     /// The how-to behind **Show me how to fix this** on an Exposure (spec
     /// section 8.5): what to change in the file the Finding concerns, in the
     /// Simple Posture's plain words. Required on every Exposure, so a Rule
@@ -153,6 +157,11 @@ pub struct RuleMeta {
 /// Where a Rule's `phrase` wants the Item's kind and name, when they do not
 /// simply stand in front of it ("A password is written out in {item}").
 pub const PHRASE_ITEM: &str = "{item}";
+
+/// The most words a Rule's `why` should take. The bundled pack is held to it
+/// by a test; the lint holds every pack to one sentence only, so a Rule Pack
+/// whose sentence runs a word long still loads.
+pub const WHY_MAXIMUM_WORDS: usize = 12;
 
 /// A compiled Rule Pack: the meta index plus one compiled rule set per kind.
 pub struct RulePack {
@@ -319,6 +328,7 @@ fn read_index(
             status,
             plain: text(&name, &meta, "plain")?.to_string(),
             phrase: text(&name, &meta, "phrase")?.to_string(),
+            why: text(&name, &meta, "why")?.to_string(),
             fix: match meta.get("fix") {
                 Some(_) => Some(text(&name, &meta, "fix")?.to_string()),
                 None => None,
@@ -417,6 +427,19 @@ fn lint(
         return reject(format!(
             "`phrase` is a short verdict phrase with no full stop and at most one `{PHRASE_ITEM}`"
         ));
+    }
+
+    // The why is the one line under "Why it matters", so it is one sentence
+    // of its own, never a fragment and never two.
+    let why = rule.why.trim();
+    if why.is_empty() {
+        return reject("`why` is empty".to_string());
+    }
+    let ends = why.matches(['.', '?', '!']).count();
+    if !why.ends_with('.') || ends != 1 || why.contains(PHRASE_ITEM) {
+        return reject(
+            "`why` is one sentence that ends with a full stop and names no `{item}`".to_string(),
+        );
     }
 
     // An Exposure is the user's own setup and is never moved, so what it
@@ -736,6 +759,7 @@ mod tests {
             ("status", "\"probation\"".to_string()),
             ("plain", "\"A rule under lint.\"".to_string()),
             ("phrase", "\"is under lint\"".to_string()),
+            ("why", "\"It is under lint.\"".to_string()),
             ("description", "\"A rule under lint.\"".to_string()),
             ("references", "\"none\"".to_string()),
             ("sensitive", "false".to_string()),
@@ -788,6 +812,7 @@ mod tests {
             "status",
             "plain",
             "phrase",
+            "why",
             "description",
             "references",
             "sensitive",
@@ -817,6 +842,37 @@ mod tests {
             Some(r#""A password is written out in {item}""#),
         )]))
         .expect("one placeholder is allowed");
+    }
+
+    /// A pack from a later release may carry a meta key this binary does not
+    /// know yet. It loads, and the key is passed by: that is what lets a new
+    /// key such as `why` reach the Rule Feed without breaking older clients.
+    #[test]
+    fn a_meta_key_this_binary_does_not_know_is_passed_by() {
+        lint_of(meta_variant(&[("tomorrow", Some(r#""a later key""#))]))
+            .expect("an unknown meta key does not stop a pack");
+    }
+
+    #[test]
+    fn a_why_that_is_empty_or_not_one_sentence_is_rejected() {
+        for why in [
+            r#""""#,
+            r#""   ""#,
+            r#""It runs hidden code""#,
+            r#""It runs hidden code. It hides it.""#,
+            r#""Does it run hidden code?""#,
+            r#""It runs hidden code in {item}.""#,
+            "true",
+        ] {
+            let problem =
+                lint_of(meta_variant(&[("why", Some(why))])).expect_err("a why is one sentence");
+            assert!(problem.contains("why"), "{why}: {problem}");
+        }
+        lint_of(meta_variant(&[(
+            "why",
+            Some(r#""It downloads hidden code and runs it on your Mac.""#),
+        )]))
+        .expect("one short sentence loads");
     }
 
     #[test]
@@ -866,6 +922,69 @@ mod tests {
             assert!(!fix.contains('\u{2014}'), "{}", meta.name);
         }
         assert!(exposures >= 6, "the v1 pack has six Exposures");
+    }
+
+    /// Every Rule and Heuristic of the bundled pack says why it matters in
+    /// one short sentence of plain words: the Simple Posture's "Why it
+    /// matters" line (spec section 8.4) is that sentence and nothing else.
+    #[test]
+    fn every_rule_of_the_bundled_pack_says_why_in_one_short_sentence() {
+        const JARGON: [&str; 15] = [
+            "MCP",
+            "API",
+            "URL",
+            "TLS",
+            "DNS",
+            "IP",
+            "shell",
+            "base64",
+            "hook",
+            "env",
+            "repository",
+            "heuristic",
+            "rule",
+            "token",
+            "payload",
+        ];
+        let pack = RulePack::bundled().expect("the bundled pack compiles");
+        for meta in pack.metas() {
+            let why = meta.why.as_str();
+            let words = why.split_whitespace().count();
+            assert!(
+                (3..=WHY_MAXIMUM_WORDS).contains(&words),
+                "{} says why in {words} words: {why}",
+                meta.name
+            );
+            assert!(why.ends_with('.'), "{}: {why}", meta.name);
+            assert_eq!(
+                why.matches(['.', '?', '!']).count(),
+                1,
+                "{} says why in more than one sentence: {why}",
+                meta.name
+            );
+            assert!(
+                !why.contains(['\u{2014}', '\u{2013}', ';', ':', '(', '{']),
+                "{}: {why}",
+                meta.name
+            );
+            assert!(
+                !why.chars().any(|c| c.is_ascii_digit()),
+                "{} names a number: {why}",
+                meta.name
+            );
+            for word in why
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|word| !word.is_empty())
+            {
+                assert!(
+                    !JARGON
+                        .iter()
+                        .any(|jargon| jargon.eq_ignore_ascii_case(word)),
+                    "{} says `{word}`: {why}",
+                    meta.name
+                );
+            }
+        }
     }
 
     /// Every Rule and Heuristic of the bundled pack carries its phrase: the

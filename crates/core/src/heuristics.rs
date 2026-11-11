@@ -272,6 +272,7 @@ fn fired_heuristic_of(meta: &RuleMeta, hit: &RuleHit) -> FiredHeuristic {
         weight: meta.weight.unwrap_or(0),
         title: meta.title.clone(),
         plain: meta.plain.clone(),
+        why: meta.why.clone(),
         severity: meta.severity,
         sensitive: meta.sensitive,
         reviewer_directed: meta.reviewer_directed,
@@ -363,7 +364,7 @@ mod tests {
                      title = \"Heuristic {id}\"\n    tier = {tier}\n\
                      category = \"{category}\"\n    severity = \"{severity}\"\n\
 {weight}    class = 1\n    kinds = \"InstructionFile\"\n    status = \"{status}\"\n\
-                 plain = \"Plain {id}.\"\n    phrase = \"is under test\"\n    fix = \"Under test.\"\n    description = \"Under test.\"\n\
+                 plain = \"Plain {id}.\"\n    phrase = \"is under test\"\n    why = \"It is under test.\"\n    fix = \"Under test.\"\n    description = \"Under test.\"\n\
                  references = \"none\"\n    sensitive = false\n\
                strings:\n    $m = \"{marker}\"\n  condition:\n    $m\n}}\n"
             )
@@ -503,6 +504,7 @@ mod tests {
         let listed: Vec<i64> = finding.heuristics.iter().map(|h| h.id).collect();
         assert_eq!(listed, vec![500, 501]);
         assert_eq!(finding.heuristics[0].plain, "Plain 500.");
+        assert_eq!(finding.heuristics[0].why, "It is under test.");
     }
 
     /// The Weight of a Heuristic counts once per Item, whatever it matched.

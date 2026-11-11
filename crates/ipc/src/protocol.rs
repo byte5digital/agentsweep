@@ -2915,6 +2915,8 @@ mod tests {
             band: "Suspicious".to_string(),
             rule_withdrawn: true,
             phrase: "downloads and runs hidden code".to_string(),
+            why: "It downloads hidden code and runs it on your Mac.".to_string(),
+            setting_plain: "lets Claude Code run commands without asking".to_string(),
             fix: "Open the file and take the line out.".to_string(),
             plugin: "shipit".to_string(),
             drift_change: "changed".to_string(),

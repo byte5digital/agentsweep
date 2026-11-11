@@ -114,6 +114,149 @@ pub static EXECUTING_OR_REDIRECTING_KEYS: &[DeclaredKey] = &[
 /// because the file the key sits in is the user's own.
 pub static AGENT_WRITTEN_KEYS: &[&str] = &["permissions.allow"];
 
+/// What each declared key does, in the plain words the Simple Posture names a
+/// setting by instead of its key ("lets Claude Code run commands without
+/// asking", spec section 8.4). A pattern is a dotted key path whose `*`
+/// stands for any one segment; it names the key and everything below it, and
+/// the longest pattern that fits wins, so one environment variable can say
+/// more than `env` as a whole. Every declared key has one, and so does every
+/// key a Rule or Heuristic asks about.
+pub static PLAIN_NAMES: &[(&str, &str)] = &[
+    (
+        "statusLine",
+        "runs a command to fill Claude Code's status line",
+    ),
+    (
+        "fileSuggestion",
+        "runs a command to suggest files to Claude Code",
+    ),
+    ("processWrapper", "wraps every command Claude Code starts"),
+    (
+        "apiKeyHelper",
+        "runs a command that hands Claude Code its login key",
+    ),
+    (
+        "awsAuthRefresh",
+        "runs a command that renews Claude Code's cloud login",
+    ),
+    (
+        "awsCredentialExport",
+        "runs a command that hands Claude Code its cloud login",
+    ),
+    (
+        "gcpAuthRefresh",
+        "runs a command that renews Claude Code's cloud login",
+    ),
+    (
+        "otelHeadersHelper",
+        "runs a command that signs Claude Code's usage reports",
+    ),
+    (
+        "env",
+        "sets a value every command Claude Code starts can read",
+    ),
+    (
+        "env.ANTHROPIC_BASE_URL",
+        "sends Claude Code's traffic to another server",
+    ),
+    (
+        "env.ANTHROPIC_VERTEX_BASE_URL",
+        "sends Claude Code's traffic to another server",
+    ),
+    (
+        "env.OPENAI_BASE_URL",
+        "sends Claude Code's traffic to another server",
+    ),
+    (
+        "env.OPENAI_API_BASE",
+        "sends Claude Code's traffic to another server",
+    ),
+    ("env.ANTHROPIC_AUTH_TOKEN", "gives Claude Code a login key"),
+    ("env.ANTHROPIC_API_KEY", "gives Claude Code a login key"),
+    (
+        "env.HTTPS_PROXY",
+        "sends Claude Code's traffic through another server",
+    ),
+    (
+        "env.HTTP_PROXY",
+        "sends Claude Code's traffic through another server",
+    ),
+    (
+        "env.NODE_EXTRA_CA_CERTS",
+        "lets Claude Code trust servers it would normally refuse",
+    ),
+    ("env.NODE_OPTIONS", "changes how Claude Code itself starts"),
+    (
+        "env.CLAUDE_CONFIG_DIR",
+        "moves where Claude Code reads its settings",
+    ),
+    ("env.CODEX_HOME", "moves where Codex reads its settings"),
+    (
+        "permissions.defaultMode",
+        "decides when Claude Code asks before acting",
+    ),
+    (
+        "permissions.allow",
+        "lets Claude Code run commands without asking",
+    ),
+    (
+        "permissions.additionalDirectories",
+        "lets Claude Code work in more folders",
+    ),
+    (
+        "skipDangerousModePermissionPrompt",
+        "skips the warning before Claude Code stops asking",
+    ),
+    ("sandbox", "decides what Claude Code's commands may touch"),
+    (
+        "enableAllProjectMcpServers",
+        "turns on every helper program a project brings",
+    ),
+    (
+        "enabledMcpjsonServers",
+        "turns on a helper program the project brings",
+    ),
+    (
+        "disabledMcpjsonServers",
+        "turns off a helper program the project brings",
+    ),
+    (
+        "extraKnownMarketplaces",
+        "adds a place Claude Code gets plugins from",
+    ),
+    ("enabledPlugins", "turns on a plugin in Claude Code"),
+    ("skillOverrides", "changes how Claude Code uses a skill"),
+    (
+        "allowedHttpHookUrls",
+        "lets your checks send your work to a web address",
+    ),
+    ("hooks", "runs commands of its own while Claude Code works"),
+    ("disableAllHooks", "can switch off your checks"),
+    (
+        "disableSkillShellExecution",
+        "decides whether skills may run commands",
+    ),
+    (
+        "autoMemoryDirectory",
+        "moves where Claude Code keeps its memory",
+    ),
+    ("agent", "sets the role Claude Code plays"),
+    (
+        "policyHelper",
+        "runs a command that sets your organisation's limits",
+    ),
+    (
+        "claudeMd",
+        "adds instructions your organisation gives Claude Code",
+    ),
+];
+
+/// What the key at a dotted path does, in plain words, or none for a key
+/// this adapter does not describe.
+pub fn plain_name(key_path: &str) -> Option<&'static str> {
+    agentsweep_core::finding_facts::setting_plain_name(PLAIN_NAMES, key_path)
+}
+
 /// One settings key found in one document.
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -202,6 +345,74 @@ mod tests {
     use super::*;
     use agentsweep_core::item::Kind;
     use serde_json::json;
+
+    /// Every declared key, and every key a Rule or Heuristic of the bundled
+    /// pack asks about, has a plain name: a few words, no em-dash, no key.
+    #[test]
+    fn every_declared_and_every_ruled_key_has_a_plain_name() {
+        for declared in EXECUTING_OR_REDIRECTING_KEYS {
+            assert!(plain_name(declared.path).is_some(), "{}", declared.path);
+        }
+        for (key_path, expected) in [
+            (
+                "permissions.allow.0",
+                "lets Claude Code run commands without asking",
+            ),
+            ("disableAllHooks", "can switch off your checks"),
+            (
+                "env.ANTHROPIC_BASE_URL",
+                "sends Claude Code's traffic to another server",
+            ),
+            (
+                "env.CLAUDE_CONFIG_DIR",
+                "moves where Claude Code reads its settings",
+            ),
+            (
+                "env.SOME_OTHER_VALUE",
+                "sets a value every command Claude Code starts can read",
+            ),
+            (
+                "statusLine.command",
+                "runs a command to fill Claude Code's status line",
+            ),
+            (
+                "enabledMcpjsonServers.0",
+                "turns on a helper program the project brings",
+            ),
+        ] {
+            assert_eq!(plain_name(key_path), Some(expected), "{key_path}");
+        }
+        for key_path in [
+            "apiKeyHelper",
+            "awsCredentialExport",
+            "awsAuthRefresh",
+            "otelHeadersHelper",
+            "gcpAuthRefresh",
+            "enableAllProjectMcpServers",
+            "permissions.defaultMode",
+            "skipDangerousModePermissionPrompt",
+            "hooks.PreToolUse",
+            "fileSuggestion",
+            "env.ANTHROPIC_AUTH_TOKEN",
+            "env.ANTHROPIC_API_KEY",
+            "env.HTTPS_PROXY",
+            "env.HTTP_PROXY",
+            "env.NODE_EXTRA_CA_CERTS",
+            "env.NODE_OPTIONS",
+            "env.CODEX_HOME",
+            "env.OPENAI_BASE_URL",
+            "env.OPENAI_API_BASE",
+            "env.ANTHROPIC_VERTEX_BASE_URL",
+        ] {
+            assert!(plain_name(key_path).is_some(), "{key_path}");
+        }
+        for (pattern, plain) in PLAIN_NAMES {
+            assert!(plain.split_whitespace().count() <= 10, "{pattern}: {plain}");
+            assert!(!plain.contains('\u{2014}'), "{pattern}");
+            assert!(!plain.contains(pattern), "{pattern} names itself");
+        }
+        assert_eq!(plain_name("somethingElse"), None);
+    }
 
     fn document(value: Value) -> Document {
         Document {

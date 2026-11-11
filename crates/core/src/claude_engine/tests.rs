@@ -58,6 +58,7 @@ fn fired_on(text: &str, needle: &str) -> Vec<FiredHeuristic> {
         weight: 3,
         title: "Heuristic 530".to_string(),
         plain: "A download is piped into a shell.".to_string(),
+        why: String::new(),
         severity: Severity::High,
         sensitive: false,
         reviewer_directed: false,

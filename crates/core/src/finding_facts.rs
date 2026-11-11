@@ -199,6 +199,18 @@ pub struct FindingFacts {
     /// Finding, which the Simple Posture builds its title from. Empty for any
     /// other source and for a Rule the pack in force no longer holds.
     pub phrase: String,
+    /// Why the Finding matters to the user, in one short sentence: the `why`
+    /// of the Rule or Exposure Heuristic behind it, or for a `score` Finding
+    /// (T2 and T3) the `why` of the strongest Heuristic that fired, by
+    /// Weight. The Simple Posture's "Why it matters" line (spec section 8.4).
+    /// Empty for any other source and for a Rule the pack in force no longer
+    /// holds.
+    pub why: String,
+    /// What the setting a Finding is about does, in plain words ("lets
+    /// Claude Code run commands without asking"), which the Simple Posture
+    /// names a setting by instead of its key. Empty for any other kind and
+    /// for a key the Agent's Surface Adapter does not describe.
+    pub setting_plain: String,
     /// The how-to of the Exposure Rule or Heuristic behind the Finding, which
     /// the app shows behind **Show me how to fix this** (spec section 8.5).
     /// Empty for a Threat, for any source other than a Rule and for a Rule
@@ -278,6 +290,11 @@ impl FindingFacts {
             band,
             rule_withdrawn: false,
             phrase: String::new(),
+            why: match finding.source {
+                Source::Score(_) => strongest_why(&finding.heuristics),
+                _ => String::new(),
+            },
+            setting_plain: String::new(),
             fix: String::new(),
             plugin: item
                 .and_then(|item| match &item.provenance {
@@ -352,6 +369,11 @@ impl FindingFacts {
         map.insert("path".to_string(), Value::from(self.path.as_str()));
         map.insert("phrase".to_string(), Value::from(self.phrase.as_str()));
         map.insert(
+            "setting_plain".to_string(),
+            Value::from(self.setting_plain.as_str()),
+        );
+        map.insert("why".to_string(), Value::from(self.why.as_str()));
+        map.insert(
             "judgement_engine".to_string(),
             Value::from(self.judgement_engine.as_str()),
         );
@@ -415,6 +437,8 @@ impl FindingFacts {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             phrase: text("phrase"),
+            why: text("why"),
+            setting_plain: text("setting_plain"),
             fix: text("fix"),
             plugin: text("plugin"),
             drift_change: text("drift_change"),
@@ -435,6 +459,62 @@ impl FindingFacts {
             },
         }
     }
+}
+
+/// What a setting does, in plain words, looked up in one Agent's table of
+/// patterns (its Surface Adapter's `PLAIN_NAMES`). A pattern is a dotted key
+/// path whose `*` stands for any one segment; it names the key and every key
+/// below it, and the longest pattern that fits wins.
+pub fn setting_plain_name(
+    names: &'static [(&'static str, &'static str)],
+    key_path: &str,
+) -> Option<&'static str> {
+    let segments: Vec<&str> = key_path.split('.').collect();
+    names
+        .iter()
+        .filter_map(|(pattern, plain)| {
+            let parts: Vec<&str> = pattern.split('.').collect();
+            let fits = parts.len() <= segments.len()
+                && parts
+                    .iter()
+                    .zip(&segments)
+                    .all(|(part, segment)| *part == "*" || part == segment);
+            fits.then_some((parts.len(), *plain))
+        })
+        .max_by_key(|(length, _)| *length)
+        .map(|(_, plain)| plain)
+}
+
+/// The Agent and the dotted key path a settings entry's Item id names: the
+/// JSON pointer after the `#`, unescaped, its segments joined with dots as a
+/// Rule reads `settings.key_path`. None for an id that names no entry.
+pub fn setting_key_path(item_id: &ItemId) -> Option<(&str, String)> {
+    let id = item_id.as_str();
+    let (_, pointer) = id.rsplit_once('#')?;
+    let agent = id.split('/').next()?;
+    let segments: Vec<String> = pointer
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| segment.replace("~1", "/").replace("~0", "~"))
+        .collect();
+    (!segments.is_empty()).then(|| (agent, segments.join(".")))
+}
+
+/// The `why` a `score` Finding shows: the one of the strongest Heuristic that
+/// fired, by Weight. Equal Weights go to the higher Severity and then to the
+/// lower id, so the same Heuristics always give the same sentence.
+pub fn strongest_why(fired: &[FiredHeuristic]) -> String {
+    fired
+        .iter()
+        .max_by_key(|heuristic| {
+            (
+                heuristic.weight,
+                heuristic.severity,
+                std::cmp::Reverse(heuristic.id),
+            )
+        })
+        .map(|heuristic| heuristic.why.clone())
+        .unwrap_or_default()
 }
 
 /// The excerpt one fired Heuristic shows: the text of its first match, or a
@@ -599,6 +679,7 @@ mod tests {
             weight: 2,
             title: "t".to_string(),
             plain: format!("Heuristic {id} fired."),
+            why: format!("Heuristic {id} matters."),
             severity: Severity::High,
             sensitive,
             reviewer_directed: false,
@@ -757,6 +838,77 @@ mod tests {
         assert_eq!(facts.heuristics[0].plain, "Heuristic 511 fired.");
         assert_eq!(facts.heuristics[0].excerpt, "curl -k");
         assert_eq!(facts.heuristics[1].excerpt, "https://paste.example.inva");
+    }
+
+    /// A setting is named by what it does: the longest pattern that fits
+    /// wins, `*` stands for one segment, and a pattern names the keys below
+    /// it too. The key path comes from the entry's Item id.
+    #[test]
+    fn a_setting_is_named_by_the_longest_pattern_that_fits() {
+        static NAMES: &[(&str, &str)] = &[
+            ("env", "sets a value"),
+            ("env.ANTHROPIC_BASE_URL", "sends traffic elsewhere"),
+            ("model_providers.*.auth", "runs a login program"),
+        ];
+        assert_eq!(setting_plain_name(NAMES, "env.FOO"), Some("sets a value"));
+        assert_eq!(
+            setting_plain_name(NAMES, "env.ANTHROPIC_BASE_URL"),
+            Some("sends traffic elsewhere")
+        );
+        assert_eq!(
+            setting_plain_name(NAMES, "model_providers.corp.auth.command"),
+            Some("runs a login program")
+        );
+        assert_eq!(setting_plain_name(NAMES, "model_providers.corp"), None);
+        assert_eq!(setting_plain_name(NAMES, "environment"), None);
+
+        let id = ItemId::from_recorded(
+            "claude-code/user/settings-entry/~/.claude/settings.json#/enabledPlugins/a~1b~0c",
+        );
+        assert_eq!(
+            setting_key_path(&id),
+            Some(("claude-code", "enabledPlugins.a/b~c".to_string()))
+        );
+        let skill = ItemId::from_recorded("claude-code/user/skill/~/.claude/skills/setup");
+        assert_eq!(setting_key_path(&skill), None);
+    }
+
+    /// A `score` Finding, T2 or T3, says why it matters with the sentence of
+    /// the strongest Heuristic that fired: the highest Weight, then the
+    /// higher Severity, then the lower id. Any other source carries none of
+    /// its own; a Rule's is the Rule Pack's to give.
+    #[test]
+    fn a_score_finding_says_why_with_its_strongest_heuristic() {
+        let item = skill(Scope::User);
+        let weighted = |id: i64, weight: i64, severity: Severity| {
+            let mut heuristic = fired(id, false, "", 5..12);
+            heuristic.weight = weight;
+            heuristic.severity = severity;
+            heuristic
+        };
+        for tier in [Tier::Heuristics, Tier::AiJudgement] {
+            let mut finding = finding_on(&item, Source::Score(5));
+            finding.tier = tier;
+            finding.heuristics = vec![
+                weighted(511, 1, Severity::Critical),
+                weighted(566, 3, Severity::Medium),
+                weighted(520, 2, Severity::High),
+            ];
+            let facts = FindingFacts::of(&finding, Some(&item));
+            assert_eq!(facts.why, "Heuristic 566 matters.", "{tier}");
+        }
+
+        let tied = vec![
+            weighted(530, 2, Severity::Medium),
+            weighted(524, 2, Severity::High),
+            weighted(521, 2, Severity::High),
+        ];
+        assert_eq!(strongest_why(&tied), "Heuristic 521 matters.");
+        assert_eq!(strongest_why(&[]), "");
+
+        let mut rule = finding_on(&item, Source::Rule(1));
+        rule.heuristics = tied;
+        assert_eq!(FindingFacts::of(&rule, Some(&item)).why, "");
     }
 
     /// A Rule Finding carries the Item's place on disk and the text its
@@ -949,6 +1101,8 @@ mod tests {
             band: "Suspicious".to_string(),
             rule_withdrawn: true,
             phrase: "contains hidden instructions".to_string(),
+            why: "It gives your agent orders hidden from you.".to_string(),
+            setting_plain: "lets Claude Code run commands without asking".to_string(),
             fix: "Open the file and take the line out.".to_string(),
             plugin: "shipit".to_string(),
             drift_change: "changed".to_string(),

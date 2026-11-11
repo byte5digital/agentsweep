@@ -49,6 +49,7 @@ fn fired(
         weight: 1,
         title: format!("Heuristic {id}"),
         plain: format!("Heuristic {id} noticed something."),
+        why: String::new(),
         severity: Severity::High,
         sensitive,
         reviewer_directed: false,

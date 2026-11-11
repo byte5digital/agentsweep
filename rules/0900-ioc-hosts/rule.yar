@@ -11,6 +11,7 @@ rule as_0900_ioc_hosts {
     status      = "probation"
     plain       = "This file contacts a server that is known to distribute malware."
     phrase      = "contacts a server known to spread malware"
+    why         = "It contacts a server known to spread harmful software."
     description = "Exact host names taken from published incident reports (iocs/hosts.txt). Regenerated on every pack build."
     references  = "docs/research/attack-catalogue.md#3"
     sensitive   = false

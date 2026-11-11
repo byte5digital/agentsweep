@@ -50,6 +50,7 @@ fn fired_on(text: &str, needle: &str) -> Vec<FiredHeuristic> {
         weight: 1,
         title: "Heuristic 530".to_string(),
         plain: "Heuristic 530 noticed something.".to_string(),
+        why: String::new(),
         severity: Severity::Critical,
         sensitive: false,
         reviewer_directed: false,

@@ -248,6 +248,7 @@ mod tests {
             weight: 3,
             title: "Override phrasing".to_string(),
             plain: "This file tells the agent to throw away its instructions.".to_string(),
+            why: String::new(),
             severity: Severity::High,
             sensitive: false,
             reviewer_directed: true,

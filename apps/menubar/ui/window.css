@@ -475,6 +475,89 @@ dialog {
   margin-top: 8px;
 }
 
+/* The Simple Overview of layout B (spec section 8.4): the Protection line
+   and the four count tiles, two by two. */
+.statusline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.statusline::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--clear);
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+
+.tile[data-tone="red"] {
+  border-color: var(--threat);
+  background: color-mix(in srgb, var(--threat) 8%, transparent);
+}
+
+.tile[data-tone="amber"] {
+  border-color: var(--exposure);
+  background: color-mix(in srgb, var(--exposure) 11%, transparent);
+}
+
+.tile .open {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.tile .open:disabled {
+  color: var(--text);
+}
+
+.tile .n {
+  font-size: 22px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.tile[data-tone="red"] .n {
+  color: var(--threat);
+}
+
+.tile[data-tone="amber"] .n {
+  color: var(--exposure);
+}
+
+.tile .check {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
 /* The Activity pane (spec section 8.1): one line per record, newest first. */
 .activity {
   margin: 0;
@@ -714,6 +797,85 @@ dialog {
 .card p.ai {
   border-left: 3px solid var(--rule);
   padding-left: 8px;
+}
+
+.card p.ai .from {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* A Simple Finding in three parts (spec section 8.4, layout B): the
+   Severity chip beside the title that names the thing, the parts in one
+   box with the buttons inside What to do, the folds under it and the
+   links at the foot. */
+.card .head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.card .head .title {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.parts {
+  margin: 8px 0;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.part {
+  padding: 8px 10px;
+}
+
+.part + .part {
+  border-top: 1px solid var(--rule);
+}
+
+.part.todo {
+  background: var(--card);
+}
+
+.part-label {
+  display: block;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.part .actions {
+  margin-top: 6px;
+}
+
+details.fold {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+}
+
+details.fold > summary {
+  color: var(--muted);
+  font-size: 12px;
+  cursor: default;
+}
+
+details.fold > .inner {
+  padding-top: 6px;
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 8px;
 }
 
 /* The Quarantine pane: who stopped an entry and when, under its chips, and

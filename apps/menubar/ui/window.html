@@ -34,8 +34,29 @@
               <div class="banner-buttons"></div>
               <p class="muted banner-line" hidden></p>
             </div>
+            <!-- The Simple Posture's Protection line (spec section 8.4,
+                 layout B); the sentence stays for what the tiles do not
+                 say. -->
+            <p class="statusline" id="overview-protection" hidden></p>
             <p class="sentence" id="overview-sentence"></p>
             <div id="overview-body">
+              <!-- The Simple Posture's four count tiles. A Finding tile opens
+                   its pane, a project tile the projects it counts. -->
+              <div class="tiles" id="overview-tiles" hidden>
+                <div class="tile" data-tile="threats">
+                  <button type="button" class="open"><span class="n"></span><span class="label"></span></button>
+                </div>
+                <div class="tile" data-tile="exposures">
+                  <button type="button" class="open"><span class="n"></span><span class="label"></span></button>
+                </div>
+                <div class="tile" data-tile="permission">
+                  <button type="button" class="open"><span class="n"></span><span class="label"></span></button>
+                  <button type="button" class="check" id="tile-check-now" hidden>Check now</button>
+                </div>
+                <div class="tile" data-tile="gate">
+                  <button type="button" class="open"><span class="n"></span><span class="label"></span></button>
+                </div>
+              </div>
               <ul class="agents" id="overview-agents"></ul>
               <!-- "N projects not checked" with Check now, for projects that
                    Need Permission (spec section 8.1). -->
@@ -52,6 +73,9 @@
               <!-- The Gate's Health lines and "Gate off in this project",
                    one line per affected project (spec section 8.1). -->
               <div id="overview-gate" hidden></div>
+              <!-- "Watching Claude Code and Codex. Last check …" in the
+                   Simple Posture; the last check alone in the Developer
+                   Posture. -->
               <p class="muted" id="overview-last-check"></p>
               <p class="muted" id="overview-rules"></p>
               <div class="scan" id="overview-scan">

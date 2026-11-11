@@ -1197,6 +1197,20 @@ mod tests {
         assert_eq!(frame.overview().banner, None);
     }
 
+    /// An app older than its daemon shows "AgentSweep was updated. Reopen
+    /// it." with **Reopen** on the Overview too, as in the popover.
+    #[test]
+    fn the_overview_shows_the_reopen_line_of_an_older_app() {
+        let mut frame = Frame::new();
+        frame.load(&status());
+        assert_eq!(frame.view(&View::reopen("0.1.0", "0.2.0")), Follow::Render);
+        let shown = frame.overview();
+        let banner = shown.banner.clone().expect("a banner");
+        assert_eq!(banner.title, "AgentSweep was updated. Reopen it.");
+        assert_eq!(banner.buttons, vec![crate::banner::Button::Reopen]);
+        assert!(shown.to_value()["sentence"].is_null());
+    }
+
     /// A daemon that stops answering leaves the sentence alone in the
     /// Overview and no Scan action; a Health on the stream once it answers
     /// again asks for the status, which fills it once more.

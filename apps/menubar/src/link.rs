@@ -8,8 +8,11 @@
 //! popover recovers when `KeepAlive` brings the daemon back.
 //!
 //! The handshake is where the version check happens (spec section 9.5): a
-//! daemon of another version is from another bundle, and the app re-registers
-//! it once per launch, which stops that daemon and starts its own.
+//! daemon older than the app is from another bundle, and the app re-registers
+//! it once per launch, which stops that daemon and starts its own. A daemon
+//! newer than the app means the app's own bundle was updated while it kept
+//! running: registering again would only start the newer daemon again, so
+//! the app says once "AgentSweep was updated. Reopen it." and stops trying.
 //!
 //! A daemon that does not answer at all can be the same thing one step
 //! earlier: a job SMAppService calls enabled, registered by another bundle
@@ -26,7 +29,7 @@ use agentsweep_ipc::protocol::{Refusal, Role, StateEvent};
 use agentsweep_ipc::{Client, ClientError};
 
 use crate::popover::{Off, View};
-use crate::supervision::{self, ServiceState, Services, Stale};
+use crate::supervision::{self, Mismatch, ServiceState, Services, Stale};
 
 /// How long the link waits before it asks a daemon that did not answer again.
 pub const RETRY: Duration = Duration::from_secs(1);
@@ -96,6 +99,9 @@ pub struct Link {
     job_checked: Option<Instant>,
     /// The stale job this launch registered again, and when.
     registered_again: Option<(Instant, Stale)>,
+    /// True once a daemon newer than this app refused it: the app was
+    /// updated under itself, and the link stops until it is reopened.
+    outdated: bool,
 }
 
 impl Link {
@@ -109,6 +115,7 @@ impl Link {
             restarted: false,
             job_checked: None,
             registered_again: None,
+            outdated: false,
         }
     }
 
@@ -123,11 +130,12 @@ impl Link {
         Arc::clone(&self.stopping)
     }
 
-    /// Follows the daemon until stopped, handing every update to `sink`.
+    /// Follows the daemon until stopped, or until a newer daemon refused
+    /// this app, handing every update to `sink`.
     pub fn run(mut self, sink: impl Fn(Update)) {
-        while !self.stopping.load(Ordering::SeqCst) {
+        while !self.stopping.load(Ordering::SeqCst) && !self.outdated {
             self.once(&sink);
-            if self.stopping.load(Ordering::SeqCst) {
+            if self.stopping.load(Ordering::SeqCst) || self.outdated {
                 return;
             }
             std::thread::sleep(self.retry);
@@ -135,14 +143,29 @@ impl Link {
     }
 
     /// One connection, from the handshake to the end of its stream.
+    /// Nothing at all once a newer daemon refused this app.
     pub fn once(&mut self, sink: &impl Fn(Update)) {
+        if self.outdated {
+            return;
+        }
         let client = match self.socket.connect() {
             Ok(client) => client,
-            Err(ClientError::Refused(Refusal::VersionMismatch { .. })) => {
-                sink(Update::View(View::updating()));
-                if !self.restarted {
-                    self.restarted = true;
-                    let _ = supervision::restart_daemon(&*self.services);
+            Err(ClientError::Refused(Refusal::VersionMismatch {
+                daemon_version,
+                peer_version,
+            })) => {
+                match supervision::mismatch(&peer_version, &daemon_version) {
+                    Mismatch::OlderApp => {
+                        self.outdated = true;
+                        sink(Update::View(View::reopen(&peer_version, &daemon_version)));
+                    }
+                    Mismatch::NewerApp => {
+                        sink(Update::View(View::updating()));
+                        if !self.restarted {
+                            self.restarted = true;
+                            let _ = supervision::restart_daemon(&*self.services);
+                        }
+                    }
                 }
                 return;
             }
@@ -466,6 +489,78 @@ mod tests {
             seen.iter().all(|view| view.orb == Orb::Updating),
             "{seen:?}"
         );
+    }
+
+    /// A daemon that refuses every handshake as from another version, on
+    /// as many connections as it is asked, counting them.
+    fn daemon_refusing(
+        socket: &std::path::Path,
+        daemon_version: &'static str,
+        connections: Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let listener = SocketListener::bind(socket).expect("a socket");
+        std::thread::spawn(move || {
+            while let Ok(mut connection) = listener.accept() {
+                connections.fetch_add(1, Ordering::SeqCst);
+                let _ = connection.receive();
+                let _ = connection.send(&Message::Refused(Refusal::VersionMismatch {
+                    daemon_version: daemon_version.to_string(),
+                    peer_version: agentsweep_core::VERSION.to_string(),
+                }));
+            }
+        });
+    }
+
+    /// An app older than its daemon was replaced by an update while it kept
+    /// running: it says once that AgentSweep was updated, registers nothing,
+    /// since that would only start the newer daemon again, and stops trying
+    /// the handshake, so the link returns without being stopped.
+    #[test]
+    fn an_older_app_says_to_reopen_once_and_stops_retrying() {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let socket = socket_in(&directory);
+        let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        daemon_refusing(&socket, "999.0.0", Arc::clone(&connections));
+        let services = Arc::new(Recorded::with(ServiceState::Enabled, ServiceState::Enabled));
+        let link = Link::new(Socket::At(socket), services.clone())
+            .retrying_every(Duration::from_millis(5));
+        let updates = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&updates);
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            link.run(|update| seen.lock().expect("the updates").push(update));
+            let _ = done.send(());
+        });
+        finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the link stops by itself");
+
+        assert_eq!(connections.load(Ordering::SeqCst), 1, "one handshake");
+        assert!(services.calls().is_empty(), "{:?}", services.calls());
+        let seen = views(&updates);
+        assert_eq!(
+            seen,
+            vec![View::reopen(agentsweep_core::VERSION, "999.0.0")]
+        );
+    }
+
+    /// An app newer than its daemon still registers the daemon again, once,
+    /// and keeps trying the handshake until the new daemon answers.
+    #[test]
+    fn a_newer_app_keeps_registering_the_daemon_again() {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let socket = socket_in(&directory);
+        let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        daemon_refusing(&socket, "0.0.1", Arc::clone(&connections));
+        let services = Arc::new(Recorded::with(ServiceState::Enabled, ServiceState::Enabled));
+        let mut link = Link::new(Socket::At(socket), services.clone());
+        let updates = Mutex::new(Vec::new());
+        for _ in 0..3 {
+            link.once(&|update| updates.lock().expect("the updates").push(update));
+        }
+        assert_eq!(connections.load(Ordering::SeqCst), 3);
+        assert_eq!(services.calls(), vec!["unregister agent", "register agent"]);
+        assert!(views(&updates).iter().all(|view| *view == View::updating()));
     }
 
     fn silent_daemon_with(job: Job) -> (Arc<Recorded>, Link, tempfile::TempDir) {

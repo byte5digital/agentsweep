@@ -82,8 +82,8 @@ pub struct View {
     pub developer_sentence: Option<String>,
     /// When the last Full Scan finished, RFC 3339, absent before the first.
     pub last_check: Option<String>,
-    /// True when no daemon is there to answer: Protection is off, or the
-    /// registered daemon is not running. The popover then offers nothing but
+    /// True when no daemon is there to answer: Protection is off, the
+    /// registered daemon is not running, or it refuses this older app. The popover then offers nothing but
     /// its banner and Quit (spec section 6.2).
     pub protection_off: bool,
     /// True when the popover offers the button that opens Login Items.
@@ -185,6 +185,26 @@ impl View {
             login_items: false,
             detail: String::new(),
             banner: None,
+        }
+    }
+
+    /// The view of an app older than its daemon: its bundle was updated
+    /// while it kept running, so it says so once and offers **Reopen** (spec
+    /// section 9.5). Nothing else is offered, as with Protection off: the
+    /// daemon refuses this app, so there is nothing it could ask.
+    pub fn reopen(app: &str, daemon: &str) -> View {
+        View {
+            orb: Orb::Updating,
+            sentence: banner::REOPEN.to_string(),
+            developer_sentence: None,
+            last_check: None,
+            protection_off: true,
+            login_items: false,
+            detail: format!("the app is {app} and the daemon is {daemon}"),
+            banner: Some(Banner::Reopen {
+                app: app.to_string(),
+                daemon: daemon.to_string(),
+            }),
         }
     }
 
@@ -436,6 +456,30 @@ mod tests {
         assert!(!view.login_items);
     }
 
+    /// An app older than its daemon shows one line, "AgentSweep was
+    /// updated. Reopen it.", with **Reopen** and nothing else to press:
+    /// this app can ask that daemon nothing.
+    #[test]
+    fn an_older_app_shows_the_reopen_line_with_reopen() {
+        let view = View::reopen("0.1.0", "0.2.0");
+        assert_eq!(view.orb, Orb::Updating);
+        assert_eq!(view.sentence, "AgentSweep was updated. Reopen it.");
+        assert!(view.protection_off, "nothing to ask a daemon that refuses");
+        assert!(!view.login_items);
+        for posture in [Posture::Simple, Posture::Developer] {
+            let value = view.to_value(posture);
+            assert_eq!(value["sentence"], Value::Null, "the banner replaces it");
+            assert_eq!(
+                value["banner"]["title"],
+                "AgentSweep was updated. Reopen it."
+            );
+            assert_eq!(value["banner"]["body"], "");
+            assert_eq!(value["banner"]["buttons"][0]["label"], "Reopen");
+            assert_eq!(value["banner"]["buttons"][0]["command"], "reopen");
+            assert_eq!(value["banner"]["buttons"].as_array().map(Vec::len), Some(1));
+        }
+    }
+
     #[test]
     fn the_frontend_receives_every_field_by_name() {
         let value = View::off(&Off::NeedsApproval).to_value(Posture::Simple);
@@ -569,6 +613,7 @@ mod tests {
             View::off(&Off::NeedsApproval),
             View::off(&Off::NotRegistered),
             View::updating(),
+            View::reopen("0.1.0", "0.2.0"),
         ];
         for view in views {
             assert!(!view.sentence.contains('\u{2014}'));
